@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="14.81666mm"
+   height="14.816668mm"
+   viewBox="0 0 14.81666 14.816668"
+   version="1.1"
+   id="svg5"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     showgrid="false" />
+  <defs
+     id="defs2" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-17.760994,-9.6605206)">
+    <path
+       d="m 17.760994,13.893854 c 0,-2.338006 1.89532,-4.2333334 4.23333,-4.2333334 h 6.35 c 2.33802,0 4.23333,1.8953274 4.23333,4.2333334 v 6.35 c 0,2.338017 -1.89531,4.233334 -4.23333,4.233334 h -6.35 c -2.33801,0 -4.23333,-1.895317 -4.23333,-4.233334 z"
+       fill="#eef4e9"
+       id="path185"
+       style="display:inline;stroke-width:0.264583" />
+    <path
+       d="m 27.352134,17.796458 v 0.970148 c 0,0.12864 -0.0511,0.252016 -0.14208,0.342979 -0.091,0.09096 -0.21434,0.142082 -0.34298,0.142082 h -3.3955 c -0.12864,0 -0.25202,-0.05112 -0.34298,-0.142082 -0.091,-0.09096 -0.14208,-0.214339 -0.14208,-0.342979 v -0.970148"
+       stroke="#204a45"
+       stroke-width="1.65"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       id="path187"
+       style="display:inline;fill:#eef4e9;fill-opacity:1;stroke-width:0.529167;stroke-dasharray:none" />
+    <path
+       d="m 26.382014,16.098706 -1.21267,-1.212664 -1.21269,1.212664"
+       stroke="#204a45"
+       stroke-width="1.65"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       id="path189"
+       style="display:inline;fill:#eef4e9;fill-opacity:1;stroke:#204a45;stroke-width:0.529167;stroke-dasharray:none;stroke-opacity:1" />
+    <path
+       d="m 25.169324,14.886042 v 2.910416"
+       stroke="#204a45"
+       stroke-width="1.65"
+       stroke-linecap="round"
+       stroke-linejoin="round"
+       id="path191"
+       style="display:inline;stroke-width:0.529167;stroke-dasharray:none" />
+  </g>
+</svg>

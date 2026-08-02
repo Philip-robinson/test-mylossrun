@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "config": ["app/lib/config.js"],
+      "utils": ["app/lib/utils.js"],
+      "fileUtils": ["app/lib/fileUtils.js"],
+      "flags": ["app/lib/flags.js"],
+      "services/*": ["app/services/*"],
+      "components/*": ["app/components/*"],
+      "common/*": ["app/common/*"]
+    }
+  }
+}

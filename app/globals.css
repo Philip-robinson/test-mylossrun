@@ -1,0 +1,204 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* The app's page background. Named so a full-editor overlay can be opaque against
+     it (see PDFEditTableStructure's full-panel) without restating the value. */
+  --background: #f8f9fa;
+  --background-green: #e8f1eb;
+  --foreground-green: #2a8b5b;
+  --primary-text: #000000;
+  --secondary-text: #8c968e;
+  /* Confidence band colours (single source of truth for the PDF table editor's
+     confidence squares, per-row squares, and thumbnail borders). Values match the
+     literal red/orange/green keywords the editor used before this was centralised. */
+  --low-confidence: red;
+  --medium-confidence: orange;
+  --high-confidence: green;
+  /* Extraction review grid: how a cell read below high confidence is shown. The cell
+     takes the wash and a marker runs down its left edge; the same marker colour rings
+     whichever cell is selected. */
+  --low-confidence-background: #fdf6e4;
+  --low-confidence-border: #e0a23c;
+  /* PDF display-list status colours (header count chips + status-column dot/chip
+     and the Processing progress bar). Single source of truth — DocumentList.js
+     references these via var(--…) rather than repeating hex values. */
+  --neutral-label-background: #eef1ef;
+  --completed-pale: #e4f0e7;
+  --completed-strong: #2b7a4b;
+  --in-progress-pale: #fcf2df;
+  --in-progress-strong: #e0a23c;
+  --ready-pale: #e8effb;
+  --ready-strong: #356bce;
+  --processing-pale: var(--neutral-label-background);
+  --processing-strong: #bcc4bd;
+  --error-pale: #fee2e2;
+  --error-strong: #7f1d1d;
+  /* Cell-edit dialog button colours — the reject (X) and accept (tick) fills for
+     the review table's cell correction dialog. Referenced from config.js via
+     var(--…) rather than repeating the values at the point of use. */
+  --cancel: red;
+  --confirm: #2a8b5d;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--background);
+  color: #1a1a1a;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+.app {
+  min-height: 100vh;
+  background: var(--background);
+  position: relative;
+  overflow: hidden;
+}
+
+.app::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(61, 184, 106, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 70%, rgba(42, 157, 92, 0.03) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.main-content {
+  position: relative;
+  z-index: 1;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.upload-section,
+.processing-section,
+.results-section {
+  animation: fadeIn 0.6s ease-out;
+}
+
+.drag-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(61, 184, 106, 0.08);
+  border: 3px dashed #3DB86A;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.annotator-flow-section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 140px);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.landing {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 400px;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 10px;
+  gap: 10px;
+}
+
+.toolbar img {
+  height: 28px;
+  width: auto;
+}
+
+.toolbar-data {
+  flex: 1 1 auto;
+}
+
+.content-row {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 10px;
+  padding: 10px;
+  padding-bottom: 40px;
+  min-height: 0;
+}
+
+.drop-box {
+  width: 20%;
+  flex: 0 0 20%;
+}
+
+.document-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.toolbar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.toolbar-tab {
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 0;
+  font-size: 0.75rem; /* "small" */
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+/* "← All Files" and "Export": active links, muted text, no underline */
+.toolbar-tab-link {
+  color: var(--secondary-text);
+  border-bottom-color: transparent;
+}
+
+/* "Validate": current page, primary text, underlined; not interactive */
+.toolbar-tab-current {
+  color: var(--primary-text);
+  border-bottom-color: var(--primary-text);
+  cursor: default;
+}

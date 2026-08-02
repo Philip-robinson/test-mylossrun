@@ -1,0 +1,65 @@
+data/
+!services/analytics/engines/**/data/
+company_data/
+output/
+.DS_Store
+cactus-cli/
+
+*.org
+*.projectile
+
+# Environment artifacts
+.env
+.env.*
+
+# IDE artifacts
+.idea/
+*.code-workspace
+.vscode/
+.claude/
+*.sw[lmnop]
+.idea/
+
+# Build artifacts
+.venv/
+.uv-cache/
+.npm-cache/
+__pycache__/
+node_modules/
+.ipynb_checkpoints/
+.python-version
+.langgraph_api
+cdk.out/
+cdk.context.json
+cactus-cli/*.egg-info/
+
+nbproject
+private-serverless.yml
+
+*.backup
+*.code-workspace
+
+# Test artifacts
+.pytest_cache/
+.hypothesis/
+test_data/out
+services/ai_agents/tests/test_results/
+services/ai_agents/utils/test_logs/
+
+# local dev ssl certs
+cert.pem
+key.pem
+
+
+.local/
+.cursor/
+.claude/
+services/ai_agents/document_parsing/benchmarking/
+services/ai_agents/test_files/
+services/ai_agents/document_parsing/benchmarking/
+services/ai_agents/terraform/
+services/ai_agents/test_data/
+.cursor/rules/imports.mdc
+.warm_up/
+.playwright/
+.playwright-mcp/

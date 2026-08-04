@@ -130,16 +130,15 @@ export function toExcelPath() {
   return '/mylossrun/to-excel';
 }
 
-// How long the export's download anchor is left standing in the document after being
-// clicked, before it is cleared away and the panel returns to the PDF list.
-//
-// Clicking the anchor hands a cross-origin navigation to the browser and returns at once —
-// there is no completion this code can await, because the presigned URL is on another
-// origin. Removing the anchor immediately cancelled the request before S3 had answered, so
-// a small workbook downloaded (its response beat the removal) and a large one silently did
-// not. This is the gap that removal now waits for.
-export function exportDownloadHandoverMs() {
-  return 2000;
+// MIME type of the exported workbook, carried by the /api/to-excel response and by the
+// Blob the browser saves from it.
+export function excelContentType() {
+  return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+}
+
+// Extension the exported workbook is offered to the user under.
+export function excelFileSuffix() {
+  return '.xlsx';
 }
 
 // Editor-selection flag: when true, PageTableEditor renders the new staged
@@ -520,7 +519,8 @@ export default {
   findGridLinesPath,
   calculateCellsPath,
   toExcelPath,
-  exportDownloadHandoverMs,
+  excelContentType,
+  excelFileSuffix,
   stagedGridEditorEnabled,
   entryConfirmationStage,
   layerTickSlotWidthPx,

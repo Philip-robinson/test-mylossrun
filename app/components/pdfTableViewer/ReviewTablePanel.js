@@ -61,8 +61,11 @@ import {
   reviewSelectedCellShadow,
   reviewTitleLabel,
   reviewWideCellMinCharacters,
-  exportDownloadHandoverMs,
 } from 'config';
+import {
+  excelFilename,
+  saveBlob,
+} from 'components/pdfTableViewer/exportUtils';
 
 // Columns are content-sized but capped, and over-long content wraps at word boundaries
 // (never mid-word: `word-break: break-all` would split account numbers and names, which
@@ -186,10 +189,6 @@ export default function ReviewTablePanel({
   // Whether an export is in flight, which locks the panel behind a spinner: the
   // spreadsheet is built from the table as it stands, so nothing may change under it.
   const [exporting, setExporting] = useState(false);
-  // The download hand-over in flight: the anchor standing in for it and the timer that
-  // will clear it away. Held so that leaving the panel mid-hand-over takes the anchor with
-  // it rather than abandoning it in the document.
-  const handoverRef = useRef(null);
   // The cell being corrected and the on-screen rectangle it occupies:
   // { cell, rect }, or null when no dialog is open.
   const [editing, setEditing] = useState(null);
@@ -228,18 +227,6 @@ export default function ReviewTablePanel({
   // metadata and thumbnail effects do, so a late resolution (or rejection) after the
   // panel is gone sets no state and raises no toast. There is no automatic retry: the
   // extraction is expensive, so recovery is the user's decision.
-  //
-  // A hand-over still running when the panel goes takes its anchor with it, and its pending
-  // return to the PDF list is dropped — by then the panel is no longer the one to ask.
-  useEffect(
-    () => () => {
-      if (!handoverRef.current) return;
-      window.clearTimeout(handoverRef.current.timer);
-      handoverRef.current.anchor.remove();
-      handoverRef.current = null;
-    },
-    [],
-  );
 
   // Dispatching is deliberately separated from awaiting, because this effect runs TWICE on
   // mount under `next dev` (the App Router enables React StrictMode, whose setup/cleanup/setup
@@ -450,18 +437,22 @@ export default function ReviewTablePanel({
     });
   };
 
-  // Save, build the spreadsheet, hand it over and leave.
+  // Save, build the spreadsheet, save it to the user's downloads and leave.
   //
   // The panel locks behind its spinner FIRST, before the save: the lock is what stops a
   // second Export starting, and a save takes long enough for a second click to land inside
-  // it — which would build the workbook twice, hand over twice, and leave the first anchor
-  // standing in the document with only the second one held for removal. The overlay the lock
-  // raises covers the button as well, so in practice the guard below is never reached twice.
-  // The lock is dropped again only on the ways this does NOT go on to hand a file over.
+  // it — which would build and save the workbook twice. The overlay the lock raises covers
+  // the button as well, so in practice the guard below is never reached twice. The lock is
+  // dropped again only on the ways this does NOT go on to hand a file over; on the way that
+  // does, `onAllFiles` takes the panel away with the spinner still up.
   //
   // The save comes before the build because the export is built from what the SERVER holds: a
   // save that did not reach it has already raised its own toast and left the document dirty,
   // so there is nothing to add here and nothing worth exporting.
+  //
+  // The workbook arrives as bytes — /api/to-excel consumes the presigned URL server-side —
+  // so handing it over is a same-origin blob save that completes before this line returns,
+  // and the return to the PDF list can simply follow it.
   const handleExport = async () => {
     if (exporting) return;
     setExporting(true);
@@ -471,35 +462,14 @@ export default function ReviewTablePanel({
         setExporting(false);
         return;
       }
-      const result = await tableToExcel({
+      const workbook = await tableToExcel({
         ...table,
         pdfId,
         rootTableId: tableId,
         originalFilename,
       });
-      // The presigned URL is on another origin, so an anchor's `download` attribute would
-      // be ignored — the back end presigns with a Content-Disposition of `attachment`
-      // instead, and visiting the URL is enough. A detached anchor rather than
-      // `window.location.href`, which would tear the app down before onAllFiles runs.
-      const anchor = document.createElement('a');
-      anchor.href = result.downloadUrl;
-      document.body.appendChild(anchor);
-      anchor.click();
-      // The click hands a cross-origin NAVIGATION to the browser and returns at once:
-      // there is no completion this code can await, because nothing here may read the
-      // other origin's response. Clearing the anchor away in the same tick cancelled that
-      // request before S3 had answered — which a small workbook survived, its response
-      // beating the removal, and a large one did not. So the anchor outlives the click by
-      // a deliberate gap, with the spinner still up, and only then is it cleared away and
-      // the panel handed back to the PDF list.
-      handoverRef.current = {
-        anchor,
-        timer: window.setTimeout(() => {
-          handoverRef.current = null;
-          anchor.remove();
-          onAllFiles();
-        }, exportDownloadHandoverMs()),
-      };
+      saveBlob(workbook, excelFilename(originalFilename));
+      onAllFiles();
     } catch (err) {
       toast.error(err.message);
       setExporting(false);

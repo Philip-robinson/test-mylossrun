@@ -155,7 +155,8 @@ export async function extractTable(pdfId, tableId) {
 // Build the reviewed table as an XLSX file. Synchronous: the proxy forwards the POST and
 // returns the response directly — no long-poll. `body` is the amalgamated table
 // ({ name, title, cells, headerCount }) plus pdfId, rootTableId and originalFilename.
-// Returns { downloadUrl, key }.
+// Returns the workbook as a Blob: the route fetches it from its presigned URL server-side,
+// so what arrives here is the file itself rather than a link to it.
 export async function tableToExcel(body) {
   const response = await fetch('/api/to-excel', {
     method: 'POST',
@@ -165,5 +166,5 @@ export async function tableToExcel(body) {
   if (!response.ok) {
     throw new Error(`tableToExcel failed: ${response.status}`);
   }
-  return response.json();
+  return response.blob();
 }

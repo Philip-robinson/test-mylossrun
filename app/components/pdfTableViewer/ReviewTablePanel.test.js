@@ -20,7 +20,7 @@ import toast from 'react-hot-toast';
 // constant changes. The threshold values are only ever inputs used to build a
 // fixture confidence that sits in the intended band.
 import {
-  exportDownloadHandoverMs,
+  excelFileSuffix,
   highConfidence,
   lowConfidence,
   mediumConfidence,
@@ -85,9 +85,9 @@ jest.mock('config', () => ({
   // sentinel high threshold — a corrected cell must stop counting towards the
   // below-high tally, and a sentinel below it would hide that.
   reviewEditedCellConfidence: jest.fn(() => 95),
-  // A sentinel gap, so the tests advance by whatever the accessor says rather than by a
-  // number of their own.
-  exportDownloadHandoverMs: jest.fn(() => 1234),
+  // Deliberately not the real '.xlsx': the download name has to be built from the accessor,
+  // and a sentinel is what proves it. Read by exportUtils, a real collaborator here.
+  excelFileSuffix: jest.fn(() => '.sentinel-xlsx'),
 }));
 
 // The <Toaster/> lives in the app layout, not in this component, so failures are
@@ -1275,22 +1275,30 @@ describe('ReviewTablePanel', () => {
   // Export is the end of the road: the document is saved, turned into a spreadsheet, and
   // the user is handed the file and sent back to the list.
   describe('exporting to Excel', () => {
-    const excelResult = {
-      downloadUrl: 'https://api.example.com/exports/losses.xlsx',
-      key: 'exports/losses.xlsx',
-    };
+    // The workbook itself, not a link to it: /api/to-excel collects it from its presigned
+    // url server-side, so what the panel receives is bytes it can save from memory.
+    const workbook = new Blob(['PK the workbook']);
 
-    // The hrefs of every anchor the panel clicked. jsdom navigates nowhere, so the click
-    // is stubbed on the prototype and records its receiver's href — the download is
-    // triggered by a detached anchor the test never sees otherwise.
-    let clickedHrefs = [];
+    // What was handed to the browser: one entry per anchor click, with the object url it
+    // pointed at and the name it asked to be saved under. jsdom neither downloads nor
+    // navigates, so the click is stubbed on the prototype — the anchor is created and
+    // removed inside the export and the test never otherwise sees it. `blobbed` is what
+    // was turned into an object url, which is how "the workbook it was given" is checked.
+    let handedOver = [];
+    let blobbed = [];
 
     beforeEach(() => {
-      clickedHrefs = [];
+      handedOver = [];
+      blobbed = [];
+      global.URL.createObjectURL = jest.fn((blob) => {
+        blobbed.push(blob);
+        return 'blob:workbook';
+      });
+      global.URL.revokeObjectURL = jest.fn();
       jest
         .spyOn(HTMLAnchorElement.prototype, 'click')
         .mockImplementation(function record() {
-          clickedHrefs.push(this.href);
+          handedOver.push({ href: this.href, download: this.download });
         });
     });
 
@@ -1337,16 +1345,15 @@ describe('ReviewTablePanel', () => {
     });
 
     // The lock goes up BEFORE the save, not after it: a save takes long enough for a second
-    // click to land inside it, and two exports would build the workbook twice, hand over
-    // twice, and leave the first anchor standing in the document — only the second is held
-    // for removal.
+    // click to land inside it, and two exports would build the workbook twice and hand it
+    // over twice.
     it('locks on the first click, so a click during the save starts nothing further', async () => {
       let landSave;
       const onSave = jest
         .fn()
         .mockImplementation(() => new Promise((resolve) => (landSave = resolve)));
       const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(excelResult);
+      tableToExcel.mockResolvedValue(workbook);
 
       await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
 
@@ -1362,104 +1369,64 @@ describe('ReviewTablePanel', () => {
         landSave(true);
       });
 
-      await waitFor(() =>
-        expect(clickedHrefs).toEqual([excelResult.downloadUrl])
-      );
+      await waitFor(() => expect(handedOver).toHaveLength(1));
       expect(tableToExcel).toHaveBeenCalledTimes(1);
     });
 
     it('sends the amalgamated table with the document it came from', async () => {
       const onSave = jest.fn().mockResolvedValue(true);
       const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(excelResult);
+      tableToExcel.mockResolvedValue(workbook);
 
       await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
 
       await userEvent.click(screen.getByTestId('review-export'));
 
-      await waitFor(() =>
-        expect(clickedHrefs).toEqual([excelResult.downloadUrl])
-      );
+      await waitFor(() => expect(handedOver).toHaveLength(1));
       expect(tableToExcel).toHaveBeenCalledWith({
         ...simpleTable,
         pdfId: 'pdf-1',
         rootTableId: 'root',
         originalFilename: 'losses.pdf',
       });
-      // The presigned URL is on another origin, so the download is a visit to it rather
-      // than a `download` attribute the browser would ignore.
       expect(toast.error).not.toHaveBeenCalled();
     });
 
-    // Clicking the anchor hands a cross-origin navigation to the browser and returns at
-    // once — there is no completion to await. Removing the anchor in the same tick cancelled
-    // that request before S3 answered, so a small workbook downloaded and a large one
-    // silently did not. The anchor therefore has to outlive the click, and the panel has to
-    // stay put while it does.
-    it('leaves the anchor standing for the hand-over, then clears it and returns to the list', async () => {
+    // The workbook arrives as bytes, so it is saved from memory under a name of the page's
+    // own choosing — taken from the uploaded document's. Nothing is navigated to, which is
+    // the point: the old hand-over was a cross-origin navigation the page could not await,
+    // and the browser served it by cancelling whatever else the page had in flight.
+    it('saves the workbook it was handed under the uploaded document name', async () => {
       const onSave = jest.fn().mockResolvedValue(true);
       const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(excelResult);
+      tableToExcel.mockResolvedValue(workbook);
 
       await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
 
-      // Faked only from here, so the panel's own load ran on real timers.
-      jest.useFakeTimers();
-      try {
-        fireEvent.click(screen.getByTestId('review-export'));
-        // eslint-disable-next-line
-        await act(async () => {});
+      await userEvent.click(screen.getByTestId('review-export'));
 
-        expect(clickedHrefs).toEqual([excelResult.downloadUrl]);
-        // Still in the document, and the panel has not gone anywhere yet.
-        expect(document.querySelectorAll('a')).toHaveLength(1);
-        expect(onAllFiles).not.toHaveBeenCalled();
-        // The spinner stays up throughout, so the wait reads as part of the export.
-        expect(screen.getByTestId('review-exporting')).toBeInTheDocument();
-
-        // eslint-disable-next-line
-        act(() => {
-          jest.advanceTimersByTime(exportDownloadHandoverMs());
-        });
-
-        expect(document.querySelectorAll('a')).toHaveLength(0);
-        expect(onAllFiles).toHaveBeenCalledTimes(1);
-      } finally {
-        jest.useRealTimers();
-      }
+      await waitFor(() => expect(handedOver).toHaveLength(1));
+      expect(blobbed).toEqual([workbook]);
+      expect(handedOver[0]).toEqual({
+        href: 'blob:workbook',
+        download: `losses${excelFileSuffix()}`,
+      });
     });
 
-    // Unmounting mid-hand-over must not leave the anchor behind, nor fire a return to the
-    // list the panel is no longer in a position to ask for.
-    it('cleans the anchor away if the panel goes before the hand-over finishes', async () => {
+    // There is no gap to wait out any more: the save completes before the export returns,
+    // so the return to the list follows it directly and leaves nothing in the document.
+    it('returns to the list as soon as the file is saved, leaving no anchor behind', async () => {
       const onSave = jest.fn().mockResolvedValue(true);
       const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(excelResult);
+      tableToExcel.mockResolvedValue(workbook);
 
-      const view = await shown({
-        onSave,
-        onAllFiles,
-        originalFilename: 'losses.pdf',
-      });
+      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
 
-      jest.useFakeTimers();
-      try {
-        fireEvent.click(screen.getByTestId('review-export'));
-        // eslint-disable-next-line
-        await act(async () => {});
-        expect(document.querySelectorAll('a')).toHaveLength(1);
+      await userEvent.click(screen.getByTestId('review-export'));
 
-        view.unmount();
-
-        expect(document.querySelectorAll('a')).toHaveLength(0);
-        // eslint-disable-next-line
-        act(() => {
-          jest.advanceTimersByTime(exportDownloadHandoverMs());
-        });
-        expect(onAllFiles).not.toHaveBeenCalled();
-      } finally {
-        jest.useRealTimers();
-      }
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(document.querySelectorAll('a')).toHaveLength(0);
+      expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:workbook');
     });
 
     it('locks the panel behind a spinner while the export is in flight', async () => {
@@ -1486,15 +1453,17 @@ describe('ReviewTablePanel', () => {
         bottom: '0px',
         left: '0px',
       });
+      expect(onAllFiles).not.toHaveBeenCalled();
 
       // eslint-disable-next-line
       await act(async () => {
-        resolveExport(excelResult);
+        resolveExport(workbook);
       });
 
-      // The spinner stays up past the export itself, through the download hand-over.
+      // The lock is never dropped on this path: the panel is taken away with the spinner
+      // still up, so the export never flickers back to an editable table on its way out.
       expect(screen.getByTestId('review-exporting')).toBeInTheDocument();
-      expect(onAllFiles).not.toHaveBeenCalled();
+      expect(onAllFiles).toHaveBeenCalledTimes(1);
     });
 
     it('reports a failed export, stays on the panel and clears the spinner', async () => {
@@ -1510,7 +1479,7 @@ describe('ReviewTablePanel', () => {
         expect(toast.error).toHaveBeenCalledWith('excel exploded')
       );
       expect(onAllFiles).not.toHaveBeenCalled();
-      expect(clickedHrefs).toEqual([]);
+      expect(handedOver).toEqual([]);
       expect(
         screen.queryByTestId('review-exporting')
       ).not.toBeInTheDocument();

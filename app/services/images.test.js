@@ -636,8 +636,19 @@ describe('images service', () => {
       ],
     };
 
+    // The route collects the workbook from its presigned url server-side, so the response
+    // is the file itself and the caller gets a Blob to save rather than a link to visit.
+    function mockWorkbook() {
+      const blob = new Blob(['PK the workbook']);
+      global.fetch.mockResolvedValue({
+        ok: true,
+        blob: jest.fn().mockResolvedValue(blob),
+      });
+      return blob;
+    }
+
     it('POSTs the body to /api/to-excel with access code header and JSON content type', async () => {
-      mockOk({ downloadUrl: 'https://api.example.com/download/abc', key: 'exports/abc.xlsx' });
+      const blob = mockWorkbook();
 
       const result = await tableToExcel(body);
 
@@ -648,15 +659,12 @@ describe('images service', () => {
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual(body);
-      expect(result).toEqual({
-        downloadUrl: 'https://api.example.com/download/abc',
-        key: 'exports/abc.xlsx',
-      });
+      expect(result).toBe(blob);
     });
 
     it('omits X-Access-Code when localStorage is empty', async () => {
       localStorage.clear();
-      mockOk({ downloadUrl: 'https://api.example.com/download/abc', key: 'exports/abc.xlsx' });
+      mockWorkbook();
 
       await tableToExcel(body);
 

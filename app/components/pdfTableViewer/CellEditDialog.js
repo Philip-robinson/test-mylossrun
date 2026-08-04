@@ -11,14 +11,10 @@
 // `onRequestImage` and renders whatever `image` it is handed, which keeps one cache in
 // the panel rather than one per short-lived dialog.
 //
-// `image` is a PAIR — `{ raw, processed }` — because one cell is rendered two ways.
-// `processed` has been grey-scaled to dark-on-light, had the margin and any ruling line
-// bounding the cell whitened out, and been trimmed back to its ink, so it shows the
-// cell's value and little else; `raw` is the untouched crop. The processed one is shown
-// by default because it is the easier of the two to read, and the `Raw` toggle beside it
-// exists for the user who suspects the cleanup has eaten something and wants to check
-// against the original. Either member can be missing, so both are rendered defensively:
-// the image is a convenience, and nothing about it is worth taking the dialog down for.
+// `image` is a PAIR — `{ raw, processed }` — mirroring the one response the panel caches,
+// but only `raw`, the untouched crop, is displayed. Either member can be absent, so the
+// crop is rendered defensively: the image is a convenience, and nothing about it is worth
+// taking the dialog down for.
 //
 // A cell whose source reference is blank (`cellSourceKey` is null) has nothing in the
 // metadata to write back to, so there is no rectangle to crop and no correction worth
@@ -27,13 +23,7 @@
 // and would vanish at the next extraction, is worse than visibly refusing it.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import {
-  Box,
-  Button,
-  FormControlLabel,
-  Switch,
-  TextField,
-} from '@mui/material';
+import { Box, Button, TextField } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckIcon from '@mui/icons-material/Check';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
@@ -67,10 +57,6 @@ export default function CellEditDialog({
   onConfirmAndNext,
 }) {
   const [text, setText] = useState(cell?.text ?? '');
-  // Whether the untouched crop is being shown instead of the cleaned-up one. Off by
-  // default: the processed image is the readable one, and the raw one is there to be
-  // asked for rather than waded through.
-  const [raw, setRaw] = useState(false);
   const dialogRef = useRef(null);
   // The dialog's own height decides whether it fits above the cell, so it is measured
   // rather than assumed; 0 until the first measurement, which simply means the first
@@ -95,8 +81,6 @@ export default function CellEditDialog({
     // A new cell is a new question, and the answer to "where should this go?" is the
     // one computed beside THAT cell — so the drag is forgotten with the text.
     setDragged(null);
-    // Likewise the answer to "which crop?", whose default is the processed one.
-    setRaw(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
@@ -135,10 +119,10 @@ export default function CellEditDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, image]);
 
-  // Which of the pair is on screen. Read through the optional chain because the pair
-  // is undefined until the panel answers, and because a response that carried only one
-  // of the two must show that one rather than throw.
-  const shownImage = raw ? image?.raw : image?.processed;
+  // The untouched crop, which is the only one shown. Read through the optional chain
+  // because the pair is undefined until the panel answers; a response that carried no raw
+  // member leaves the image area empty rather than falling back to the processed one.
+  const shownImage = image?.raw;
 
   const size = { width: reviewCellEditDialogWidthPx(), height };
   const viewport = { width: window.innerWidth, height: window.innerHeight };
@@ -230,69 +214,43 @@ export default function CellEditDialog({
       >
         <DragHandleIcon fontSize={'small'} />
       </Box>
-      {/* The crop and the switch that chooses which crop, side by side: the toggle
-          belongs beside the thing it changes, and putting it here costs no height. */}
+      {/* The crop, which now has the dialog's full interior width to itself. */}
       <Box
         sx={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          minHeight: 0,
-          gap: 1,
+          // Deliberately NOT a flex container. As a flex item the crop was squashed on
+          // both axes: `align-items: stretch` compressed it to the capped height rather
+          // than letting it overflow, and `flex-shrink` narrowed it independently of
+          // that. A block box leaves the img in charge of its own aspect ratio.
+          display: 'block',
+          // The crop was requested at the cell's own width, so it arrives about the
+          // size it should be shown at — but a cell wider than the dialog, or a tall
+          // one, still has to be contained. Width is handled by scaling the image
+          // down; height by scrolling, because scaling a tall crop to fit would shrink
+          // it past reading and growing to fit it would push the text field out of the
+          // dialog.
+          maxHeight: maxCellEditorImageHeight(),
+          overflowY: 'auto',
         }}
       >
-        <Box
-          sx={{
-            // Deliberately NOT a flex container. As a flex item the crop was squashed on
-            // both axes: `align-items: stretch` compressed it to the capped height rather
-            // than letting it overflow, and `flex-shrink` narrowed it independently of
-            // that. A block box leaves the img in charge of its own aspect ratio.
-            display: 'block',
-            // The crop was requested at the cell's own width, so it arrives about the
-            // size it should be shown at — but a cell wider than the dialog, or a tall
-            // one, still has to be contained. Width is handled by scaling the image
-            // down; height by scrolling, because scaling a tall crop to fit would shrink
-            // it past reading and growing to fit it would push the text field out of the
-            // dialog.
-            maxHeight: maxCellEditorImageHeight(),
-            overflowY: 'auto',
-            flexGrow: 1,
-            minWidth: 0,
-          }}
-        >
-          {shownImage && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              data-testid={'cell-edit-image'}
-              src={`data:image/png;base64,${shownImage}`}
-              alt={''}
-              // The only constraint is on width: `max-width: 100%` scales a crop too wide
-              // for the dialog down to fit, and `height: auto` makes the height follow so
-              // the proportions hold. A crop that is then still too tall overflows and the
-              // area above scrolls. `margin: 0 auto` centres it, which is what the removed
-              // `justify-content` used to do.
-              style={{
-                display: 'block',
-                margin: '0 auto',
-                maxWidth: '100%',
-                height: 'auto',
-              }}
-            />
-          )}
-        </Box>
-        <FormControlLabel
-          label={'Raw'}
-          control={
-            <Switch
-              size={'small'}
-              checked={raw}
-              onChange={(event) => setRaw(event.target.checked)}
-              inputProps={{ 'data-testid': 'cell-edit-raw-toggle' }}
-            />
-          }
-          // The label is short and the image beside it is not: the switch keeps its
-          // width and the crop takes whatever is left.
-          sx={{ flexShrink: 0, mr: 0 }}
-        />
+        {shownImage && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            data-testid={'cell-edit-image'}
+            src={`data:image/png;base64,${shownImage}`}
+            alt={''}
+            // The only constraint is on width: `max-width: 100%` scales a crop too wide
+            // for the dialog down to fit, and `height: auto` makes the height follow so
+            // the proportions hold. A crop that is then still too tall overflows and the
+            // area above scrolls. `margin: 0 auto` centres it, which is what the removed
+            // `justify-content` used to do.
+            style={{
+              display: 'block',
+              margin: '0 auto',
+              maxWidth: '100%',
+              height: 'auto',
+            }}
+          />
+        )}
       </Box>
       {/* The field and the buttons are topped level rather than bottomed: the textarea
           grows downwards as it is typed into or dragged taller, and buttons pinned to its

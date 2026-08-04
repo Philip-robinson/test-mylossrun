@@ -122,11 +122,10 @@ const sourcelessCell = {
   confidence: 0,
 };
 
-// The two crops of one cell, as the panel caches them. Distinct payloads, so which of
-// the two is on screen is never ambiguous.
+// The two crops of one cell, as the panel caches them. The processed payload is kept
+// distinct from the raw one so that the assertions can prove it is NOT what reaches the
+// screen — the dialog shows the raw crop and nothing else.
 const bothImages = { raw: 'UkFX', processed: 'UFJPQw==' };
-
-const rawToggle = () => screen.getByTestId('cell-edit-raw-toggle');
 
 const anchorRect = {
   left: 400,
@@ -227,63 +226,25 @@ describe('CellEditDialog', () => {
     });
   });
 
-  // The processed crop is the readable one — grey-scaled, de-ruled and trimmed back to
-  // its ink — so it is what the dialog shows before being asked for anything else.
-  it('renders the processed image as a base64 png and asks for no other', () => {
+  // The untouched crop is the one the dialog shows, and it shows only that one.
+  it('renders the raw image as a base64 png and asks for no other', () => {
     renderDialog({ image: bothImages });
 
-    expect(screen.getByTestId('cell-edit-image')).toHaveAttribute(
-      'src',
-      `data:image/png;base64,${bothImages.processed}`
-    );
-    expect(onRequestImage).not.toHaveBeenCalled();
-  });
-
-  // The cleanup can eat a value it mistook for a ruling line, so the untouched crop stays
-  // one click away rather than being thrown out.
-  it('shows the raw image while the raw toggle is on, and the processed one again after', async () => {
-    renderDialog({ image: bothImages });
-
-    await userEvent.click(rawToggle());
     expect(screen.getByTestId('cell-edit-image')).toHaveAttribute(
       'src',
       `data:image/png;base64,${bothImages.raw}`
     );
-
-    await userEvent.click(rawToggle());
-    expect(screen.getByTestId('cell-edit-image')).toHaveAttribute(
-      'src',
-      `data:image/png;base64,${bothImages.processed}`
-    );
+    expect(onRequestImage).not.toHaveBeenCalled();
   });
 
-  // A new cell is a new question, and the default answer is the processed image.
-  it('resets the raw toggle when a different cell is opened', async () => {
-    const { rerender } = renderDialog({ image: bothImages });
+  // There is no longer a choice of crop to offer, so there must be no control offering
+  // one: a re-added toggle fails here rather than passing unnoticed.
+  it('renders no raw switch', () => {
+    renderDialog({ image: bothImages });
 
-    await userEvent.click(rawToggle());
-    expect(rawToggle()).toBeChecked();
-
-    rerender(
-      <CellEditDialog
-        pdfId={'pdf-1'}
-        cell={otherCell}
-        tables={tables}
-        reviewedTableId={'root'}
-        anchorRect={anchorRect}
-        image={bothImages}
-        onRequestImage={onRequestImage}
-        onCancel={onCancel}
-        onConfirm={onConfirm}
-        onConfirmAndNext={onConfirmAndNext}
-      />
-    );
-
-    expect(rawToggle()).not.toBeChecked();
-    expect(screen.getByTestId('cell-edit-image')).toHaveAttribute(
-      'src',
-      `data:image/png;base64,${bothImages.processed}`
-    );
+    expect(
+      screen.queryByTestId('cell-edit-raw-toggle')
+    ).not.toBeInTheDocument();
   });
 
   // A tall crop must not push the text field off the bottom of the dialog, so the image
@@ -314,12 +275,11 @@ describe('CellEditDialog', () => {
     });
   });
 
-  // Half an answer is still an answer: whichever member is missing, the toggle must not
-  // take the dialog down with it.
-  it('survives a toggle to a member the response did not supply', async () => {
+  // Only the raw crop is displayed, so a response that carried just the processed one has
+  // nothing to show — and there is deliberately no falling back to it. The dialog stays up
+  // regardless: the image is a convenience and the edit is the point.
+  it('renders no image when the response carried no raw crop', () => {
     renderDialog({ image: { processed: bothImages.processed } });
-
-    await userEvent.click(rawToggle());
 
     expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
     expect(screen.queryByTestId('cell-edit-image')).not.toBeInTheDocument();

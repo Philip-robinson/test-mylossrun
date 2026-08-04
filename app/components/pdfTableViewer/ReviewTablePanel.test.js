@@ -1641,11 +1641,11 @@ describe('ReviewTablePanel', () => {
           source.bounds
         )
       );
-      // Both crops of that one cell are cached, and the processed one is what is shown.
+      // Both crops of that one cell are cached, and the raw one is what is shown.
       await waitFor(() =>
         expect(screen.getByTestId('cell-edit-image')).toHaveAttribute(
           'src',
-          `data:image/png;base64,${cellImages.processedImage}`
+          `data:image/png;base64,${cellImages.rawImage}`
         )
       );
       HTMLElement.prototype.getBoundingClientRect.mockRestore();

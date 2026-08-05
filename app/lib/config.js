@@ -317,6 +317,12 @@ export function confirmedTickBadgeSizePx() {
   return 14;
 }
 
+// Fill colour of the merge-ROOT variant of the link badge drawn on a page thumbnail —
+// the inverse of the joined variant, which reuses the confirmed-tick colours.
+export function mergeLinkRootBadgeColour() {
+  return 'white';
+}
+
 // Colour of the horizontal rule separating groups of buttons within an Options
 // block, as the shared neutral label background (see globals.css) so it tracks the
 // palette rather than pinning its own grey.
@@ -552,6 +558,7 @@ export default {
   confirmedTickBadgeColour,
   confirmedTickColour,
   confirmedTickBadgeSizePx,
+  mergeLinkRootBadgeColour,
   optionsSeparatorColour,
   optionsSeparatorWidthPercent,
   optionsSeparatorHeightPx,

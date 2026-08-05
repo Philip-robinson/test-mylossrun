@@ -1,4 +1,6 @@
 import {
+  MERGE_ROLE_JOINED,
+  MERGE_ROLE_ROOT,
   buildCalcCellsRequestTable,
   buildCalcHint,
   buildRecalcHint,
@@ -7,7 +9,9 @@ import {
   gridSquareBounds,
   mergeCalcCellsResponse,
   mergeFindGridLines,
+  mapAllTables,
   mergeMap,
+  mergeRolesByTableId,
   mergeTargetSpan,
   mergedCellCovering,
   mergedCellLimits,
@@ -21,6 +25,7 @@ import {
   splitMap,
   splitMapBelow,
   tableSizeLabel,
+  tablesOnPage,
   titlesEqual,
   withCellSpan,
   leadingSquaresBounds,
@@ -1333,5 +1338,172 @@ describe('replaceTableById', () => {
 
   it('treats a null list as empty', () => {
     expect(replaceTableById(null, 'c', child)).toEqual([]);
+  });
+});
+
+describe('tablesOnPage', () => {
+  // Only the fields the helper reads: the page, the soft-delete flag and the `next` map.
+  const pageTable = (tableId, pdfPage, extra = {}) => ({
+    tableId,
+    pdfPage,
+    next: null,
+    ...extra,
+  });
+
+  it('returns a top-level table on the asked-for page', () => {
+    const here = pageTable('here', 1);
+    expect(tablesOnPage([here, pageTable('elsewhere', 2)], 1)).toEqual([here]);
+  });
+
+  it('returns a table nested in another table next map', () => {
+    const child = pageTable('c', 1);
+    const root = pageTable('r', 0, { next: { c: child } });
+    expect(tablesOnPage([root], 1)).toEqual([child]);
+  });
+
+  it('returns a table nested two levels deep', () => {
+    const grandchild = pageTable('g', 1);
+    const child = pageTable('c', 0, { next: { g: grandchild } });
+    const root = pageTable('r', 0, { next: { c: child } });
+    expect(tablesOnPage([root], 1)).toEqual([grandchild]);
+  });
+
+  it('omits a soft-deleted top-level table', () => {
+    const live = pageTable('live', 1);
+    const gone = pageTable('gone', 1, { deleted: true });
+    expect(tablesOnPage([live, gone], 1)).toEqual([live]);
+  });
+
+  it('omits a soft-deleted nested table', () => {
+    const child = pageTable('c', 1, { deleted: true });
+    const root = pageTable('r', 1, { next: { c: child } });
+    expect(tablesOnPage([root], 1)).toEqual([root]);
+  });
+
+  it('returns a page tables whether they arrive top-level or through a next map', () => {
+    const child = pageTable('c', 1);
+    const root = pageTable('r', 1, { next: { c: child } });
+    const plain = pageTable('p', 1);
+    expect(tablesOnPage([root, plain], 1).map((t) => t.tableId)).toEqual([
+      'r',
+      'p',
+      'c',
+    ]);
+  });
+
+  it('returns the tables by reference, undecorated', () => {
+    const child = pageTable('c', 1);
+    const root = pageTable('r', 0, { next: { c: child } });
+    expect(tablesOnPage([root], 1)[0]).toBe(child);
+  });
+
+  it('treats a null list as empty', () => {
+    expect(tablesOnPage(null, 0)).toEqual([]);
+  });
+
+  it('treats an undefined list as empty', () => {
+    expect(tablesOnPage(undefined, 0)).toEqual([]);
+  });
+});
+
+describe('mergeRolesByTableId', () => {
+  const roleTable = (tableId, extra = {}) => ({
+    tableId,
+    pdfPage: 0,
+    next: null,
+    ...extra,
+  });
+
+  it('maps a nested table to the joined role', () => {
+    const child = roleTable('c');
+    const root = roleTable('r', { next: { c: child } });
+    expect(mergeRolesByTableId([root]).c).toBe(MERGE_ROLE_JOINED);
+  });
+
+  it('maps the top-level parent of a nested table to the root role', () => {
+    const child = roleTable('c');
+    const root = roleTable('r', { next: { c: child } });
+    expect(mergeRolesByTableId([root]).r).toBe(MERGE_ROLE_ROOT);
+  });
+
+  it('maps a table carrying a saved grid but no next entries to the root role', () => {
+    const gridded = roleTable('g', { grid: [['g', 'x']] });
+    expect(mergeRolesByTableId([gridded]).g).toBe(MERGE_ROLE_ROOT);
+  });
+
+  it('gives a plain unmerged table no key at all', () => {
+    expect(mergeRolesByTableId([roleTable('plain')])).not.toHaveProperty(
+      'plain'
+    );
+  });
+
+  it('maps a nested table that itself carries a next map to joined, not root', () => {
+    const grandchild = roleTable('g');
+    const child = roleTable('c', { next: { g: grandchild } });
+    const root = roleTable('r', { next: { c: child } });
+    expect(mergeRolesByTableId([root]).c).toBe(MERGE_ROLE_JOINED);
+  });
+
+  it('treats a null list as an empty map', () => {
+    expect(mergeRolesByTableId(null)).toEqual({});
+  });
+});
+
+describe('mapAllTables', () => {
+  const t = (tableId, extra = {}) => ({ tableId, next: null, ...extra });
+
+  it('applies the transform to a top-level table', () => {
+    const out = mapAllTables([t('a')], (x) => ({ ...x, seen: true }));
+    expect(out[0].seen).toBe(true);
+  });
+
+  it('applies the transform to a table inside a next map', () => {
+    const root = t('r', { next: { c: t('c') } });
+    const out = mapAllTables([root], (x) =>
+      x.tableId === 'c' ? { ...x, seen: true } : x
+    );
+    expect(out[0].next.c.seen).toBe(true);
+  });
+
+  it('applies the transform two levels down', () => {
+    const child = t('c', { next: { g: t('g') } });
+    const root = t('r', { next: { c: child } });
+    const out = mapAllTables([root], (x) =>
+      x.tableId === 'g' ? { ...x, seen: true } : x
+    );
+    expect(out[0].next.c.next.g.seen).toBe(true);
+  });
+
+  it('keeps the root identity when nothing beneath it changed', () => {
+    const root = t('r', { next: { c: t('c') } });
+    const list = [root];
+    expect(mapAllTables(list, (x) => x)[0]).toBe(root);
+  });
+
+  it('returns the very same list when nothing changed anywhere', () => {
+    const list = [t('r', { next: { c: t('c') } }), t('o')];
+    expect(mapAllTables(list, (x) => x)).toBe(list);
+  });
+
+  it('rebuilds the owning root when a nested table changes', () => {
+    const root = t('r', { next: { c: t('c') } });
+    const out = mapAllTables([root], (x) =>
+      x.tableId === 'c' ? { ...x, seen: true } : x
+    );
+    expect(out[0]).not.toBe(root);
+    // Only `next` is rebuilt; the root's own fields are carried across.
+    expect(out[0].tableId).toBe('r');
+  });
+
+  it('leaves an unrelated sibling untouched by reference', () => {
+    const other = t('o');
+    const out = mapAllTables([t('a'), other], (x) =>
+      x.tableId === 'a' ? { ...x, seen: true } : x
+    );
+    expect(out[1]).toBe(other);
+  });
+
+  it('treats a null list as empty', () => {
+    expect(mapAllTables(null, (x) => x)).toEqual([]);
   });
 });

@@ -1102,6 +1102,169 @@ describe('PageTableEditor — editing a confirmed layer unticks it and above', (
     expect(nextTables.find((t) => t.tableId === 'A').confirmationStage).toBe(0);
   });
 
+  // A table joined under another table's grid lives in that root's `next` map, off the
+  // top-level list. Rows and Special Areas are the only layers it can be edited through
+  // (gridLockedLayerKeys locks Colours, Borders and Columns), and the untick those edits
+  // imply must reach it there — the edit itself already does, via replaceTableById.
+  const linkedFixture = (joinedOver = {}, rootOver = {}) => {
+    const joined = {
+      ...TABLE_B,
+      tableInPage: 1,
+      confirmationStage: 5,
+      ...joinedOver,
+    };
+    const root = {
+      ...TABLE_A,
+      confirmationStage: 5,
+      grid: [['A', 'B']],
+      next: { B: joined },
+      ...rootOver,
+    };
+    return { joined, root };
+  };
+
+  // The joined table as the editor currently holds it, and the top-level list carrying an
+  // edited copy of it in the root's `next` map — the shape StagedPageGridEditor reports.
+  const reportJoinedEdit = (edit) => {
+    const held = lastStagedProps().metadataTables;
+    const heldRoot = held.find((t) => t.tableId === 'A');
+    const heldJoined = heldRoot.next.B;
+    act(() => {
+      lastStagedProps().onEditTables([
+        { ...heldRoot, next: { B: { ...heldJoined, ...edit(heldJoined) } } },
+      ]);
+    });
+  };
+
+  const joinedFrom = (tables) =>
+    tables.find((t) => t.tableId === 'A').next.B;
+
+  test('flag ON: editing a Rows grid line on a JOINED table drops that table to stage 2', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    findGridLines.mockResolvedValue({ tables: [] });
+    const onChange = jest.fn();
+    const { root } = linkedFixture();
+
+    render(
+      <PageTableEditor
+        metadata={metadataWith([root])}
+        page={0}
+        onChange={onChange}
+        selectedTableId={'B'}
+      />
+    );
+
+    await screen.findByTestId('staged-editor');
+    await leaveFor('Rows');
+    await waitFor(() => expect(lastStagedProps().mode).toBe('rows'));
+
+    // A divider move: rowHeights is the data the Rows layer owns.
+    reportJoinedEdit((j) => ({
+      rowHeights: [
+        { value: j.rowHeights[0].value / 2, confidence: 90 },
+        { value: j.rowHeights[0].value / 2, confidence: 90 },
+      ],
+    }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    // Rows is layer 3, so editing it unticks 3 and above: stage 2.
+    expect(joinedFrom(next).confirmationStage).toBe(2);
+    // The root was not edited, so its own stage is left alone.
+    expect(next.find((t) => t.tableId === 'A').confirmationStage).toBe(5);
+  });
+
+  test('flag ON: a Special Areas edit on a JOINED table drops that table to stage 4', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    findGridLines.mockResolvedValue({ tables: [] });
+    const onChange = jest.fn();
+    const { root } = linkedFixture();
+
+    render(
+      <PageTableEditor
+        metadata={metadataWith([root])}
+        page={0}
+        onChange={onChange}
+        selectedTableId={'B'}
+      />
+    );
+
+    await screen.findByTestId('staged-editor');
+    await leaveFor('Special Areas');
+    await waitFor(() => expect(lastStagedProps().mode).toBe('special'));
+
+    reportJoinedEdit(() => ({ headerCount: 1 }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    // Special Areas is layer 5, so editing it unticks 5: stage 4.
+    expect(joinedFrom(next).confirmationStage).toBe(4);
+    // The change itself still arrives, as it always did.
+    expect(joinedFrom(next).headerCount).toBe(1);
+  });
+
+  test('flag ON: ticking Special Areas on a JOINED table writes its stage', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    findGridLines.mockResolvedValue({ tables: [] });
+    const onChange = jest.fn();
+    // Stage 4 makes Special Areas the first un-ticked row for the joined table.
+    const { root } = linkedFixture({ confirmationStage: 4 });
+
+    render(
+      <PageTableEditor
+        metadata={metadataWith([root])}
+        page={0}
+        onChange={onChange}
+        selectedTableId={'B'}
+      />
+    );
+
+    await screen.findByTestId('staged-editor');
+    fireEvent.click(tickFor('Special Areas'));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(joinedFrom(next).confirmationStage).toBe(5);
+  });
+
+  test('flag ON: a coloured-area edit drops a JOINED table on the page to stage 0', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    findGridLines.mockResolvedValue({ tables: [] });
+    const onChange = jest.fn();
+    const { root } = linkedFixture({ confirmationStage: 3 }, { confirmationStage: 3 });
+    const meta = {
+      pdfId: PDF_ID,
+      name: 'losses.pdf',
+      pages: [{ page: 0, tables: [], colouredAreas: [COLOURED_AREA] }],
+      tables: [root],
+    };
+
+    render(
+      <PageTableEditor
+        metadata={meta}
+        page={0}
+        onChange={onChange}
+        selectedTableId={'A'}
+      />
+    );
+
+    await screen.findByTestId('staged-editor');
+    await leaveFor('Colours');
+    act(() => {
+      lastStagedProps().onColouredAreasChange([
+        { ...COLOURED_AREA, width: 0.3 },
+      ]);
+    });
+
+    await leaveFor('Borders');
+
+    const next = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    // Coloured areas are page-scoped, so every table on the page loses its Colours tick —
+    // the joined one included.
+    expect(joinedFrom(next).confirmationStage).toBe(0);
+    expect(next.find((t) => t.tableId === 'A').confirmationStage).toBe(0);
+  });
+
   test('flag ON: a border edit on an unrelated stage-5 table is untouched when only one table changed', async () => {
     stagedGridEditorEnabled.mockReturnValue(true);
     findGridLines.mockResolvedValue({ tables: [] });

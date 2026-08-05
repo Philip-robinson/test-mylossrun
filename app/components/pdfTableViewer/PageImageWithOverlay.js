@@ -40,6 +40,7 @@ import {
   hasSavedGrid,
 } from 'components/pdfTableViewer/gridUtilities';
 import ConfirmedTickBadge from 'components/pdfTableViewer/ConfirmedTickBadge';
+import MergeLinkBadge from 'components/pdfTableViewer/MergeLinkBadge';
 import {
   CONFIDENCE_COLOUR_VARS,
   buildCalcHint,
@@ -231,10 +232,16 @@ const HOVER_PROXIMITY_PX = 2;
 //                       thumbnail's page, scaled to viewBox pixels here (see below). Only
 //                       thumbnails supply it, and only their borders/names/ticks come
 //                       from it, so the centre panel is untouched by it.
+//
+// `thumbnailMergeRoles` accompanies `thumbnailTables` (right column only): a plain object
+// keyed by tableId holding each table's part in a merge. It has to be supplied rather than
+// derived here, because whether a table sits inside another's `next` map is a
+// document-wide fact and this component only ever sees one page's tables.
 export function PageImageWithOverlay({
   image,
   tables,
   thumbnailTables,
+  thumbnailMergeRoles = null,
   withGrid,
   onHoverTable,
   metadataTables,
@@ -1427,17 +1434,19 @@ export function PageImageWithOverlay({
   // image's natural size, discovered on load), so the conversion needs nothing from the
   // server — and because the source is the LIVE metadata rather than the fetched thumbnail
   // list, an edit shows on the thumbnail immediately, without waiting for a save. `confirmed`
-  // comes off the SOURCE table: the converter returns geometry and name only. Empty for the
-  // centre panel, which never supplies thumbnailTables.
+  // comes off the SOURCE table: the converter returns geometry and name only. `mergeRole`
+  // comes from the host's document-wide role map. Empty for the centre panel, which never
+  // supplies thumbnailTables.
   const thumbnailOverlayTables = useMemo(
     () =>
       dims
         ? (thumbnailTables ?? []).map((t) => ({
             ...metadataTableToThumbnailOverlay(t, dims.w, dims.h),
             confirmed: (t.confirmationStage ?? 0) >= confirmedTableStage(),
+            mergeRole: thumbnailMergeRoles?.[t.tableId] ?? null,
           }))
         : [],
-    [thumbnailTables, dims]
+    [thumbnailTables, thumbnailMergeRoles, dims]
   );
 
   // Everything the overlay SVG draws a border for. The two sources are mutually exclusive
@@ -1548,6 +1557,20 @@ export function PageImageWithOverlay({
               key={`tick-${t.tableId}`}
               left={`${((t.left + t.width) / dims.w) * 100}%`}
               top={`${(t.top / dims.h) * 100}%`}
+            />
+          ))}
+      {/* Right column only: the merge link badge, marking a table's part in a merge — one
+          joined into another table's grid, or the root of such a grid. Positioned off the
+          same top-RIGHT corner as the tick, in a fixed slot immediately to its left. */}
+      {dims &&
+        thumbnailOverlayTables
+          .filter((t) => t.mergeRole)
+          .map((t) => (
+            <MergeLinkBadge
+              key={`merge-${t.tableId}`}
+              left={`${((t.left + t.width) / dims.w) * 100}%`}
+              top={`${(t.top / dims.h) * 100}%`}
+              role={t.mergeRole}
             />
           ))}
       {onHoverTable && hovered && (

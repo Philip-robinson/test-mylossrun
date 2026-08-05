@@ -34,14 +34,19 @@ import {
   recalcShortfallMessage,
   chooseCellTextPlacement,
   CONFIDENCE_COLOUR_VARS,
+  MERGE_ROLE_JOINED,
+  MERGE_ROLE_ROOT,
 } from 'components/pdfTableViewer/tableSupportUtils';
 // Config values are only ever used as INPUTS here (to build a fixture or to derive the
 // expected style), never asserted as literals, so these tests keep passing when a
 // constant changes.
 import {
   confirmedTableStage,
+  confirmedTickBadgeColour,
   confirmedTickBadgeSizePx,
+  confirmedTickColour,
   gridLineColour,
+  mergeLinkRootBadgeColour,
   readyTableStage,
 } from 'config';
 import {
@@ -592,18 +597,147 @@ describe('PDFEditTableStructure', () => {
       expect(rect).toHaveAttribute('y', '20');
     });
 
-    test('a table nested in another table next map is not drawn', async () => {
-      const child = metaTable({
+    // A table merged into another is moved off the top-level list into its root's `next`
+    // map. It is still on the page, so the thumbnail must draw it exactly as it would a
+    // top-level table — border, name and tick — which is what these tests fix.
+    const joinedChild = (over = {}) =>
+      metaTable({
         tableId: 'm-child',
         name: 'Joined',
         bounds: { left: 0.1, top: 0.6, width: 0.4, height: 0.3 },
+        ...over,
       });
-      const thumb = await renderThumbnail([metaTable({ next: { 1: child } })]);
-      const rect = await firstRect(thumb);
-      expect(thumb.querySelectorAll('rect')).toHaveLength(1);
-      // The drawn border is the top-level parent's (top 0.2 -> y 20), not the child's
-      // (0.6 -> 60).
-      expect(rect).toHaveAttribute('y', '20');
+
+    // Wait for `count` badges of one testid inside the thumbnail and return them.
+    async function badges(thumb, testid, count) {
+      return waitFor(() => {
+        const found = thumb.querySelectorAll(`[data-testid="${testid}"]`);
+        expect(found).toHaveLength(count);
+        return found;
+      });
+    }
+
+    const withRole = (found, role) =>
+      [...found].find((b) => b.getAttribute('data-merge-role') === role);
+
+    test('a table nested in another table next map is drawn', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({ next: { 1: joinedChild() } }),
+      ]);
+      await firstRect(thumb);
+      // Both the top-level root (top 0.2 -> y 20) and the table joined into it
+      // (0.6 -> 60); the root comes first, as the helper returns the top level first.
+      await waitFor(() =>
+        expect(
+          [...thumb.querySelectorAll('rect')].map((r) => r.getAttribute('y'))
+        ).toEqual(['20', '60'])
+      );
+    });
+
+    test('a nested table renders its own name label', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({ next: { 1: joinedChild() } }),
+      ]);
+      const labels = await badges(thumb, 'thumbnail-table-name', 2);
+      expect([...labels].map((l) => l.textContent)).toEqual([
+        'Meta One',
+        'Joined',
+      ]);
+    });
+
+    test('a nested table at the confirmed stage renders the tick badge', async () => {
+      // The root is left below the confirmed stage, so the only tick can be the child's.
+      const thumb = await renderThumbnail([
+        metaTable({
+          next: { 1: joinedChild({ confirmationStage: confirmedTableStage() }) },
+        }),
+      ]);
+      const [tick] = await badges(thumb, 'confirmed-tick', 1);
+      // Its own top-right corner: right edge (0.1 + 0.4) -> 50%, top 0.6 -> 60%.
+      expect(tick).toHaveStyle({ left: '50%', top: '60%' });
+    });
+
+    test('a nested table below the confirmed stage renders no tick badge', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({
+          next: {
+            1: joinedChild({ confirmationStage: confirmedTableStage() - 1 }),
+          },
+        }),
+      ]);
+      await firstRect(thumb);
+      expect(thumb.querySelector('[data-testid="confirmed-tick"]')).toBeNull();
+    });
+
+    test('a nested table renders the joined link badge, white on the tick green', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({ next: { 1: joinedChild() } }),
+      ]);
+      const found = await badges(thumb, 'merge-link', 2);
+      const joined = withRole(found, MERGE_ROLE_JOINED);
+      expect(joined).toHaveStyle({
+        backgroundColor: confirmedTickBadgeColour(),
+      });
+      expect(joined.querySelector('svg')).toHaveStyle({
+        color: confirmedTickColour(),
+      });
+    });
+
+    test('the root of a merge renders the root link badge, the tick green on white', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({ next: { 1: joinedChild() } }),
+      ]);
+      const found = await badges(thumb, 'merge-link', 2);
+      const root = withRole(found, MERGE_ROLE_ROOT);
+      expect(root).toHaveStyle({
+        backgroundColor: mergeLinkRootBadgeColour(),
+      });
+      expect(root.querySelector('svg')).toHaveStyle({
+        color: confirmedTickBadgeColour(),
+      });
+    });
+
+    test('a table that is part of no merge renders no link badge', async () => {
+      const thumb = await renderThumbnail([metaTable()]);
+      await firstRect(thumb);
+      expect(thumb.querySelector('[data-testid="merge-link"]')).toBeNull();
+    });
+
+    test('the link badge sits one badge width left of the tick slot', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({
+          next: { 1: joinedChild({ confirmationStage: confirmedTableStage() }) },
+        }),
+      ]);
+      const found = await badges(thumb, 'merge-link', 2);
+      const joined = withRole(found, MERGE_ROLE_JOINED);
+      const [tick] = await badges(thumb, 'confirmed-tick', 1);
+      // Same corner as the tick; the deeper translate is what puts it in the slot to its
+      // left, which only lines up while both badges are the same width.
+      expect(joined).toHaveStyle({
+        left: tick.style.left,
+        top: tick.style.top,
+      });
+      expect(joined.style.transform).toContain('translate(-200%, -100%)');
+      expect(joined).toHaveStyle({
+        width: `${confirmedTickBadgeSizePx()}px`,
+        height: `${confirmedTickBadgeSizePx()}px`,
+      });
+    });
+
+    test('the link badge slot is fixed: it is drawn on a merged table with no tick', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({
+          next: {
+            1: joinedChild({ confirmationStage: confirmedTableStage() - 1 }),
+          },
+        }),
+      ]);
+      const found = await badges(thumb, 'merge-link', 2);
+      expect(thumb.querySelector('[data-testid="confirmed-tick"]')).toBeNull();
+      expect(
+        withRole(found, MERGE_ROLE_JOINED).style.transform
+      ).toContain('translate(-200%, -100%)');
     });
 
     test('editing a table bounds moves the thumbnail border with no save', async () => {
@@ -712,6 +846,7 @@ describe('PDFEditTableStructure', () => {
         middle.querySelector('[data-testid="thumbnail-table-name"]')
       ).toBeNull();
       expect(middle.querySelector('[data-testid="confirmed-tick"]')).toBeNull();
+      expect(middle.querySelector('[data-testid="merge-link"]')).toBeNull();
     });
   });
 
@@ -6236,6 +6371,16 @@ describe('right-column page headings', () => {
     expect(counts[0]).toHaveTextContent(/^3 tables$/);
     // Zero tables reads "No tables".
     expect(counts[1]).toHaveTextContent(/^No tables$/);
+  });
+
+  test('the per-thumbnail count includes tables merged into another table', async () => {
+    // The count is documented as counting the list the thumbnail's borders are drawn from,
+    // and that list now reaches into `next`, so a root plus its joined table reads as two.
+    const child = countTable('joined', 0);
+    await renderCounts([countTable('root', 0, { next: { joined: child } })]);
+
+    const counts = screen.getAllByTestId('thumbnail-page-tables');
+    expect(counts[0]).toHaveTextContent(/^2 tables$/);
   });
 
   test('soft-deleted tables are excluded from the per-thumbnail count', async () => {

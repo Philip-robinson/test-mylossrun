@@ -10,6 +10,7 @@ import {
 } from 'config';
 import {
   hasSavedGrid,
+  isAmalgamated,
 } from 'components/pdfTableViewer/gridUtilities';
 import { collectColumnNames } from 'components/pdfTableViewer/layerUtils';
 import { newUUID } from 'common/utils';
@@ -361,6 +362,67 @@ export function linkedTablesWithParents(tables) {
   };
   (tables ?? []).forEach(collect);
   return out;
+}
+
+// Every non-deleted table on `page`, taken from the top-level list AND from every table's
+// `next` map. Returns the metadata tables by REFERENCE and undecorated: callers commit
+// these objects back into the document, so nothing display-related may be attached to them.
+export function tablesOnPage(tables, page) {
+  const all = tables ?? [];
+  return [
+    ...all,
+    ...linkedTablesWithParents(all).map(({ table }) => table),
+  ].filter((t) => t.pdfPage === page && !t.deleted);
+}
+
+// Apply `fn` to EVERY table in the list, at the top level and at any depth inside a `next`
+// map, returning the rebuilt top-level list. Identity is preserved wherever nothing
+// changed — an untouched table, and an untouched root, come back by reference, and the very
+// same list is returned when `fn` changed nothing anywhere — so callers can still test
+// "did anything change?" by reference. Children are visited first, so a parent reaches `fn`
+// already carrying its transformed `next` map and one pass suffices.
+export function mapAllTables(tables, fn) {
+  const list = tables ?? [];
+  let changed = false;
+  const out = list.map((table) => {
+    const kids = table.next ? Object.entries(table.next) : null;
+    let withKids = table;
+    if (kids && kids.length) {
+      let kidsChanged = false;
+      const nextMap = {};
+      kids.forEach(([key, child]) => {
+        const mapped = mapAllTables([child], fn)[0];
+        if (mapped !== child) kidsChanged = true;
+        nextMap[key] = mapped;
+      });
+      if (kidsChanged) withKids = { ...table, next: nextMap };
+    }
+    const mapped = fn(withKids);
+    if (mapped !== table) changed = true;
+    return mapped;
+  });
+  return changed ? out : list;
+}
+
+// A table's part in a merge, as reported by mergeRolesByTableId.
+export const MERGE_ROLE_JOINED = 'joined';
+export const MERGE_ROLE_ROOT = 'root';
+
+// Each merged table's role, keyed by tableId: MERGE_ROLE_JOINED for a table held in some
+// table's `next` map, MERGE_ROLE_ROOT for a top-level table that holds links or a saved
+// grid. A table in neither category has no key, so a consumer reads a missing key as
+// "not part of a merge". Takes the whole document's top-level list, because a joined
+// table's root may sit on another page.
+export function mergeRolesByTableId(tables) {
+  const roles = {};
+  (tables ?? []).forEach((t) => {
+    if (isAmalgamated(t)) roles[t.tableId] = MERGE_ROLE_ROOT;
+  });
+  // Written second so a linked table carrying its own links comes out joined, not root.
+  linkedTablesWithParents(tables).forEach(({ table }) => {
+    roles[table.tableId] = MERGE_ROLE_JOINED;
+  });
+  return roles;
 }
 
 // The table carrying `tableId`, looked for at the top level and then inside each table's

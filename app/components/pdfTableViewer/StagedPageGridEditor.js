@@ -36,7 +36,6 @@ import {
   findTableById,
   gridSquareAtFraction,
   identityMap,
-  linkedTablesWithParents,
   makeDefaultCell,
   mergeCells,
   mergeMap,
@@ -51,6 +50,7 @@ import {
   splitEntry,
   splitMap,
   splitMapBelow,
+  tablesOnPage,
   withCellSpan,
   leadingSquaresBounds,
 } from 'components/pdfTableViewer/tableSupportUtils';
@@ -288,13 +288,10 @@ export function StagedPageGridEditor({
   // This page's tables: those in the top-level list, plus those joined under another table's
   // grid. A saved link grid moves the joined tables off the top-level list, but they are on
   // the page and are selected and edited like any other.
-  const samePage = useMemo(() => {
-    const all = metadataTables ?? [];
-    return [
-      ...all,
-      ...linkedTablesWithParents(all).map(({ table }) => table),
-    ].filter((t) => t.pdfPage === page && !t.deleted);
-  }, [metadataTables, page]);
+  const samePage = useMemo(
+    () => tablesOnPage(metadataTables, page),
+    [metadataTables, page]
+  );
 
   // The selected table: the one whose id matches, else the first same-page non-deleted table.
   const selected = useMemo(

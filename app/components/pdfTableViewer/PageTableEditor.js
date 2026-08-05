@@ -12,7 +12,10 @@ import {
   metadataTablesToOverlay,
   normaliseTableBounds,
   fillGridCells,
+  findTableById,
   linkedTablesWithParents,
+  mapAllTables,
+  replaceTableById,
   buildCalcHint,
   mergeFindGridLines,
   overlapArea,
@@ -379,8 +382,10 @@ export default function PageTableEditor({
       // invalidates the Colours confirmation for EVERY table on the displayed page: unticking
       // Colours (and therefore every layer above it) drops each such table's stage via
       // stageAfterEdit('colours', …) — i.e. to 0. Untouched tables (a stage that would not
-      // change) keep their identity so no spurious edit is reported.
-      const next = tables.map((table) => {
+      // change) keep their identity so no spurious edit is reported. Walked with
+      // mapAllTables so a table joined under another table's grid — off the top-level list,
+      // but on the page and carrying its own Colours tick — is dropped with the rest.
+      const next = mapAllTables(tables, (table) => {
         if (!flushAreas || table.pdfPage !== displayPage || table.deleted) return table;
         const nextStage = stageAfterEdit('colours', table.confirmationStage ?? 0);
         return nextStage === (table.confirmationStage ?? 0)
@@ -634,10 +639,13 @@ export default function PageTableEditor({
   // it — unticked via stageAfterEdit. A confirmationStage write is never itself treated as
   // an edit (the editor never touches it), and a just-created table (no `before`) keeps
   // its unconfirmed stage untouched.
+  // Walked with mapAllTables, and `before` looked up with findTableById, so a table joined
+  // under another table's grid is adjusted too: it sits in its root's `next` map rather than
+  // on the top-level list, and Rows and Special Areas are the only layers it can be edited
+  // through, so a top-level walk left exactly those two edits with a stale stage.
   const handleEditTables = (nextTables) => {
-    const beforeById = new Map(normalisedTables.map((t) => [t.tableId, t]));
-    const adjusted = nextTables.map((t) => {
-      const before = beforeById.get(t.tableId);
+    const adjusted = mapAllTables(nextTables, (t) => {
+      const before = findTableById(normalisedTables, t.tableId);
       // A table created in this session has no `before` to compare, so it is not recorded as
       // bounds-changed: it has no previous geometry to have moved away from, and the create
       // flow already runs its own grid-lines Calculate that detects its geometry. It becomes
@@ -694,22 +702,18 @@ export default function PageTableEditor({
   );
 
   // Write the combo's chosen/typed value to the selected section-title's columnName. Routed
-  // through handleEditTables so the 'special' edit drops the table's confirmationStage.
+  // through handleEditTables so the 'special' edit drops the table's confirmationStage, and
+  // written with replaceTableById so the write lands whether the selected table is on the
+  // top-level list or joined under another table's grid.
   const setSectionColumnName = (value) => {
     if (!selectedTable || selectedSectionRow == null) return;
     handleEditTables(
-      normalisedTables.map((t) =>
-        t.tableId === selectedTable.tableId
-          ? {
-              ...t,
-              sectionTitles: (t.sectionTitles ?? []).map((s) =>
-                s.tableRow === selectedSectionRow
-                  ? { ...s, columnName: value }
-                  : s
-              ),
-            }
-          : t
-      )
+      replaceTableById(normalisedTables, selectedTable.tableId, {
+        ...selectedTable,
+        sectionTitles: (selectedTable.sectionTitles ?? []).map((s) =>
+          s.tableRow === selectedSectionRow ? { ...s, columnName: value } : s
+        ),
+      })
     );
   };
 
@@ -1042,12 +1046,13 @@ export default function PageTableEditor({
         selectedTable.confirmationStage ?? 0,
         checked
       );
+      // replaceTableById, not a top-level map: the tick must land on a table joined under
+      // another table's grid too, and that table is held in its root's `next` map.
       commitTables(
-        normalisedTables.map((t) =>
-          t.tableId === selectedTable.tableId
-            ? { ...t, confirmationStage: nextStage }
-            : t
-        )
+        replaceTableById(normalisedTables, selectedTable.tableId, {
+          ...selectedTable,
+          confirmationStage: nextStage,
+        })
       );
     },
     [selectedTable, commitTables, normalisedTables]

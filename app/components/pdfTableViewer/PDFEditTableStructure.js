@@ -38,12 +38,13 @@ import {
 import {
   buildCalcCellsRequestTable,
   fillGridCells,
-  linkedTablesWithParents,
   mergeCalcCellsResponse,
+  mergeRolesByTableId,
   normaliseTableBounds,
   overlaps,
   tableCountLabel,
   tableSizeLabel,
+  tablesOnPage,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import { layerDataChanged } from 'components/pdfTableViewer/layerUtils';
 import { PageImageWithOverlay } from 'components/pdfTableViewer/PageImageWithOverlay';
@@ -312,10 +313,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // otherwise land with nothing selected at all.
   useEffect(() => {
     if (!stagedGridEditorEnabled()) return;
-    const onPage = [
-      ...tables,
-      ...linkedTablesWithParents(tables).map(({ table }) => table),
-    ].filter((t) => t.pdfPage === selectedPage && !t.deleted);
+    const onPage = tablesOnPage(tables, selectedPage);
     const stillValid = onPage.some((t) => t.tableId === selectedTableId);
     if (!stillValid) {
       setSelectedTableId(onPage.length > 0 ? onPage[0].tableId : null);
@@ -696,11 +694,14 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // thumbnail overlay scales them itself, from the loaded image's natural size). Taken from
   // the editable `tables` state — not the thumbnail fetch, which only refreshes after a
   // save — so an edit shows on the thumbnail straight away. Soft-deleted tables are
-  // excluded, as everywhere else in the editor, and only TOP-LEVEL tables are drawn: those
-  // nested in another table's `next` map (joined tables) are skipped, matching the
-  // left-hand Document Overview.
-  const thumbnailTablesOnPage = (index) =>
-    tables.filter((t) => t.pdfPage === index && !t.deleted);
+  // excluded, as everywhere else in the editor. Tables joined into another table's grid are
+  // INCLUDED: a saved link grid moves them off the top-level list, and taking the top level
+  // alone left them with no border, no name and no tick despite being on the page.
+  const thumbnailTablesOnPage = (index) => tablesOnPage(tables, index);
+
+  // Each merged table's part in a merge, keyed by tableId, for the thumbnails' link badge.
+  // Computed from the whole document because a joined table's root may sit on another page.
+  const mergeRoles = mergeRolesByTableId(tables);
 
   // Non-deleted tables: shown for ALL pages (unchanged behaviour). Deleted tables: shown
   // ONLY when the toggle is on AND the table is on the page currently selected in the
@@ -1165,6 +1166,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
               <PageImageWithOverlay
                 image={thumb.image}
                 thumbnailTables={thumbnailTablesOnPage(index)}
+                thumbnailMergeRoles={mergeRoles}
                 withGrid={false}
               />
             </Box>

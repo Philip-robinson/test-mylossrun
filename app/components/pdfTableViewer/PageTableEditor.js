@@ -8,6 +8,7 @@ import StagedPageGridEditor from 'components/pdfTableViewer/StagedPageGridEditor
 import LayersPanel from 'components/pdfTableViewer/LayersPanel';
 import EditorScaleSelector from 'components/pdfTableViewer/EditorScaleSelector';
 import DimDocumentToggle from 'components/pdfTableViewer/DimDocumentToggle';
+import RawProcessedToggle from 'components/pdfTableViewer/RawProcessedToggle';
 import {
   metadataTablesToOverlay,
   normaliseTableBounds,
@@ -46,6 +47,7 @@ import {
   scaleDebounceMs,
   baseImageWidthPx,
   gridLockedLayerKeys,
+  defaultImageStyle,
 } from 'config';
 
 // A table with no expected-count hints typed yet: both fields blank.
@@ -133,6 +135,10 @@ export default function PageTableEditor({
   const [debouncedScale, setDebouncedScale] = useState(defaultScalePercent());
   // "Dim Document" toggle (defaults on).
   const [dimDocument, setDimDocument] = useState(true);
+  // "Raw / Processed" toggle: which rendering of the page get-image returns. Unlike the
+  // dim toggle this is not a display trick — changing it refetches the page, because the
+  // processed rendering is produced by the backend from the page's coloured areas.
+  const [imageStyle, setImageStyle] = useState(defaultImageStyle());
   // The active Layer row / staged editing mode: 'border' | 'rows' | 'columns' | 'special' |
   // 'colours'.
   const [selectedLayer, setSelectedLayer] = useState('colours');
@@ -523,7 +529,8 @@ export default function PageTableEditor({
         const data = await getImage(
           metadata.pdfId,
           page,
-          Math.round(measuredWidth * 0.95)
+          Math.round(measuredWidth * 0.95),
+          imageStyle
         );
         if (cancelled) return;
         setError(null);
@@ -540,7 +547,7 @@ export default function PageTableEditor({
     return () => {
       cancelled = true;
     };
-  }, [staged, metadata.pdfId, page, measuredWidth]);
+  }, [staged, metadata.pdfId, page, measuredWidth, imageStyle]);
 
   // Staged branch: debounce scalePercent -> debouncedScale so a burst of zoom steps
   // coalesces into a single refetch (scaleDebounceMs()). The initial value already equals
@@ -564,7 +571,7 @@ export default function PageTableEditor({
     const width = scalePercentToWidthPx(debouncedScale, baseImageWidthPx());
     (async () => {
       try {
-        const data = await getImage(metadata.pdfId, page, width);
+        const data = await getImage(metadata.pdfId, page, width, imageStyle);
         if (cancelled) return;
         setError(null);
         setPageImage({ ...data, page });
@@ -580,7 +587,7 @@ export default function PageTableEditor({
     return () => {
       cancelled = true;
     };
-  }, [staged, metadata.pdfId, page, debouncedScale]);
+  }, [staged, metadata.pdfId, page, debouncedScale, imageStyle]);
 
   // Derive the centre overlay's flat pixel-space tables from the normalised metadata,
   // scaled by the get-image pixel dimensions (legacy branch). Empty until the page image
@@ -1120,6 +1127,7 @@ export default function PageTableEditor({
               ? metadata.name
               : `${metadata.name} — Page ${pageImage.page + 1}`}
           </Box>
+          <RawProcessedToggle value={imageStyle} onChange={setImageStyle} />
           <DimDocumentToggle on={dimDocument} onChange={setDimDocument} />
           <EditorScaleSelector percent={scalePercent} onChange={setScalePercent} />
         </Box>

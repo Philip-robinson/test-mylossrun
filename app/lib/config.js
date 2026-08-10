@@ -198,7 +198,7 @@ export function scalePercentOptions() {
 
 // Base rendered width (screen px) of the page image at 100% scale.
 export function baseImageWidthPx() {
-  return 1100;
+  return 1000;
 }
 
 // Debounce window (ms) applied to scale changes before re-rendering/refetching.
@@ -209,6 +209,22 @@ export function scaleDebounceMs() {
 // Opacity applied to the page image when "Dim Document" is toggled on.
 export function documentDimOpacity() {
   return 0.35;
+}
+
+// The two renderings /api/get-image can return, sent as its `imageStyle`. RAW is the page
+// as the PDF draws it; PROCESSED has the page's coloured areas flattened to black on
+// white, which is the page the extraction reads.
+export function rawImageStyle() {
+  return 'RAW';
+}
+
+export function processedImageStyle() {
+  return 'PROCESSED';
+}
+
+// The rendering the editor opens on: the page as the extraction reads it.
+export function defaultImageStyle() {
+  return processedImageStyle();
 }
 
 // Layer row colours (Border, Rows, Columns, Special Cells, Colours).
@@ -538,6 +554,9 @@ export default {
   baseImageWidthPx,
   scaleDebounceMs,
   documentDimOpacity,
+  rawImageStyle,
+  processedImageStyle,
+  defaultImageStyle,
   layerBorderColour,
   layerRowsColour,
   layerColumnsColour,

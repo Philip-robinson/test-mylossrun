@@ -1,10 +1,15 @@
 import { authHeaders } from './authHeaders';
 
-export async function getImage(pdfId, pageNumber, width) {
+// One page rendered to a PNG. `imageStyle` picks the rendering: 'RAW' (or omitted) is the
+// page as the PDF draws it, 'PROCESSED' has its coloured areas flattened to black on
+// white. Omitted, the key is not sent at all, so the body keeps its original wire shape.
+export async function getImage(pdfId, pageNumber, width, imageStyle = undefined) {
+  const body = { pdfId, page: pageNumber, width };
+  if (imageStyle !== undefined) body.imageStyle = imageStyle;
   const response = await fetch('/api/get-image', {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ pdfId, page: pageNumber, width }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     throw new Error(`getImage failed: ${response.status}`);

@@ -341,7 +341,12 @@ describe('PDFEditTableStructure', () => {
     expect(getThumbnails).toHaveBeenCalledWith(PDF_ID, expect.any(Number));
 
     await waitFor(() => expect(getImage).toHaveBeenCalled());
-    expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, expect.any(Number));
+    expect(getImage).toHaveBeenCalledWith(
+      PDF_ID,
+      0,
+      expect.any(Number),
+      'PROCESSED'
+    );
   });
 
   test('requests 95% of the measured pane width', async () => {
@@ -366,7 +371,9 @@ describe('PDFEditTableStructure', () => {
     await waitFor(() =>
       expect(getThumbnails).toHaveBeenCalledWith(PDF_ID, 950)
     );
-    await waitFor(() => expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, 950));
+    await waitFor(() =>
+      expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, 950, 'PROCESSED')
+    );
   });
 
   test('renders the three panel titles and the middle title bar showing the PDF name and page number', async () => {
@@ -415,7 +422,7 @@ describe('PDFEditTableStructure', () => {
 
     await waitFor(() => {
       const lastCall = getImage.mock.calls[getImage.mock.calls.length - 1];
-      expect(lastCall).toEqual([PDF_ID, 1, expect.any(Number)]);
+      expect(lastCall).toEqual([PDF_ID, 1, expect.any(Number), 'PROCESSED']);
     });
 
     await waitFor(() =>
@@ -1067,6 +1074,7 @@ describe('PDFEditTableStructure', () => {
         PDF_ID,
         1,
         expect.any(Number),
+        'PROCESSED',
       ]);
 
       // Resize: widen the panes and fire the observer.
@@ -1094,6 +1102,7 @@ describe('PDFEditTableStructure', () => {
         PDF_ID,
         1,
         expect.any(Number),
+        'PROCESSED',
       ]);
     } finally {
       jest.useRealTimers();
@@ -1186,6 +1195,7 @@ describe('PDFEditTableStructure', () => {
         PDF_ID,
         2,
         expect.any(Number),
+        'PROCESSED',
       ]);
 
       // The debounced refetch returns only two pages; selection (2) clamps to the
@@ -1211,6 +1221,7 @@ describe('PDFEditTableStructure', () => {
         PDF_ID,
         1,
         expect.any(Number),
+        'PROCESSED',
       ]);
     } finally {
       jest.useRealTimers();

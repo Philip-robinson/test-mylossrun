@@ -43,6 +43,29 @@ describe('images service', () => {
       expect(result).toEqual({ success: true, image: 'data:image/png;base64,abc' });
     });
 
+    it('sends imageStyle when one is given', async () => {
+      mockOk({ success: true });
+
+      await getImage('pdf-123', 2, 850, 'PROCESSED');
+
+      const [, options] = global.fetch.mock.calls[0];
+      expect(JSON.parse(options.body)).toEqual({
+        pdfId: 'pdf-123',
+        page: 2,
+        width: 850,
+        imageStyle: 'PROCESSED',
+      });
+    });
+
+    it('omits the imageStyle key entirely when none is given', async () => {
+      mockOk({ success: true });
+
+      await getImage('pdf-123', 2, 850);
+
+      const [, options] = global.fetch.mock.calls[0];
+      expect('imageStyle' in JSON.parse(options.body)).toBe(false);
+    });
+
     it('omits X-Access-Code when localStorage is empty', async () => {
       localStorage.clear();
       mockOk({ success: true });

@@ -269,7 +269,12 @@ describe('PageTableEditor', () => {
     );
 
     await waitFor(() => expect(getImage).toHaveBeenCalled());
-    expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, Math.round(400 * 0.95));
+    expect(getImage).toHaveBeenCalledWith(
+      PDF_ID,
+      0,
+      Math.round(400 * 0.95),
+      'PROCESSED'
+    );
   });
 
   test('title bar shows the name before load and name — Page N after', async () => {
@@ -597,7 +602,9 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
 
     await screen.findByTestId('staged-editor');
     // Initial load: 100% of the base width.
-    await waitFor(() => expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, base));
+    await waitFor(() =>
+      expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, base, 'PROCESSED')
+    );
 
     getImage.mockClear();
 
@@ -608,7 +615,9 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
     expect(getImage).not.toHaveBeenCalled();
 
     // After the debounce window the image is refetched at 150% of the base width.
-    await waitFor(() => expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, at150));
+    await waitFor(() =>
+      expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, at150, 'PROCESSED')
+    );
   });
 
   test('flag ON: toggling Dim Document flips the dim prop reaching StagedPageGridEditor', async () => {
@@ -628,6 +637,38 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
 
     fireEvent.click(screen.getByTestId('dim-document-toggle'));
     await waitFor(() => expect(lastStagedProps().dim).toBe(false));
+  });
+
+  test('flag ON: switching to Raw refetches the page image in that style', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+
+    render(
+      <PageTableEditor
+        metadata={metadataWith([TABLE_A])}
+        page={0}
+        onChange={jest.fn()}
+      />
+    );
+
+    await screen.findByTestId('staged-editor');
+    // The editor opens on the processed rendering.
+    await waitFor(() =>
+      expect(getImage).toHaveBeenCalledWith(
+        PDF_ID,
+        0,
+        expect.any(Number),
+        'PROCESSED'
+      )
+    );
+
+    getImage.mockClear();
+
+    // Unlike Dim Document this is not a display trick: each rendering is made by the
+    // backend, so the page has to be fetched again.
+    fireEvent.click(screen.getByTestId('image-style-toggle'));
+    await waitFor(() =>
+      expect(getImage).toHaveBeenCalledWith(PDF_ID, 0, expect.any(Number), 'RAW')
+    );
   });
 
   test('flag ON: selecting a Layer row updates the mode passed to StagedPageGridEditor', async () => {

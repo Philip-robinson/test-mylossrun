@@ -957,10 +957,10 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
     await waitFor(() => expect(lastStagedProps().colourAddMode).toBe(true));
   });
 
-  // A coloured-area edit is PROVISIONAL: it is held here, shown to the editor, and reported to
-  // the host with its page only when the layer is left. Writing it into the document at each
-  // drag bought nothing — the grid-lines rebuild that leaving fires is what the edit is for.
-  test('flag ON, colours layer: an area edit is held, and reaches the host with (displayPage, next) on leaving', async () => {
+  // A coloured-area edit reaches the host with its page AT THE EDIT, so the document is dirty
+  // and Save is offered from that moment. It is still shown from what is held, and leaving the
+  // layer still reports it — the rebuild that leaving fires works from the same list.
+  test('flag ON, colours layer: an area edit reaches the host with (displayPage, next) at the edit', async () => {
     stagedGridEditorEnabled.mockReturnValue(true);
     findGridLines.mockResolvedValue({ tables: [] });
     const onColouredAreasChange = jest.fn();
@@ -983,20 +983,21 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
       lastStagedProps().onColouredAreasChange(next);
     });
 
-    // Held, not reported — but shown, so the user sees what they drew.
-    expect(onColouredAreasChange).not.toHaveBeenCalled();
+    // Reported at once, and shown, so the user sees what they drew and Save is armed.
+    expect(onColouredAreasChange).toHaveBeenCalledWith(0, next);
     expect(lastStagedProps().colouredAreas).toEqual(next);
 
     await act(async () => {
       selectLayerRow('Borders');
     });
 
-    expect(onColouredAreasChange).toHaveBeenCalledWith(0, next);
+    expect(onColouredAreasChange).toHaveBeenLastCalledWith(0, next);
   });
 
-  // Left by a route that is not the Layers panel, what is held is DISCARDED: it was never
-  // confirmed by the rebuild that gives it its point, and the document was never told.
-  test('flag ON, colours layer: a held area edit is dropped on a page change', async () => {
+  // Leaving by a route that is not the Layers panel drops the HELD copy, but the document was
+  // told at the edit, so the edit itself survives — it is reported exactly once, when it was
+  // made, and the page change adds no further report.
+  test('flag ON, colours layer: an area edit survives a page change, reported once at the edit', async () => {
     stagedGridEditorEnabled.mockReturnValue(true);
     const onColouredAreasChange = jest.fn();
     const metadata = {
@@ -1017,12 +1018,13 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
     );
 
     await screen.findByTestId('staged-editor');
+    const next = [COLOURED_AREA, { ...COLOURED_AREA, left: 0.4 }];
     act(() => {
-      lastStagedProps().onColouredAreasChange([
-        COLOURED_AREA,
-        { ...COLOURED_AREA, left: 0.4 },
-      ]);
+      lastStagedProps().onColouredAreasChange(next);
     });
+
+    expect(onColouredAreasChange).toHaveBeenCalledTimes(1);
+    expect(onColouredAreasChange).toHaveBeenCalledWith(0, next);
 
     rerender(
       <PageTableEditor
@@ -1036,7 +1038,128 @@ describe('PageTableEditor — staged grid editor selection (config flag)', () =>
       expect(screen.getByTestId('middle-title-bar')).toHaveTextContent('Page 2')
     );
 
-    expect(onColouredAreasChange).not.toHaveBeenCalled();
+    expect(onColouredAreasChange).toHaveBeenCalledTimes(1);
+  });
+
+  // A coloured area decides how its region is flattened before the grid is read, so a cell the
+  // change touched can no longer be trusted to hold what was OCR'd from it.
+  describe('flag ON, colours layer: cells the edit touched lose their confidence', () => {
+    // Two 1x1 tables on page 0, both read with confidence: UNDER sits inside COLOURED_AREA
+    // (0.1..0.3 on both axes), CLEAR is nowhere near it.
+    const read = (id, left, top) => ({
+      tableId: id,
+      name: id,
+      pdfPage: 0,
+      tableInPage: id === 'UNDER' ? 0 : 1,
+      bounds: { left, top, width: 0.04, height: 0.04 },
+      columnWidths: [{ value: 0.04, confidence: 90 }],
+      rowHeights: [{ value: 0.04, confidence: 90 }],
+      cells: [
+        {
+          ...makeDefaultCell(0, 0, { left, top, width: 0.04, height: 0.04 }),
+          text: 'read',
+          confidence: 90,
+        },
+      ],
+    });
+
+    const renderWith = (onChange) => {
+      stagedGridEditorEnabled.mockReturnValue(true);
+      return render(
+        <PageTableEditor
+          metadata={{
+            pdfId: PDF_ID,
+            name: 'losses.pdf',
+            pages: [{ page: 0, tables: [], colouredAreas: [COLOURED_AREA] }],
+            tables: [read('UNDER', 0.15, 0.15), read('CLEAR', 0.6, 0.6)],
+          }}
+          page={0}
+          onChange={onChange}
+          onColouredAreasChange={jest.fn()}
+        />
+      );
+    };
+
+    const confidences = (onChange) => {
+      const tables = onChange.mock.calls.at(-1)[0];
+      return Object.fromEntries(
+        tables.map((t) => [t.tableId, t.cells[0].confidence])
+      );
+    };
+
+    test('a moved boundary zeroes cells under the OLD and the NEW rectangle', async () => {
+      const onChange = jest.fn();
+      renderWith(onChange);
+      await screen.findByTestId('staged-editor');
+
+      // The area moves off UNDER and onto CLEAR. Both lose their confidence: one because the
+      // area stopped flattening it, the other because it started.
+      act(() => {
+        lastStagedProps().onColouredAreasChange([
+          { ...COLOURED_AREA, left: 0.55, top: 0.55 },
+        ]);
+      });
+
+      expect(confidences(onChange)).toEqual({ UNDER: 0, CLEAR: 0 });
+    });
+
+    test('a new area zeroes only the cells it covers', async () => {
+      const onChange = jest.fn();
+      renderWith(onChange);
+      await screen.findByTestId('staged-editor');
+
+      act(() => {
+        lastStagedProps().onColouredAreasChange([
+          COLOURED_AREA,
+          { ...COLOURED_AREA, left: 0.55, top: 0.55 },
+        ]);
+      });
+
+      // Only the added rectangle changed, so the cell under the untouched area keeps its read.
+      expect(confidences(onChange)).toEqual({ UNDER: 90, CLEAR: 0 });
+    });
+
+    test('a deleted area zeroes the cells it used to cover', async () => {
+      const onChange = jest.fn();
+      renderWith(onChange);
+      await screen.findByTestId('staged-editor');
+
+      act(() => {
+        lastStagedProps().onColouredAreasChange([]);
+      });
+
+      expect(confidences(onChange)).toEqual({ UNDER: 0, CLEAR: 90 });
+    });
+
+    test('a colour pick zeroes the cells under the rectangle it left alone', async () => {
+      const onChange = jest.fn();
+      renderWith(onChange);
+      await screen.findByTestId('staged-editor');
+
+      act(() => {
+        lastStagedProps().onColouredAreasChange([
+          { ...COLOURED_AREA, foreground: '#222222' },
+        ]);
+      });
+
+      expect(confidences(onChange)).toEqual({ UNDER: 0, CLEAR: 90 });
+    });
+
+    test('reports no table change when the edit touches no cell', async () => {
+      const onChange = jest.fn();
+      renderWith(onChange);
+      await screen.findByTestId('staged-editor');
+
+      // An area added over empty page space: the areas changed, but no cell impinges on it.
+      act(() => {
+        lastStagedProps().onColouredAreasChange([
+          COLOURED_AREA,
+          { ...COLOURED_AREA, left: 0.8, top: 0.05 },
+        ]);
+      });
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 });
 

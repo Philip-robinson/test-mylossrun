@@ -1316,6 +1316,69 @@ export const overlaps = (a, b) =>
   a.top < b.top + b.height &&
   a.top + a.height > b.top;
 
+// True when two coloured areas are the same area: same rectangle AND same colours. A colour
+// pick that leaves the rectangle alone still changes how the area flattens, so it counts as a
+// change like any other.
+const sameColouredArea = (a, b) =>
+  a.left === b.left &&
+  a.top === b.top &&
+  a.width === b.width &&
+  a.height === b.height &&
+  a.foreground === b.foreground &&
+  a.background === b.background;
+
+// The rectangles a coloured-area edit changed, as absolute page fractions.
+//
+// Matched by value rather than by list position, so one rule covers every kind of edit: an
+// area present before and not after contributes the rectangle it used to cover, an area
+// present after and not before contributes the rectangle it now covers, and an area that
+// merely moved or resized is both — it stops covering what it did and starts covering what it
+// does, and the cells under either are affected. Position matching cannot do this, because
+// deleting an area shifts every later index.
+//
+// Duplicate rectangles are collapsed, so a colour pick that leaves the rectangle where it was
+// yields that one rectangle rather than two copies of it.
+export function changedColouredAreaRects(previousAreas, nextAreas) {
+  const before = previousAreas ?? [];
+  const after = nextAreas ?? [];
+  const gone = before.filter((a) => !after.some((b) => sameColouredArea(a, b)));
+  const arrived = after.filter((a) => !before.some((b) => sameColouredArea(a, b)));
+  const rects = [];
+  const seen = new Set();
+  [...gone, ...arrived].forEach(({ left, top, width, height }) => {
+    const key = `${left},${top},${width},${height}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    rects.push({ left, top, width, height });
+  });
+  return rects;
+}
+
+// Every cell of `page`'s tables that impinges on any of `rects`, marked confidence 0.
+//
+// A coloured area decides how its region is flattened before the grid is read, so a cell the
+// change touched can no longer be trusted to hold what was OCR'd from it. Zero is the value a
+// freshly materialised cell carries (see makeDefaultCell), so it renders red and reads as
+// awaiting re-OCR.
+//
+// Identity is preserved throughout — an untouched cell, table and list come back by reference
+// — so a caller can test "did anything change?" by reference. Walked with mapAllTables so a
+// table joined under another table's grid is reached too.
+export function zeroConfidenceInRects(tables, page, rects) {
+  if (!(rects ?? []).length) return tables ?? [];
+  return mapAllTables(tables, (table) => {
+    if (table.pdfPage !== page || table.deleted) return table;
+    let changed = false;
+    const cells = (table.cells ?? []).map((cell) => {
+      if (cell.confidence === 0 || !cell.bounds) return cell;
+      if (!rects.some((rect) => overlaps(cell.bounds, rect))) return cell;
+      changed = true;
+      return { ...cell, confidence: 0 };
+    });
+    return changed ? { ...table, cells } : table;
+  });
+}
+
 // Sum of a PDFValue array's `.value` fields (0 for an empty array).
 export const sumValues = (arr) => (arr ?? []).reduce((acc, v) => acc + v.value, 0);
 

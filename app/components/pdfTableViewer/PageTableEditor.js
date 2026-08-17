@@ -21,6 +21,8 @@ import {
   mergeFindGridLines,
   overlapArea,
   mergedCellLimits,
+  changedColouredAreaRects,
+  zeroConfidenceInRects,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   scalePercentToWidthPx,
@@ -231,15 +233,19 @@ export default function PageTableEditor({
     [metadata.tables]
   );
 
-  // A border move and a coloured-area edit are PROVISIONAL: they are held here and reported to
-  // the host only when the layer is left through `leaveFor`, which is also when the grid-lines
-  // rebuild they arm is made. Writing them into the document at each drag bought nothing — the
-  // rebuild overwrites the hand-positioned border with the detector's version anyway — while
-  // marking the document dirty and pushing a whole table list up per mouse-up.
+  // A border move is PROVISIONAL: it is held here and reported to the host only when the layer
+  // is left through `leaveFor`, which is also when the grid-lines rebuild it arms is made.
+  // Writing it into the document at each drag bought nothing — the rebuild overwrites the
+  // hand-positioned border with the detector's version anyway — while marking the document
+  // dirty and pushing a whole table list up per mouse-up.
   //
-  // Consequences, accepted: leaving by any route that is not `leaveFor` DISCARDS what is held
-  // (see the page and document effects below), and the document is not dirty until the flush,
-  // so Save stays as it was until then.
+  // Consequence, accepted: leaving by any route that is not `leaveFor` DISCARDS a held move
+  // (see the page and document effects below), and the document is not dirty until the flush.
+  //
+  // A coloured-area edit is held here too, but it is NOT provisional in that sense: it reaches
+  // the document at the mutation (see `commitColouredAreas`), because the area decides how its
+  // region flattens whether or not the rebuild follows. What is held is the copy the editor
+  // renders from and the arming of the per-page rebuild.
   //
   // Both are PAGE-scoped, like the changed-bounds and dirty-colour sets they arm. Selecting
   // another table on the page therefore keeps them: that is a move within the work, not away
@@ -348,16 +354,45 @@ export default function PageTableEditor({
     selectedColouredIndex != null
       ? currentColouredAreas[selectedColouredIndex] ?? null
       : null;
-  // Take a coloured-area edit, held for this page until the layer is left.
+  // Take a coloured-area edit.
+  //
+  // The edit reaches the DOCUMENT here, at the mutation, rather than being held until the
+  // layer is left: a coloured area decides how its region is flattened, so an edit to one is a
+  // change to the document whether or not the grid-lines rebuild that leaving fires ever
+  // happens, and Save has to offer to keep it. It is still held in `pendingColouredAreas` as
+  // well, because the rebuild is armed per page and the editor renders from what is held.
+  //
+  // Cells the edit touched lose their confidence in the same commit. What the change covers is
+  // `changedColouredAreaRects` — for a moved or resized area that is the old rectangle and the
+  // new one, since the area stopped flattening what it used to and started flattening what it
+  // now does, and a cell under either can no longer be trusted.
+  //
+  // Any held border move is flushed along with it: both are page-scoped and provisional, and
+  // reporting the zeroed cells while still holding a move would push a table list the move had
+  // been edited out of.
   const commitColouredAreas = useCallback(
     (next) => {
+      const changedRects = changedColouredAreaRects(currentColouredAreas, next);
       setPendingColouredAreas({ page: displayPage, areas: next });
       // Every coloured-area mutation (add / delete / resize / foreground-background pick)
       // funnels through here, so recording the page is an exact dirty flag — no deep
       // comparison of the areas is needed.
       dirtyColourPagesRef.current.add(displayPage);
+      onColouredAreasChange(displayPage, next);
+      const zeroed = zeroConfidenceInRects(normalisedTables, displayPage, changedRects);
+      if (zeroed !== metadataTables) {
+        onChange(zeroed);
+        setPendingTables(null);
+      }
     },
-    [displayPage]
+    [
+      currentColouredAreas,
+      displayPage,
+      normalisedTables,
+      metadataTables,
+      onColouredAreasChange,
+      onChange,
+    ]
   );
 
   // Report a table list to the host. Every caller derives what it reports from

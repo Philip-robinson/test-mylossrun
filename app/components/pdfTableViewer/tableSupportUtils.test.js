@@ -4,6 +4,8 @@ import {
   buildCalcCellsRequestTable,
   buildCalcHint,
   buildRecalcHint,
+  changedColouredAreaRects,
+  zeroConfidenceInRects,
   cellSpanSignature,
   gridSquareAtFraction,
   gridSquareBounds,
@@ -1505,5 +1507,137 @@ describe('mapAllTables', () => {
 
   it('treats a null list as empty', () => {
     expect(mapAllTables(null, (x) => x)).toEqual([]);
+  });
+});
+
+describe('changedColouredAreaRects', () => {
+  const area = (left, top, extra = {}) => ({
+    left,
+    top,
+    width: 0.2,
+    height: 0.2,
+    foreground: '#111111',
+    background: '#eeeeee',
+    ...extra,
+  });
+  const rect = (left, top) => ({ left, top, width: 0.2, height: 0.2 });
+
+  it('reports nothing when the list is unchanged', () => {
+    expect(changedColouredAreaRects([area(0.1, 0.1)], [area(0.1, 0.1)])).toEqual([]);
+  });
+
+  it('reports the new rectangle of an added area', () => {
+    expect(changedColouredAreaRects([], [area(0.1, 0.1)])).toEqual([rect(0.1, 0.1)]);
+  });
+
+  it('reports the old rectangle of a deleted area', () => {
+    expect(changedColouredAreaRects([area(0.1, 0.1)], [])).toEqual([rect(0.1, 0.1)]);
+  });
+
+  it('reports BOTH rectangles when a boundary moves', () => {
+    const changed = changedColouredAreaRects([area(0.1, 0.1)], [area(0.4, 0.1)]);
+    expect(changed).toEqual([rect(0.1, 0.1), rect(0.4, 0.1)]);
+  });
+
+  it('reports the one rectangle when only the colours change', () => {
+    const changed = changedColouredAreaRects(
+      [area(0.1, 0.1)],
+      [area(0.1, 0.1, { foreground: '#222222' })]
+    );
+    expect(changed).toEqual([rect(0.1, 0.1)]);
+  });
+
+  it('is not confused by the index shift a deletion causes', () => {
+    // Deleting the FIRST of three moves the other two down an index. Matching by value sees
+    // one area gone and nothing else changed; matching by position would report all three.
+    const before = [area(0.1, 0.1), area(0.4, 0.1), area(0.7, 0.1)];
+    const after = [area(0.4, 0.1), area(0.7, 0.1)];
+    expect(changedColouredAreaRects(before, after)).toEqual([rect(0.1, 0.1)]);
+  });
+
+  it('treats null lists as empty', () => {
+    expect(changedColouredAreaRects(null, null)).toEqual([]);
+  });
+});
+
+describe('zeroConfidenceInRects', () => {
+  const cell = (row, column, left, top, confidence) => ({
+    row,
+    column,
+    rowSpan: 1,
+    columnSpan: 1,
+    bounds: { left, top, width: 0.1, height: 0.1 },
+    text: 'x',
+    confidence,
+    header: false,
+  });
+  const table = (id, page, cells, extra = {}) => ({
+    tableId: id,
+    pdfPage: page,
+    bounds: { left: 0, top: 0, width: 1, height: 1 },
+    cells,
+    ...extra,
+  });
+  const RECT = [{ left: 0.1, top: 0.1, width: 0.2, height: 0.2 }];
+
+  it('zeroes a cell that impinges on the rectangle', () => {
+    const out = zeroConfidenceInRects([table('a', 0, [cell(0, 0, 0.15, 0.15, 90)])], 0, RECT);
+    expect(out[0].cells[0].confidence).toBe(0);
+  });
+
+  it('leaves a cell clear of the rectangle alone, by reference', () => {
+    const clear = cell(0, 0, 0.6, 0.6, 90);
+    const list = [table('a', 0, [clear])];
+    expect(zeroConfidenceInRects(list, 0, RECT)).toBe(list);
+  });
+
+  it('counts a partial overlap as impinging', () => {
+    // The cell runs from 0.25 to 0.35; the rectangle ends at 0.3, so they share a sliver.
+    const out = zeroConfidenceInRects([table('a', 0, [cell(0, 0, 0.25, 0.25, 90)])], 0, RECT);
+    expect(out[0].cells[0].confidence).toBe(0);
+  });
+
+  it('does not count edge-touching as impinging', () => {
+    // The cell starts exactly where the rectangle ends. Binary-exact fractions throughout, so
+    // this is a true edge test: with 0.1/0.2 the sum drifts to 0.30000000000000004 and the
+    // strict inequality in `overlaps` reads a touch as a sliver of overlap.
+    const touching = cell(0, 0, 0.5, 0.25, 90);
+    const list = [table('a', 0, [touching])];
+    const exact = [{ left: 0.25, top: 0.25, width: 0.25, height: 0.25 }];
+    expect(zeroConfidenceInRects(list, 0, exact)).toBe(list);
+  });
+
+  it('leaves tables on another page alone', () => {
+    const list = [table('a', 1, [cell(0, 0, 0.15, 0.15, 90)])];
+    expect(zeroConfidenceInRects(list, 0, RECT)).toBe(list);
+  });
+
+  it('leaves a soft-deleted table alone', () => {
+    const list = [table('a', 0, [cell(0, 0, 0.15, 0.15, 90)], { deleted: true })];
+    expect(zeroConfidenceInRects(list, 0, RECT)).toBe(list);
+  });
+
+  it('reaches a table joined under another table grid', () => {
+    const joined = table('j', 0, [cell(0, 0, 0.15, 0.15, 90)]);
+    const out = zeroConfidenceInRects(
+      [table('r', 0, [], { next: { down: joined } })],
+      0,
+      RECT
+    );
+    expect(out[0].next.down.cells[0].confidence).toBe(0);
+  });
+
+  it('zeroes across every rectangle it is given', () => {
+    const cells = [cell(0, 0, 0.15, 0.15, 90), cell(0, 1, 0.45, 0.15, 90)];
+    const out = zeroConfidenceInRects([table('a', 0, cells)], 0, [
+      ...RECT,
+      { left: 0.4, top: 0.1, width: 0.2, height: 0.2 },
+    ]);
+    expect(out[0].cells.map((c) => c.confidence)).toEqual([0, 0]);
+  });
+
+  it('returns the list untouched when there is nothing to change', () => {
+    const list = [table('a', 0, [cell(0, 0, 0.15, 0.15, 90)])];
+    expect(zeroConfidenceInRects(list, 0, [])).toBe(list);
   });
 });

@@ -24,6 +24,7 @@ import {
   reconcileAxisEdit,
   replaceTableById,
   specialAreaEntries,
+  splitEntryAt,
   splitMap,
   splitMapBelow,
   tableSizeLabel,
@@ -1639,5 +1640,45 @@ describe('zeroConfidenceInRects', () => {
   it('returns the list untouched when there is nothing to change', () => {
     const list = [table('a', 0, [cell(0, 0, 0.15, 0.15, 90)])];
     expect(zeroConfidenceInRects(list, 0, [])).toBe(list);
+  });
+});
+
+describe('splitEntryAt', () => {
+  const arr = () => [
+    { value: 0.2, confidence: 90 },
+    { value: 0.6, confidence: 80 },
+    { value: 0.2, confidence: 70 },
+  ];
+
+  it('splits the entry at the given value, keeping the axis sum', () => {
+    const out = splitEntryAt(arr(), 1, 0.1);
+    expect(out.map((e) => e.value)).toEqual([0.2, 0.1, 0.5, 0.2]);
+    expect(out.reduce((t, e) => t + e.value, 0)).toBeCloseTo(1, 10);
+  });
+
+  it('copies the split entry non-value fields onto both parts', () => {
+    const out = splitEntryAt(arr(), 1, 0.1);
+    expect(out[1].confidence).toBe(80);
+    expect(out[2].confidence).toBe(80);
+  });
+
+  it('clamps a split at or beyond the near edge', () => {
+    expect(splitEntryAt(arr(), 1, -1).map((e) => e.value)).toEqual([
+      0.2, 0, 0.6, 0.2,
+    ]);
+  });
+
+  it('clamps a split at or beyond the far edge', () => {
+    expect(splitEntryAt(arr(), 1, 2).map((e) => e.value)).toEqual([
+      0.2, 0.6, 0, 0.2,
+    ]);
+  });
+
+  it('leaves the other entries untouched', () => {
+    const out = splitEntryAt(arr(), 0, 0.05);
+    expect(out.slice(2)).toEqual([
+      { value: 0.6, confidence: 80 },
+      { value: 0.2, confidence: 70 },
+    ]);
   });
 });

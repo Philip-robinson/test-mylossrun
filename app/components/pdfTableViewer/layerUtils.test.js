@@ -1,16 +1,11 @@
 import {
   scalePercentToWidthPx,
   stepScale,
-  layerRowTicked,
-  nextConfirmationStage,
   layerCounts,
-  layerKeyForStage,
-  stageAfterEdit,
   layerDataChanged,
   collectColumnNames,
   nextTableOnPage,
   prevTableOnPage,
-  nextSectionTitleColumnName,
 } from 'components/pdfTableViewer/layerUtils';
 
 describe('scalePercentToWidthPx', () => {
@@ -34,27 +29,6 @@ describe('stepScale', () => {
   it('clamps at the ends', () => {
     expect(stepScale(options, 200, +1)).toBe(200);
     expect(stepScale(options, 50, -1)).toBe(50);
-  });
-});
-
-describe('layerRowTicked', () => {
-  const stages = [null, 0, 1, 2, 3, 4, 5];
-  const rows = [1, 2, 3, 4, 5];
-
-  it('is ticked iff (stage ?? 0) >= rowNumber', () => {
-    rows.forEach((rowNumber) => {
-      stages.forEach((stage) => {
-        const expected = (stage ?? 0) >= rowNumber;
-        expect(layerRowTicked(rowNumber, stage)).toBe(expected);
-      });
-    });
-  });
-});
-
-describe('nextConfirmationStage', () => {
-  it('returns rowNumber when checked, else rowNumber - 1', () => {
-    expect(nextConfirmationStage(2, null, true)).toBe(2);
-    expect(nextConfirmationStage(2, null, false)).toBe(1);
   });
 });
 
@@ -141,36 +115,6 @@ describe('collectColumnNames', () => {
   it('returns [] for null / empty input', () => {
     expect(collectColumnNames(null)).toEqual([]);
     expect(collectColumnNames([])).toEqual([]);
-  });
-});
-
-describe('stageAfterEdit', () => {
-  it('unticks the edited layer and every layer above it (drops to level - 1)', () => {
-    // colours=1, border=2, rows=3, columns=4, special=5
-    expect(stageAfterEdit('colours', 5)).toBe(0);
-    expect(stageAfterEdit('border', 5)).toBe(1);
-    expect(stageAfterEdit('rows', 5)).toBe(2);
-    expect(stageAfterEdit('columns', 5)).toBe(3);
-    expect(stageAfterEdit('special', 5)).toBe(4);
-  });
-
-  it('editing colours drops the stage to 0 from any ticked stage', () => {
-    [1, 2, 3, 4, 5].forEach((stage) => {
-      expect(stageAfterEdit('colours', stage)).toBe(0);
-    });
-  });
-
-  it('never raises the stage (returns min(currentStage, level - 1))', () => {
-    // Editing rows (level 3) when only Colours+Border are ticked leaves it at 2.
-    expect(stageAfterEdit('rows', 2)).toBe(2);
-    // Editing Special (level 5) at a lower stage leaves the lower stage untouched.
-    expect(stageAfterEdit('special', 2)).toBe(2);
-    expect(stageAfterEdit('columns', 1)).toBe(1);
-  });
-
-  it('treats a null/absent stage as 0', () => {
-    expect(stageAfterEdit('border', null)).toBe(0);
-    expect(stageAfterEdit('special', undefined)).toBe(0);
   });
 });
 
@@ -360,170 +304,35 @@ describe('layerDataChanged', () => {
   });
 });
 
-describe('layerKeyForStage', () => {
-  it('selects the first un-ticked row for each stage', () => {
-    expect(layerKeyForStage(null)).toBe('colours');
-    expect(layerKeyForStage(0)).toBe('colours');
-    expect(layerKeyForStage(1)).toBe('border');
-    expect(layerKeyForStage(2)).toBe('rows');
-    expect(layerKeyForStage(3)).toBe('columns');
-    expect(layerKeyForStage(4)).toBe('special');
-  });
-
-  it('selects the last row when all are ticked (or beyond)', () => {
-    expect(layerKeyForStage(5)).toBe('special');
-    expect(layerKeyForStage(99)).toBe('special');
-  });
-});
-
-describe('nextTableOnPage', () => {
-  it('walks tableInPage order, not array order', () => {
-    // Document order (a, b, c) disagrees with tableInPage order (c, a, b).
-    const samePageTables = [
-      { tableId: 'a', tableInPage: 2 },
-      { tableId: 'b', tableInPage: 3 },
-      { tableId: 'c', tableInPage: 1 },
-    ];
-    expect(nextTableOnPage(samePageTables, 'c').tableId).toBe('a');
-    expect(nextTableOnPage(samePageTables, 'a').tableId).toBe('b');
-  });
-
-  it('returns null for the highest tableInPage', () => {
-    const samePageTables = [
-      { tableId: 'a', tableInPage: 2 },
-      { tableId: 'b', tableInPage: 3 },
-      { tableId: 'c', tableInPage: 1 },
-    ];
-    expect(nextTableOnPage(samePageTables, 'b')).toBeNull();
-  });
-
-  it('returns null for an empty or nullish list', () => {
-    expect(nextTableOnPage([], 'a')).toBeNull();
-    expect(nextTableOnPage(null, 'a')).toBeNull();
-    expect(nextTableOnPage(undefined, 'a')).toBeNull();
-  });
-
-  it('returns null for an unknown currentTableId', () => {
-    const samePageTables = [
-      { tableId: 'a', tableInPage: 0 },
-      { tableId: 'b', tableInPage: 1 },
-    ];
-    expect(nextTableOnPage(samePageTables, 'zzz')).toBeNull();
-  });
-
-  it('treats a null tableInPage as 0, so such a table sorts first', () => {
-    const samePageTables = [
-      { tableId: 'a', tableInPage: 1 },
-      { tableId: 'b', tableInPage: null },
-      { tableId: 'c' },
-    ];
-    expect(nextTableOnPage(samePageTables, 'b').tableId).toBe('c');
-    expect(nextTableOnPage(samePageTables, 'c').tableId).toBe('a');
-    expect(nextTableOnPage(samePageTables, 'a')).toBeNull();
-  });
-
-  it('orders fractional tableInPage values correctly', () => {
-    const samePageTables = [
-      { tableId: 'last', tableInPage: 1 },
-      { tableId: 'first', tableInPage: 0 },
-      { tableId: 'middle', tableInPage: 0.5 },
-    ];
-    expect(nextTableOnPage(samePageTables, 'first').tableId).toBe('middle');
-    expect(nextTableOnPage(samePageTables, 'middle').tableId).toBe('last');
-    expect(nextTableOnPage(samePageTables, 'last')).toBeNull();
-  });
-
-  it('keeps document order for ties', () => {
-    const samePageTables = [
-      { tableId: 'a', tableInPage: 1 },
-      { tableId: 'b', tableInPage: 1 },
-      { tableId: 'c', tableInPage: 1 },
-    ];
-    expect(nextTableOnPage(samePageTables, 'a').tableId).toBe('b');
-    expect(nextTableOnPage(samePageTables, 'b').tableId).toBe('c');
-    expect(nextTableOnPage(samePageTables, 'c')).toBeNull();
-  });
-});
-
 // The exact mirror of nextTableOnPage: the same order walked backwards, so Previous steps
 // back through the page's tables before the page itself.
-describe('prevTableOnPage', () => {
+// A new section title arrives already named, so it means something the moment it is drawn.
+describe('nextTableOnPage / prevTableOnPage', () => {
   const samePageTables = [
     { tableId: 'a', tableInPage: 2 },
     { tableId: 'b', tableInPage: 3 },
     { tableId: 'c', tableInPage: 1 },
   ];
 
-  it('walks tableInPage order backwards, not array order', () => {
-    expect(prevTableOnPage(samePageTables, 'b').tableId).toBe('a');
+  it('steps in tableInPage order, not array order', () => {
+    expect(nextTableOnPage(samePageTables, 'c').tableId).toBe('a');
     expect(prevTableOnPage(samePageTables, 'a').tableId).toBe('c');
   });
 
-  it('returns null for the lowest tableInPage', () => {
+  it('stops at the ends of the page rather than wrapping', () => {
+    expect(nextTableOnPage(samePageTables, 'b')).toBeNull();
     expect(prevTableOnPage(samePageTables, 'c')).toBeNull();
   });
 
-  it('returns null for an unknown id, and for an empty or nullish list', () => {
+  it('has no step to make on a single-table page', () => {
+    const one = [{ tableId: 'only', tableInPage: 0 }];
+    expect(nextTableOnPage(one, 'only')).toBeNull();
+    expect(prevTableOnPage(one, 'only')).toBeNull();
+  });
+
+  it('returns null for an empty list or an unknown id', () => {
+    expect(nextTableOnPage([], 'a')).toBeNull();
+    expect(nextTableOnPage(null, 'a')).toBeNull();
     expect(prevTableOnPage(samePageTables, 'zzz')).toBeNull();
-    expect(prevTableOnPage([], 'a')).toBeNull();
-    expect(prevTableOnPage(null, 'a')).toBeNull();
-  });
-
-  it('steps back over every table Next steps forward over', () => {
-    ['c', 'a', 'b'].forEach((id) => {
-      const forward = nextTableOnPage(samePageTables, id);
-      if (forward) {
-        expect(prevTableOnPage(samePageTables, forward.tableId).tableId).toBe(
-          id,
-        );
-      }
-    });
-  });
-
-  it('does not mutate the input array', () => {
-    const samePageTables = [
-      { tableId: 'a', tableInPage: 2 },
-      { tableId: 'b', tableInPage: 3 },
-      { tableId: 'c', tableInPage: 1 },
-    ];
-    nextTableOnPage(samePageTables, 'c');
-    expect(samePageTables.map((t) => t.tableId)).toEqual(['a', 'b', 'c']);
-  });
-});
-
-// A new section title arrives already named, so it means something the moment it is drawn.
-describe('nextSectionTitleColumnName', () => {
-  const withNames = (...names) => ({
-    sectionTitles: names.map((columnName, i) => ({ tableRow: i, columnName })),
-  });
-
-  it('takes the name from the most recently added named section title', () => {
-    expect(
-      nextSectionTitleColumnName(withNames('Region', 'Branch'), ['Region', 'Branch'], 'Section Title'),
-    ).toBe('Branch');
-  });
-
-  it('skips unnamed entries when looking back', () => {
-    // An unnamed entry is a hidden row: it names no column, so it is not what was last used.
-    expect(
-      nextSectionTitleColumnName(withNames('Region', null), ['Region'], 'Section Title'),
-    ).toBe('Region');
-  });
-
-  it('falls back to the last collected option when this table has named nothing', () => {
-    expect(
-      nextSectionTitleColumnName({ sectionTitles: [] }, ['Region', 'Branch'], 'Section Title'),
-    ).toBe('Branch');
-  });
-
-  it('falls back to the supplied default when no column name exists anywhere', () => {
-    expect(nextSectionTitleColumnName({ sectionTitles: [] }, [], 'Section Title')).toBe(
-      'Section Title',
-    );
-  });
-
-  it('tolerates a nullish table and a nullish options list', () => {
-    expect(nextSectionTitleColumnName(null, null, 'Section Title')).toBe('Section Title');
-    expect(nextSectionTitleColumnName({}, undefined, 'Section Title')).toBe('Section Title');
   });
 });

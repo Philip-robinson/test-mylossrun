@@ -7,6 +7,10 @@ const isValidColour = (value) => {
   return el.style.color !== '';
 };
 
+// The layer colours are CSS custom properties defined in globals.css, so what config
+// returns is the reference, not a colour jsdom can parse.
+const namesCustomProperty = (value) => /^var\(--[a-z-]+\)$/.test(value);
+
 describe('overlay colour / width config', () => {
   it('gridLineColour() returns the live blue', () => {
     expect(isValidColour(configModule.gridLineColour())).toBeTruthy();
@@ -48,29 +52,29 @@ describe('staged grid editor config', () => {
 });
 
 describe('layer colour config', () => {
-  it('layerBorderColour() returns blue', () => {
-    expect(isValidColour(configModule.layerBorderColour())).toBeTruthy();
-    expect(isValidColour(config.layerBorderColour())).toBeTruthy();
+  it('layerBorderColour() names the border custom property', () => {
+    expect(namesCustomProperty(configModule.layerBorderColour())).toBe(true);
+    expect(config.layerBorderColour()).toBe(configModule.layerBorderColour());
   });
 
-  it('layerRowsColour() returns orange', () => {
-    expect(isValidColour(configModule.layerRowsColour())).toBeTruthy();
-    expect(isValidColour(config.layerRowsColour())).toBeTruthy();
+  it('layerRowsColour() names the rows custom property', () => {
+    expect(namesCustomProperty(configModule.layerRowsColour())).toBe(true);
+    expect(config.layerRowsColour()).toBe(configModule.layerRowsColour());
   });
 
-  it('layerColumnsColour() returns purple', () => {
-    expect(isValidColour(configModule.layerColumnsColour())).toBeTruthy();
-    expect(isValidColour(config.layerColumnsColour())).toBeTruthy();
+  it('layerColumnsColour() names the columns custom property', () => {
+    expect(namesCustomProperty(configModule.layerColumnsColour())).toBe(true);
+    expect(config.layerColumnsColour()).toBe(configModule.layerColumnsColour());
   });
 
-  it('layerSpecialCellsColour() returns green', () => {
-    expect(isValidColour(configModule.layerSpecialCellsColour())).toBeTruthy();
-    expect(isValidColour(config.layerSpecialCellsColour())).toBeTruthy();
+  it('layerSpecialCellsColour() names the special custom property', () => {
+    expect(namesCustomProperty(configModule.layerSpecialCellsColour())).toBe(true);
+    expect(config.layerSpecialCellsColour()).toBe(configModule.layerSpecialCellsColour());
   });
 
-  it('layerColoursColour() returns brown', () => {
-    expect(isValidColour(configModule.layerColoursColour())).toBeTruthy();
-    expect(isValidColour(config.layerColoursColour())).toBeTruthy();
+  it('layerColoursColour() names the colours custom property', () => {
+    expect(namesCustomProperty(configModule.layerColoursColour())).toBe(true);
+    expect(config.layerColoursColour()).toBe(configModule.layerColoursColour());
   });
 
   it('selectedRowHighlight() returns the 50% orange', () => {

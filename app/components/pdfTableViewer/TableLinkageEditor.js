@@ -274,10 +274,9 @@ export default function TableLinkageEditor({
   // promoted to the ready stage. The save list is built first, then the root's
   // entry is replaced immutably.
   //
-  // Deliberately UNGATED: unlike the left column, which offers Mark Ready only once a table
-  // has reached confirmedTableStage(), this promotes the root from whatever stage it is on.
-  // Letting the user skip the Layers ladder and go straight to extraction is intended
-  // behaviour, not an oversight — do not add a stage check here.
+  // Deliberately UNGATED: this promotes the root from whatever stage it is on. Going
+  // straight to extraction is intended behaviour, not an oversight — do not add a stage
+  // check here.
   const handleReady = () => {
     onSave(
       savedTables().map((entry) =>

@@ -37,6 +37,21 @@
   --processing-strong: #bcc4bd;
   --error-pale: #fee2e2;
   --error-strong: #7f1d1d;
+  /* PDF table editor layer colours. Each layer has a main colour and a 10%-opacity
+     background colour derived from it with color-mix, so the pair cannot drift apart.
+     Referenced from config.js via var(--...) rather than repeating the values at the
+     point of use. --layer-grey is what a de-emphasised grid line is drawn in. */
+  --border-colour: blue;
+  --rows-colour: orange;
+  --columns-colour: purple;
+  --special-colour: green;
+  --colours-colour: brown;
+  --border-background-colour: color-mix(in srgb, var(--border-colour) 10%, transparent);
+  --rows-background-colour: color-mix(in srgb, var(--rows-colour) 10%, transparent);
+  --columns-background-colour: color-mix(in srgb, var(--columns-colour) 10%, transparent);
+  --special-background-colour: color-mix(in srgb, var(--special-colour) 10%, transparent);
+  --colours-background-colour: color-mix(in srgb, var(--colours-colour) 10%, transparent);
+  --layer-grey: #cacaca;
   /* Cell-edit dialog button colours — the reject (X) and accept (tick) fills for
      the review table's cell correction dialog. Referenced from config.js via
      var(--…) rather than repeating the values at the point of use. */

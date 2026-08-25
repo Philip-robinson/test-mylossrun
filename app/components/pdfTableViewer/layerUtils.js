@@ -1,5 +1,5 @@
-// Pure, dependency-free helpers for the staged grid editor's Layers panel and
-// zoom/scale selector. No React, no config import: any value that would come
+// Pure, dependency-free helpers for the staged grid editor's Layers panel, its
+// table-stepping and the zoom/scale selector. No React, no config import: any value that would come
 // from a named constant is accepted as an argument, so these stay trivially
 // unit-testable and free of import cycles.
 
@@ -21,36 +21,6 @@ export const stepScale = (options, current, direction) => {
   return options[target];
 };
 
-// Layers row K's checkbox is ticked iff confirmationStage >= K. A null/absent
-// stage is treated as 0.
-export const layerRowTicked = (rowNumber, confirmationStage) =>
-  (confirmationStage ?? 0) >= rowNumber;
-
-// Ticking row K sets stage K; unticking row K sets stage K - 1.
-export const nextConfirmationStage = (rowNumber, currentStage, checked) =>
-  (checked ? rowNumber : rowNumber - 1);
-
-// The Layers rows in display / stage order (row K = index K-1). Must match the
-// order rendered by LayersPanel.
-export const LAYER_KEY_ORDER = [
-  'colours',
-  'border',
-  'rows',
-  'columns',
-  'special',
-];
-
-// The 1-based level of a layer key (its LAYER_KEY_ORDER index + 1): colours=1,
-// border=2, rows=3, columns=4, special=5. Returns 0 for an unknown key.
-export const layerLevel = (layerKey) => LAYER_KEY_ORDER.indexOf(layerKey) + 1;
-
-// The confirmationStage after data owned by `editedLayerKey` is edited: editing a
-// layer unticks that layer and every layer above it, so the stage drops to level - 1.
-// It NEVER raises the stage (an edit to a not-yet-confirmed layer leaves the stage as
-// it is). A null/absent stage is treated as 0.
-export const stageAfterEdit = (editedLayerKey, currentStage) =>
-  Math.min(currentStage ?? 0, layerLevel(editedLayerKey) - 1);
-
 // A stable string projection of a table's merged cells: one
 // `row,column,rowSpan,columnSpan` entry per cell that spans more than a single
 // grid square, sorted so cell ordering within `cells` is irrelevant. `text` and
@@ -68,11 +38,9 @@ const cellSpanProjection = (table) =>
     .join('|');
 
 // True when the data OWNED by `layerKey` differs between the pre-edit (`before`) and
-// post-edit (`after`) table snapshots. Used to decide whether an edit reported through
-// the table-commit path should drop that table's confirmationStage. Colours are
-// page-scoped (not per-table), so this always returns false for the 'colours' key.
-// Merged cells are edited from the Special Areas layer, so a span change counts as a
-// Special-Areas edit.
+// post-edit (`after`) table snapshots. Read by the host to decide whether a special-area
+// edit needs the page's cells re-read. Colours are page-scoped (not per-table), so this
+// always returns false for the 'colours' key.
 export const layerDataChanged = (layerKey, before, after) => {
   if (!before || !after) return false;
   const j = (v) => JSON.stringify(v ?? null);
@@ -96,31 +64,6 @@ export const layerDataChanged = (layerKey, before, after) => {
   }
 };
 
-// The layer to auto-select for a table at `confirmationStage`: the first row
-// WITHOUT a tick (rows 1..stage are ticked), or the last row when all are ticked.
-// A null/absent stage is treated as 0 (nothing ticked -> the first row).
-export const layerKeyForStage = (confirmationStage) => {
-  const stage = Math.max(0, confirmationStage ?? 0);
-  const index = Math.min(stage, LAYER_KEY_ORDER.length - 1);
-  return LAYER_KEY_ORDER[index];
-};
-
-// The column name a newly drawn section title should start with, so it means something the
-// moment it appears rather than waiting to be named.
-//
-// The name most recently given to a section title of THIS table wins — `sectionTitles` is
-// appended to, so the last named entry is the latest, which is what follows the user down a
-// table. Unnamed entries are skipped: those are hidden rows, and they name no column. Failing
-// that the last of `options` (the names collected across the linked group) is taken, and
-// failing that `fallback`. `fallback` is passed in rather than read from config, this module
-// holding no config of its own.
-export const nextSectionTitleColumnName = (table, options, fallback) => {
-  const named = (table?.sectionTitles ?? []).filter((s) => s.columnName);
-  if (named.length) return named[named.length - 1].columnName;
-  if (options?.length) return options[options.length - 1];
-  return fallback;
-};
-
 // Counts shown against each Layers row. Border/Colours are page-scoped; Rows,
 // Columns and Special Cells are scoped to the selected table.
 export const layerCounts = ({
@@ -141,7 +84,7 @@ export const layerCounts = ({
 // One page's non-deleted tables in ascending tableInPage order. A null/absent tableInPage
 // sorts as 0 and ties keep document order, so the walk is deterministic whatever the
 // metadata carries.
-const orderedPageTables = (samePageTables) =>
+export const orderedPageTables = (samePageTables) =>
   (samePageTables ?? [])
     .map((table, index) => ({ table, index }))
     .sort(
@@ -153,6 +96,8 @@ const orderedPageTables = (samePageTables) =>
 
 // The table one step from `currentTableId` in that order — `direction` 1 for the next, -1
 // for the previous — or null at that end of the page (or when the id is not in the list).
+// The ends are where the page runs out: the caller moves to another page there, and the
+// document's own ends wrap, so nothing wraps within a page.
 const stepTableOnPage = (samePageTables, currentTableId, direction) => {
   const ordered = orderedPageTables(samePageTables);
   const position = ordered.findIndex(

@@ -4181,16 +4181,18 @@ describe('PDFEditTableStructure', () => {
   const entryFor = async (name) =>
     (await screen.findByText(name)).closest('[data-testid="table-entry"]');
 
-  test('a table below the confirmed stage shows no stage button', async () => {
+  // The gate depends on the ready mark alone now: nothing writes the confirmed stage, so a
+  // table below it is simply one that has not been marked ready yet.
+  test('a table below the ready stage shows Mark Ready', async () => {
     getMetadata.mockResolvedValue(stageFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
     const row = await entryFor('Below Stage');
-    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
+    expect(row.querySelector('[data-testid="mark-ready"]')).not.toBeNull();
     expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
   });
 
-  test('a table at the confirmed stage shows only Mark Ready', async () => {
+  test('a table at the old confirmed stage still shows only Mark Ready', async () => {
     getMetadata.mockResolvedValue(stageFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
@@ -7050,7 +7052,9 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('true');
   });
 
-  test('Next on the last page shows "End of list" and does not change the page', async () => {
+  // The document wraps at both ends: walking Next far enough comes back to the first page
+  // rather than stopping.
+  test('Next on the last page wraps round to the first', async () => {
     await renderNav({ pageCount: 2 });
     // Move to the last page (index 1).
     await userEvent.click(screen.getByTestId('mock-next'));
@@ -7059,21 +7063,23 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     );
 
     await userEvent.click(screen.getByTestId('mock-next'));
-    expect(toast).toHaveBeenCalledWith('End of list');
-    // Still on the last page.
-    expect(screen.getByTestId('mock-hasnext')).toHaveTextContent('false');
-    expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('true');
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('false')
+    );
+    expect(screen.getByTestId('mock-hasnext')).toHaveTextContent('true');
   });
 
-  test('Prev on the first page shows "Start of list" and does not change the page', async () => {
+  test('Prev on the first page wraps round to the last', async () => {
     await renderNav({ pageCount: 2 });
     await waitFor(() =>
       expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('false')
     );
 
     await userEvent.click(screen.getByTestId('mock-prev'));
-    expect(toast).toHaveBeenCalledWith('Start of list');
-    expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('false');
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-hasnext')).toHaveTextContent('false')
+    );
+    expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('true');
   });
 
   test('the selected table defaults to the first table on the page, updating on page change', async () => {

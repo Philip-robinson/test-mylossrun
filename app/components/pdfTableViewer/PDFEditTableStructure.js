@@ -530,21 +530,16 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     recalcPageTables(recalcPage, changedIds);
   };
 
-  // Layers-panel Previous/Next. At the ends of the document there is no page to move to, so
-  // surface a Start of list / End of list message and leave the page unchanged.
+  // Layers-panel Previous/Next reaching the end of a page. The document itself wraps: past
+  // the last page is the first, and before the first is the last, so walking Next long
+  // enough returns to where it started rather than stopping at a "End of list" message.
   const onPrevPage = () => {
-    if (selectedPage <= 0) {
-      toast('Start of list');
-      return;
-    }
-    recalcAndGoToPage(selectedPage - 1);
+    const last = Math.max(thumbnails.length - 1, 0);
+    recalcAndGoToPage(selectedPage <= 0 ? last : selectedPage - 1);
   };
   const onNextPage = () => {
-    if (selectedPage >= thumbnails.length - 1) {
-      toast('End of list');
-      return;
-    }
-    recalcAndGoToPage(selectedPage + 1);
+    const last = Math.max(thumbnails.length - 1, 0);
+    recalcAndGoToPage(selectedPage >= last ? 0 : selectedPage + 1);
   };
 
   // A right-column thumbnail click is a page change like Prev/Next, so it recalculates the
@@ -589,8 +584,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // persisted by the next Save — this button does NOT PUT anything itself. Every other
   // table, and every other field of this one, is preserved.
   //
-  // Nothing here guards against a later demotion: layerUtils.stageAfterEdit still drops the
-  // stage when a confirmed layer is edited, so editing a ready table un-readies it.
+  // Nothing demotes a ready table any more: no editor control writes confirmationStage, so
+  // a table stays ready until this button is used again or its link is undone.
   const handleMarkReady = (tableId) => {
     onEditTables(
       tables.map((t) =>
@@ -897,11 +892,11 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                     non-deleted rows: a deleted row offers no stage button and no Link
                     button, its click opening the Reinstate menu instead.
 
-                    The stage button follows the table's progress up the ladder, treating a
-                    missing or null confirmationStage as 0 as the rest of the editor does:
-                    nothing below confirmedTableStage(), "Mark Ready" exactly at it, and
-                    "Review" once readyTableStage() has been reached. The ready stage is
-                    tested FIRST because it is the higher of the two. */}
+                    The stage button depends on the ready mark alone: "Review" once
+                    readyTableStage() has been reached, and "Mark Ready" until then. It used
+                    to require confirmedTableStage() exactly, which the Layers ladder
+                    supplied; nothing writes that stage now, so keeping the test would leave
+                    every table with no way through to the extraction. */}
                 {!t.deleted && (
                   <Box
                     sx={{
@@ -924,7 +919,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                       >
                         {'Review'}
                       </Button>
-                    ) : (t.confirmationStage ?? 0) === confirmedTableStage() ? (
+                    ) : (
                       <Button
                         data-testid={'mark-ready'}
                         size={'small'}
@@ -937,7 +932,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                       >
                         {'Mark Ready'}
                       </Button>
-                    ) : null}
+                    )}
                     {/* Spacer so the Link button sits at the right-hand end of the row
                         whether or not a stage button is present. */}
                     <Box sx={{ flexGrow: 1 }} />
@@ -1077,6 +1072,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             metadata={{ pdfId, tables, pages, name: pdfName }}
             page={selectedPage}
             onChange={onEditTables}
+            onSave={handleSave}
             onHoverTable={setSelectedTableId}
             selectedTableId={selectedTableId}
             onSelectTable={setSelectedTableId}

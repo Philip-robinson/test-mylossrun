@@ -8,7 +8,8 @@ import StagedPageGridEditor from 'components/pdfTableViewer/StagedPageGridEditor
 import LayersPanel from 'components/pdfTableViewer/LayersPanel';
 import EditorScaleSelector from 'components/pdfTableViewer/EditorScaleSelector';
 import DimDocumentToggle from 'components/pdfTableViewer/DimDocumentToggle';
-import RawProcessedToggle from 'components/pdfTableViewer/RawProcessedToggle';
+import GridToolbar from 'components/pdfTableViewer/GridToolbar';
+import SpecialToolMenu from 'components/pdfTableViewer/SpecialToolMenu';
 import {
   metadataTablesToOverlay,
   normaliseTableBounds,
@@ -20,36 +21,29 @@ import {
   buildCalcHint,
   mergeFindGridLines,
   overlapArea,
-  mergedCellLimits,
   changedColouredAreaRects,
   zeroConfidenceInRects,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   scalePercentToWidthPx,
-  nextConfirmationStage,
-  layerKeyForStage,
-  stageAfterEdit,
-  layerDataChanged,
-  collectColumnNames,
-  nextSectionTitleColumnName,
   nextTableOnPage,
+  orderedPageTables,
   prevTableOnPage,
 } from 'components/pdfTableViewer/layerUtils';
 import {
-  hasSavedGrid,
-  isAmalgamated,
-} from 'components/pdfTableViewer/gridUtilities';
+  columnBounds,
+  rowBounds,
+} from 'components/pdfTableViewer/gridToolUtils';
+import { hasSavedGrid } from 'components/pdfTableViewer/gridUtilities';
 import { getImage, findGridLines } from 'services/images';
 import {
   resizeDebounceMs,
   stagedGridEditorEnabled,
-  entryConfirmationStage,
-  defaultSectionTitleColumnName,
   defaultScalePercent,
   scaleDebounceMs,
   baseImageWidthPx,
-  gridLockedLayerKeys,
-  defaultImageStyle,
+  processedImageStyle,
+  rawImageStyle,
 } from 'config';
 
 // A table with no expected-count hints typed yet: both fields blank.
@@ -111,6 +105,9 @@ export default function PageTableEditor({
   onNextPage = () => {},
   onColouredAreasChange = () => {},
   onExpectedCountsMapChange = () => {},
+  // Saves the document, resolving to whether the save reached the server. "Validate Tables"
+  // persists the boundary pass through it before the contents pass begins.
+  onSave = async () => true,
 }) {
   const staged = stagedGridEditorEnabled();
 
@@ -137,13 +134,28 @@ export default function PageTableEditor({
   const [debouncedScale, setDebouncedScale] = useState(defaultScalePercent());
   // "Dim Document" toggle (defaults on).
   const [dimDocument, setDimDocument] = useState(true);
-  // "Raw / Processed" toggle: which rendering of the page get-image returns. Unlike the
-  // dim toggle this is not a display trick — changing it refetches the page, because the
-  // processed rendering is produced by the backend from the page's coloured areas.
-  const [imageStyle, setImageStyle] = useState(defaultImageStyle());
-  // The active Layer row / staged editing mode: 'border' | 'rows' | 'columns' | 'special' |
-  // 'colours'.
-  const [selectedLayer, setSelectedLayer] = useState('colours');
+  // Which pass the editor is in. It starts on the boundary pass and, once "Validate
+  // Tables" has moved it on, stays on the contents pass: it survives moving between tables
+  // and between pages, and returns to 'border' only when the editor is remounted.
+  const [editorMode, setEditorMode] = useState('border');
+  // Which layers are drawn in gridMode. Editor state, never persisted and never reset by
+  // navigation — what a user chose to look at outlives the table they chose it on.
+  const [layerVisibility, setLayerVisibility] = useState({
+    rows: true,
+    columns: true,
+    special: true,
+    colours: true,
+  });
+  // The armed grid tool and, for the Special tool, its armed entry.
+  const [tool, setTool] = useState(null);
+  const [specialTool, setSpecialTool] = useState(null);
+  // The coloured-area tools' draft: which rows / columns / rectangle are picked but not yet
+  // written out, and the colours they will be written with.
+  const [pendingSelection, setPendingSelection] = useState(null);
+  const [colourDraft, setColourDraft] = useState({
+    foreground: null,
+    background: null,
+  });
   // The just-created, still-unconfirmed table's id (transient, not persisted), or null.
   const [createdTableId, setCreatedTableId] = useState(null);
   // The selected internal grid line reported up by StagedPageGridEditor, or null. Drives the
@@ -152,10 +164,6 @@ export default function PageTableEditor({
   // The selected section-title row's `tableRow` reported up by StagedPageGridEditor, or null.
   // Drives the Special Cells "Delete Section Title Row" button and the "Column name" combo.
   const [selectedSectionRow, setSelectedSectionRow] = useState(null);
-  // The selected merged cell's anchor ({ row, column }) reported up by StagedPageGridEditor,
-  // or null. Mirrored straight back down so the editor can highlight it, and used here to
-  // gate the Special Areas Extend/Reduce buttons.
-  const [selectedMergedCell, setSelectedMergedCell] = useState(null);
 
   // ---- Borders-layer expected-count hints (transient, not persisted) ------------------
   // tableId -> { expectedColumns, expectedRows }, both strings, blank being ''. Nothing on
@@ -167,8 +175,6 @@ export default function PageTableEditor({
   // ---- Colours-layer view state (transient, not persisted) ----------------------------
   // The selected coloured area's index on the displayed page, or null.
   const [selectedColouredIndex, setSelectedColouredIndex] = useState(null);
-  // True while an "Add" rubber-band gesture is armed in the Colours layer.
-  const [colourAddMode, setColourAddMode] = useState(false);
   // 'foreground' | 'background' while picking that channel's colour by dragging over the
   // page, else null.
   const [colourPickMode, setColourPickMode] = useState(null);
@@ -176,25 +182,35 @@ export default function PageTableEditor({
   // or null when no pick drag is in flight.
   const [colourPreview, setColourPreview] = useState(null);
 
+  // Which rendering of the page is displayed. The boundary pass is about the page as the
+  // PDF draws it, so it is always RAW; the contents pass follows the Colours eye, whose
+  // whole function is to switch between the processed rendering and the raw one. The legacy
+  // branch has neither pass and keeps the processed rendering it has always shown.
+  const imageStyle = !staged
+    ? processedImageStyle()
+    : editorMode === 'grid' && layerVisibility.colours !== false
+      ? processedImageStyle()
+      : rawImageStyle();
+
   const containerRef = useRef(null);
 
-  // The page numbers whose coloured areas have been edited since the page was loaded (or
-  // since the last SUCCESSFUL find-grid-lines call for that page). It gates the blocking
-  // Colours-tick probe: with nothing changed the back end would return the same grid lines,
-  // so the request is pure latency. A mutable Set held in a REF, not state, because nothing
-  // renders from it — marking a page dirty happens inside a coloured-area commit, and a
-  // re-render there would be wasted work.
-  const dirtyColourPagesRef = useRef(new Set());
+  // Which end of the next page's tables to select once that page's tables arrive: 'first'
+  // after a Next that ran off the end of a page, 'last' after a Previous that ran off the
+  // start, and null when the page changed by any other route (a thumbnail click, the list),
+  // which leaves the selection alone.
+  const pageEdgeSelectionRef = useRef(null);
+
+  // Page renderings already fetched, keyed by `${page}|${width}|${imageStyle}`. Cleared on a
+  // document change, since the keys name pages of the document that was open.
+  const imageCacheRef = useRef(new Map());
 
   // The tableIds whose `bounds` have changed since the page was loaded (or since the last
   // SUCCESSFUL Borders find-grid-lines call). Together with the expected-count hints it gates
   // the blocking Borders-tick call: with no moved border and no expected count the back end has
   // nothing new to work from, so the request would be pure latency.
   //
-  // Deliberately recorded for ANY reported bounds change, regardless of which layer was active
-  // — a wider and simpler test than layerDataChanged('border', …), which only holds while the
-  // Borders layer is selected. A bounds change made from any layer still invalidates the
-  // detected grid, so it must still arm the call.
+  // Deliberately recorded for ANY reported bounds change: a bounds change invalidates the
+  // detected grid whatever made it, so it must arm the call.
   //
   // A ref, not state: nothing renders from it, and it is written inside an edit commit where a
   // re-render would be wasted work.
@@ -204,24 +220,12 @@ export default function PageTableEditor({
   // invoke these). Stored in refs so re-registration never re-renders.
   const createActionRef = useRef(null);
   const deleteActionRef = useRef(null);
-  const rowsActionRef = useRef(null);
-  const columnsActionRef = useRef(null);
-  const specialActionRef = useRef(null);
 
   const registerCreate = useCallback((fn) => {
     createActionRef.current = fn;
   }, []);
   const registerDelete = useCallback((fn) => {
     deleteActionRef.current = fn;
-  }, []);
-  const registerRows = useCallback((fn) => {
-    rowsActionRef.current = fn;
-  }, []);
-  const registerColumns = useCallback((fn) => {
-    columnsActionRef.current = fn;
-  }, []);
-  const registerSpecial = useCallback((fn) => {
-    specialActionRef.current = fn;
   }, []);
 
   // Normalise each table's bounds to the I1/I2 invariant (bounds.width/height == axis
@@ -295,17 +299,6 @@ export default function PageTableEditor({
     [samePageTables, selectedTableId]
   );
 
-  // The Layers rows the selected table cannot be edited through. A table that is part of a
-  // grid of tables keeps the page colours, the outer border and the column arrangement its
-  // join was built from; the rest of the table is edited as normal. Membership is either
-  // end of the join: the root that holds the grid, or a table joined under one.
-  const lockedLayers = useMemo(() => {
-    const inGrid =
-      isAmalgamated(selectedTable) ||
-      linkedTables.some((t) => t.tableId === selectedTable?.tableId);
-    return inGrid ? gridLockedLayerKeys() : [];
-  }, [selectedTable, linkedTables]);
-
   // The selected table's expected-count hints, or blanks when it has no entry yet (and
   // when there is no selected table at all — the fields are hidden in that case).
   const selectedExpectedCounts =
@@ -342,7 +335,7 @@ export default function PageTableEditor({
 
   // The displayed page's coloured areas (never null): what is held provisionally for THIS page,
   // else the document's. Memoised so its reference is stable across renders (it feeds the
-  // runFindGridLines callback deps).
+  // runBorderGridLines callback deps).
   const currentColouredAreas = useMemo(
     () =>
       pendingColouredAreas?.page === displayPage
@@ -377,7 +370,6 @@ export default function PageTableEditor({
       // Every coloured-area mutation (add / delete / resize / foreground-background pick)
       // funnels through here, so recording the page is an exact dirty flag — no deep
       // comparison of the areas is needed.
-      dirtyColourPagesRef.current.add(displayPage);
       onColouredAreasChange(displayPage, next);
       const zeroed = zeroConfidenceInRects(normalisedTables, displayPage, changedRects);
       if (zeroed !== metadataTables) {
@@ -406,38 +398,23 @@ export default function PageTableEditor({
     [onChange]
   );
 
-  // Report everything held provisionally to the host, and stop holding it. `tables` is the list
-  // to report, defaulting to the one being worked from — a rebuild passes its merged list
-  // instead, so what it detected and what was held arrive as one write rather than two, the
-  // second undoing the first.
+  // Report everything held provisionally to the host, and stop holding it. `tables` is the
+  // list to report, defaulting to the one being worked from — a rebuild passes its merged
+  // list instead, so what it detected and what was held arrive as one write rather than two,
+  // the second undoing the first.
   //
-  // Called on the way out of a layer and nowhere else: this is the one place a border move or a
-  // coloured-area edit reaches the document.
+  // Called on the way out of a table, a page or the boundary pass, and nowhere else: this is
+  // the one place a border move or a coloured-area edit reaches the document.
   const flushPending = useCallback(
     (tables = normalisedTables) => {
-      const flushAreas = pendingColouredAreas?.page === displayPage;
-      if (flushAreas) {
+      if (pendingColouredAreas?.page === displayPage) {
         onColouredAreasChange(displayPage, pendingColouredAreas.areas);
       }
-      // Coloured areas are page-scoped, so editing them (add / delete / resize / colour pick)
-      // invalidates the Colours confirmation for EVERY table on the displayed page: unticking
-      // Colours (and therefore every layer above it) drops each such table's stage via
-      // stageAfterEdit('colours', …) — i.e. to 0. Untouched tables (a stage that would not
-      // change) keep their identity so no spurious edit is reported. Walked with
-      // mapAllTables so a table joined under another table's grid — off the top-level list,
-      // but on the page and carrying its own Colours tick — is dropped with the rest.
-      const next = mapAllTables(tables, (table) => {
-        if (!flushAreas || table.pdfPage !== displayPage || table.deleted) return table;
-        const nextStage = stageAfterEdit('colours', table.confirmationStage ?? 0);
-        return nextStage === (table.confirmationStage ?? 0)
-          ? table
-          : { ...table, confirmationStage: nextStage };
-      });
       if (
-        next.length !== metadataTables.length ||
-        next.some((table, index) => table !== metadataTables[index])
+        tables.length !== metadataTables.length ||
+        tables.some((table, index) => table !== metadataTables[index])
       ) {
-        onChange(next);
+        onChange(tables);
       }
       setPendingTables(null);
       setPendingColouredAreas(null);
@@ -452,19 +429,36 @@ export default function PageTableEditor({
     ]
   );
 
-  // A coloured-area selection / pending gesture has no meaning once the page or the active
-  // layer changes.
+  // A coloured-area selection or draft has no meaning once the page or the armed tool
+  // changes.
   useEffect(() => {
     setSelectedColouredIndex(null);
-    setColourAddMode(false);
     setColourPickMode(null);
     setColourPreview(null);
-  }, [displayPage, selectedLayer]);
+    setPendingSelection(null);
+  }, [displayPage, tool, specialTool]);
+
+  // Land on the end of the new page the step came from. Keyed on the page and on the
+  // tables it holds, because a page change and the arrival of its tables are not the same
+  // render.
+  useEffect(() => {
+    const edge = pageEdgeSelectionRef.current;
+    if (!edge) return;
+    const ordered = orderedPageTables(samePageTables.filter((t) => !t.deleted));
+    if (ordered.length === 0) return;
+    pageEdgeSelectionRef.current = null;
+    const table = edge === 'first' ? ordered[0] : ordered[ordered.length - 1];
+    onSelectTable(table.tableId);
+    setSelectedLine(null);
+    setSelectedSectionRow(null);
+    setSelectedColouredIndex(null);
+    setPendingSelection(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayPage, samePageTables]);
 
   // The expected-count hints are scoped to the page being worked on, so a newly displayed
-  // page always starts with both fields blank. Keyed on displayPage ONLY (not selectedLayer)
-  // so leaving the Borders layer and coming back keeps what was typed. The changed-bounds set
-  // is page-scoped in the same way: the Borders call it arms is made for one page at a time.
+  // page always starts with both fields blank. The changed-bounds set is page-scoped in the
+  // same way: the border call it arms is made for one page at a time.
   //
   // The provisional border moves and coloured areas go with them, DISCARDED rather than
   // reported: a page left through `leaveFor` has already flushed them, so anything still held
@@ -477,44 +471,17 @@ export default function PageTableEditor({
     setPendingColouredAreas(null);
   }, [displayPage]);
 
-  // This component is not remounted per document, so the hints — and the dirty-coloured-page
-  // and changed-bounds sets and anything held provisionally, which are keyed by page number /
-  // by the current document's tableIds and so only meaningful within one document — also have
-  // to be dropped when the displayed PDF changes.
+  // This component is not remounted per document, so the hints — and the changed-bounds set
+  // and anything held provisionally, which are keyed by page number / by the current
+  // document's tableIds and so only meaningful within one document — also have to be dropped
+  // when the displayed PDF changes.
   useEffect(() => {
     setExpectedCounts(NO_EXPECTED_COUNTS);
-    dirtyColourPagesRef.current = new Set();
     changedBoundsRef.current = new Set();
+    imageCacheRef.current = new Map();
     setPendingTables(null);
     setPendingColouredAreas(null);
   }, [metadata.pdfId]);
-
-  // On a page change, re-derive the selected layer from the (new) selected table's
-  // confirmation stage: select the first row without a tick, or the last row when all are
-  // ticked. Keyed on displayPage only so ticking a box on the current page (which advances
-  // the selection itself) is not overridden; selectedTable is read intentionally without
-  // being a dependency.
-  useEffect(() => {
-    setSelectedLayer(layerKeyForStage(selectedTable?.confirmationStage));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayPage]);
-
-  // Entering a table with nothing recorded against it opens on the layer
-  // entryConfirmationStage() derives — Special Areas. The rows are no longer a ladder to be
-  // climbed, so opening at the bottom of one would only mean working upwards through four rows
-  // that no longer gate anything. A table already part-way up opens where it left off.
-  //
-  // The stage itself is deliberately NOT written. It would be a document change made by merely
-  // looking at a table, which marks the document dirty and arms Save before the user has
-  // touched anything — and it would buy nothing visible, since with no ticks on the first four
-  // rows a stage of 0 and a stage of 4 render identically. The stage is still written by the
-  // first real edit, through `stageAfterEdit`.
-  useEffect(() => {
-    if (!selectedTable) return;
-    if ((selectedTable.confirmationStage ?? 0) !== 0) return;
-    setSelectedLayer(layerKeyForStage(entryConfirmationStage()));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTable?.tableId, selectedTable?.confirmationStage]);
 
   // Measure the container pixel width (legacy branch only). The backend derives render dpi
   // from a target pixel width, so fetches are driven off the measured layout rather than a
@@ -599,15 +566,28 @@ export default function PageTableEditor({
   // Staged branch: fetch the page image at a width derived from the (debounced) zoom
   // percentage. Same cancelled-flag race guard as the legacy branch; response tagged with
   // its page.
+  //
+  // Each rendering is remembered against the page and width it was fetched for, because
+  // get-image returns one rendering per call and the Colours eye switches between two: with
+  // the cache, flipping it after the first fetch of each costs nothing.
   useEffect(() => {
     if (!staged) return undefined;
     let cancelled = false;
-    setImageLoading(true);
     const width = scalePercentToWidthPx(debouncedScale, baseImageWidthPx());
+    const key = `${page}|${width}|${imageStyle}`;
+    const cached = imageCacheRef.current.get(key);
+    if (cached) {
+      setError(null);
+      setPageImage({ ...cached, page });
+      setImageLoading(false);
+      return undefined;
+    }
+    setImageLoading(true);
     (async () => {
       try {
         const data = await getImage(metadata.pdfId, page, width, imageStyle);
         if (cancelled) return;
+        imageCacheRef.current.set(key, data);
         setError(null);
         setPageImage({ ...data, page });
       } catch (err) {
@@ -675,89 +655,94 @@ export default function PageTableEditor({
         )[0] ?? null
       : null;
 
-  // The editor keeps no internal table state: every edit is reported straight up. A
-  // geometry / special edit reported here is owned by the active Layer (selectedLayer),
-  // so any table whose owned data actually changed has that layer — and everything above
-  // it — unticked via stageAfterEdit. A confirmationStage write is never itself treated as
-  // an edit (the editor never touches it), and a just-created table (no `before`) keeps
-  // its unconfirmed stage untouched.
-  // Walked with mapAllTables, and `before` looked up with findTableById, so a table joined
-  // under another table's grid is adjusted too: it sits in its root's `next` map rather than
-  // on the top-level list, and Rows and Special Areas are the only layers it can be edited
-  // through, so a top-level walk left exactly those two edits with a stale stage.
+  // The editor keeps no internal table state: every edit is reported straight up. Nothing
+  // here writes `confirmationStage` — no control does any more — so an edit carries whatever
+  // stage its table already had.
+  //
+  // Walked with mapAllTables so a table joined under another table's grid is seen too: it
+  // sits in its root's `next` map rather than on the top-level list.
   const handleEditTables = (nextTables) => {
-    const adjusted = mapAllTables(nextTables, (t) => {
+    mapAllTables(nextTables, (t) => {
       const before = findTableById(normalisedTables, t.tableId);
       // A table created in this session has no `before` to compare, so it is not recorded as
       // bounds-changed: it has no previous geometry to have moved away from, and the create
       // flow already runs its own grid-lines Calculate that detects its geometry. It becomes
-      // eligible for the Borders call only once its border is moved or a count is typed.
+      // eligible for the border call only once its border is moved or a count is typed.
       if (!before) return t;
-      // Recorded before the layer-ownership test below, and independently of it: the Borders
-      // grid-lines call cares only THAT the bounds moved, not which layer moved them.
       if (boundsDiffer(before.bounds, t.bounds)) {
         changedBoundsRef.current.add(t.tableId);
       }
-      if (!layerDataChanged(selectedLayer, before, t)) return t;
-      const nextStage = stageAfterEdit(
-        selectedLayer,
-        before.confirmationStage ?? 0
-      );
-      return nextStage === (before.confirmationStage ?? 0)
-        ? t
-        : { ...t, confirmationStage: nextStage };
+      return t;
     });
-    // An edit made on the Borders layer is a border move: held here until the layer is left,
-    // along with the stage drop it implies. Every other layer's edits go straight up as
-    // before — only the two layers whose work a rebuild rewrites are provisional.
-    if (selectedLayer === 'border') {
-      setPendingTables(adjusted);
+    // A border move is held until the boundary pass is left, along with the rebuild it arms;
+    // every edit made in the contents pass goes straight up. The legacy branch has neither
+    // pass and reports every edit immediately, as it always has.
+    if (staged && editorMode === 'border') {
+      setPendingTables(nextTables);
       return;
     }
-    commitTables(adjusted);
+    commitTables(nextTables);
   };
 
-  // ---- Special Cells section-title wiring ---------------------------------------------
+  // ---- Coloured-area submission --------------------------------------------------------
 
-  // The selected section-title row's DTO on the selected table (matched by tableRow), or
-  // null. Feeds the combo's bound value and the area-selected / row-selected gating.
-  const selectedSection =
-    selectedTable?.sectionTitles?.find(
-      (s) => s.tableRow === selectedSectionRow
-    ) ?? null;
+  // True once the coloured-area tools have something to write out. Coloured Table needs no
+  // selection: it colours the whole of the selected table.
+  const hasPendingSelection =
+    specialTool === 'colouredTable'
+      ? Boolean(selectedTable)
+      : Boolean(
+          pendingSelection &&
+            ((pendingSelection.rows ?? []).length ||
+              (pendingSelection.columns ?? []).length ||
+              pendingSelection.rect)
+        );
 
-  // Which of the four span edits the selected merged cell admits. `mergedCellLimits` is the
-  // single definition of the span arithmetic (all four false when nothing is selected, or when
-  // the selection matches no cell), so nothing about spans is decided here or in LayerOptions.
-  // With no selected table there is nothing for a stale selection to refer to, so it is passed
-  // as no selection at all.
-  const mergeLimits = useMemo(
-    () =>
-      mergedCellLimits(selectedTable ?? {}, selectedTable ? selectedMergedCell : null),
-    [selectedTable, selectedMergedCell]
-  );
-
-  // Every distinct section-title columnName across the whole PDF (the combo's option list).
-  const columnNameOptions = useMemo(
-    () => collectColumnNames(normalisedTables),
-    [normalisedTables]
-  );
-
-  // Write the combo's chosen/typed value to the selected section-title's columnName. Routed
-  // through handleEditTables so the 'special' edit drops the table's confirmationStage, and
-  // written with replaceTableById so the write lands whether the selected table is on the
-  // top-level list or joined under another table's grid.
-  const setSectionColumnName = (value) => {
-    if (!selectedTable || selectedSectionRow == null) return;
-    handleEditTables(
-      replaceTableById(normalisedTables, selectedTable.tableId, {
-        ...selectedTable,
-        sectionTitles: (selectedTable.sectionTitles ?? []).map((s) =>
-          s.tableRow === selectedSectionRow ? { ...s, columnName: value } : s
-        ),
-      })
-    );
-  };
+  // Write the pending selection out as coloured areas, one per picked row or column, one for
+  // a drawn rectangle, one for the whole table. An area already selected is recoloured in
+  // place instead. The selection is cleared and the tool stays armed, so several groups can
+  // be coloured in turn.
+  const handleColourSubmit = useCallback(() => {
+    const colours = {
+      foreground: colourDraft.foreground,
+      background: colourDraft.background,
+    };
+    if (selectedColouredIndex != null) {
+      commitColouredAreas(
+        currentColouredAreas.map((area, i) =>
+          i === selectedColouredIndex ? { ...area, ...colours } : area
+        )
+      );
+      return;
+    }
+    if (!selectedTable) return;
+    const added = [];
+    if (specialTool === 'colouredTable') {
+      added.push({ ...selectedTable.bounds, ...colours });
+    } else if (pendingSelection?.rect) {
+      added.push({ ...pendingSelection.rect, ...colours });
+    } else {
+      (pendingSelection?.rows ?? []).forEach((r) => {
+        const b = rowBounds(selectedTable, r);
+        if (b) added.push({ ...b, ...colours });
+      });
+      (pendingSelection?.columns ?? []).forEach((c) => {
+        const b = columnBounds(selectedTable, c);
+        if (b) added.push({ ...b, ...colours });
+      });
+    }
+    if (!added.length) return;
+    commitColouredAreas([...currentColouredAreas, ...added]);
+    setPendingSelection(null);
+  }, [
+    colourDraft,
+    selectedColouredIndex,
+    currentColouredAreas,
+    commitColouredAreas,
+    selectedTable,
+    specialTool,
+    pendingSelection,
+  ]);
 
   // ---- Staged Layers-panel wiring -----------------------------------------------------
 
@@ -827,60 +812,14 @@ export default function PageTableEditor({
     ]
   );
 
-  // Leaving the Colours layer having changed the page's coloured areas is a DELIBERATE
-  // blocking step: probe the back-end for this page's grid lines, wait for the response, merge
-  // the returned geometry into the metadata tables (matched by tableInPage; unmatched returned
-  // tables are added), and ONLY THEN run `after` — so nothing is drawn from geometry the
-  // coloured areas have already invalidated. `after` is whatever the move was: showing another
-  // layer, stepping to another table, or changing the page.
-  //
-  // The full-panel loadingOverlay is shown throughout (actionBusy). On failure the error is
-  // surfaced and `after` is NOT run, so the user stays where they were on Colours and the next
-  // attempt to leave tries again; actionBusy is always cleared.
-  const runFindGridLines = useCallback(
-    async (after) => {
-      setActionBusy(true);
-      try {
-        const response = await findGridLines(
-          metadata.pdfId,
-          displayPage,
-          currentColouredAreas
-        );
-        // Reported through the flush rather than as a bare commit: what was held provisionally
-        // travels with what the detector returned, as ONE write, and only now — a failed call
-        // reports nothing and leaves it held for the next attempt.
-        flushPending(
-          mergeFindGridLines(normalisedTables, displayPage, response?.tables ?? [])
-        );
-        // The page's grid lines now match its coloured areas, so it is clean again. Inside
-        // the try deliberately: a failed call must leave the page dirty so the next attempt
-        // to leave Colours retries rather than silently skipping.
-        dirtyColourPagesRef.current.delete(displayPage);
-        // Only now — after the geometry whatever comes next draws from has merged — move on.
-        after();
-      } catch (err) {
-        toast.error(err.message);
-      } finally {
-        setActionBusy(false);
-      }
-    },
-    [
-      metadata.pdfId,
-      displayPage,
-      currentColouredAreas,
-      normalisedTables,
-      flushPending,
-    ]
-  );
-
-  // Leaving the Borders layer having moved a border (or typed an expected count) is the second
+  // Leaving the boundary pass having moved a border (or typed an expected count) is a
   // DELIBERATE blocking step: re-detect the grid lines of those tables, wait for the response,
   // merge it, and ONLY THEN run `after` — so nothing is worked on before the re-detected
   // geometry has landed. Note this deliberately OVERWRITES a hand-positioned border with the
   // detector's snapped version for every hinted table: that is the purpose of the call.
   //
-  // On failure `after` is NOT run, so the user stays where they were on Borders and the next
-  // attempt to leave tries again.
+  // On failure `after` is NOT run, so the user stays where they were and the next attempt to
+  // leave tries again.
   //
   // KNOWN RISK, ACCEPTED: mergeFindGridLines' rules were written for a whole-page response. It
   // matches each returned table to the live same-page table with the largest bounds overlap,
@@ -934,57 +873,30 @@ export default function PageTableEditor({
     ]
   );
 
-  // The rebuild the layer being LEFT owes before anything else may happen, as a function
-  // taking what to do once its merge has landed — or null when nothing is owed and the move
-  // can simply be made.
+  // The rebuild the boundary pass owes before anything else may happen, as a function taking
+  // what to do once its merge has landed — or null when nothing is owed and the move can
+  // simply be made.
   //
-  // What makes a rebuild necessary is moving on from geometry the edits have invalidated, and
-  // that is just as true of leaving the table or the page as of picking another Layers row: all
-  // three go through here, so none of them can slip past the rebuild. `destination` is the
-  // layer that will be shown afterwards, or null when the move changes the page and so lands
-  // on a table whose stage this component cannot read yet.
-  const owedRebuild = useCallback(
-    (destination) => {
-      // Leaving Colours having changed the page's coloured areas: re-probe the whole page's
-      // grid lines. The dirty flag is page-scoped, not table-scoped, and that is correct —
-      // coloured areas belong to the page, and one probe refreshes every table on it.
-      if (
-        selectedLayer === 'colours' &&
-        dirtyColourPagesRef.current.has(displayPage)
-      ) {
-        return (after) => runFindGridLines(after);
-      }
-      // Leaving Borders for anywhere but Colours, having moved a border or typed an expected
-      // count: re-detect those tables. Going back to Colours is exempt, because a coloured-area
-      // change rebuilds the grid lines on the way out of Colours anyway — re-detecting here
-      // would only be overwritten by that. An unknown destination is read as "not Colours",
-      // which is the conservative answer: a rebuild owed is made rather than skipped.
-      //
-      // The changed-bounds set is read here rather than memoised: it is a ref, and the host may
-      // not have re-rendered this component since the edit that armed it.
-      if (selectedLayer === 'border' && destination !== 'colours') {
-        const hintTables = samePageTables.filter(
-          (t) =>
-            changedBoundsRef.current.has(t.tableId) ||
-            hasExpectedCount(expectedCounts[t.tableId])
-        );
-        if (hintTables.length > 0) {
-          return (after) => runBorderGridLines(after, hintTables);
-        }
-      }
-      return null;
-    },
-    [
-      selectedLayer,
-      displayPage,
-      samePageTables,
-      expectedCounts,
-      runFindGridLines,
-      runBorderGridLines,
-    ]
-  );
+  // Only the boundary pass owes one: a moved border or a typed expected count invalidates the
+  // detected grid, so it is re-detected before that pass is left, whether the move is to
+  // another table, to another page, or on to the contents pass. Coloured-area edits made in
+  // the contents pass deliberately do NOT re-probe — the user is validating those grids by
+  // hand, and a probe would overwrite the work in progress.
+  //
+  // The changed-bounds set is read here rather than memoised: it is a ref, and the host may
+  // not have re-rendered this component since the edit that armed it.
+  const owedRebuild = useCallback(() => {
+    if (editorMode !== 'border') return null;
+    const hintTables = samePageTables.filter(
+      (t) =>
+        changedBoundsRef.current.has(t.tableId) ||
+        hasExpectedCount(expectedCounts[t.tableId])
+    );
+    if (hintTables.length === 0) return null;
+    return (after) => runBorderGridLines(after, hintTables);
+  }, [editorMode, samePageTables, expectedCounts, runBorderGridLines]);
 
-  // Make a move, first settling whatever the layer being left owes: what is held provisionally
+  // Make a move, first settling whatever the pass being left owes: what is held provisionally
   // is reported to the host, and the rebuild it arms is made. Each rebuild is blocking and runs
   // the move itself once its merge has landed, so a failure leaves the user where they are with
   // the work still outstanding.
@@ -993,8 +905,8 @@ export default function PageTableEditor({
   // that geometry the detector is being asked about; the flush merely puts the same edits on the
   // document, so the merge it commits afterwards carries them either way.
   const leaveFor = useCallback(
-    (destination, move) => {
-      const rebuild = owedRebuild(destination);
+    (move) => {
+      const rebuild = owedRebuild();
       if (rebuild) {
         rebuild(move);
         return;
@@ -1013,92 +925,138 @@ export default function PageTableEditor({
     setCreatedTableId(null);
   }, [createdTableId, normalisedTables, commitTables, onSelectTable]);
 
-  // Layers-panel Next: step to the next table on this page first, and only move the page once
-  // the last table on it has been reached. Confirming Special Areas routes through here too
-  // (LayersPanel calls onNext for the last row), so ticking the final layer walks the page's
-  // tables in turn and then leaves the page.
+  // Step to `table`, dropping the selections that belonged to the table being left. The
+  // armed tool, the layer flags and the mode all outlive the step: they are how the user
+  // chose to work, not something about one table.
   //
-  // The step also re-derives the per-table view state, which is why this lives here and not in
-  // the host: the host owns neither the selected layer nor the line/section/merged selections.
-  //
-  // Leaving the table is leaving the layer as far as the rebuilds are concerned, so a step owed
-  // one waits for it — the moved border is re-detected before the table it belongs to is left,
-  // not left for whenever the user happens to leave Borders again. A step to the page carries
-  // the same debt: the changed-bounds set and the expected counts are dropped on a page change,
-  // so a rebuild not made on the way out would never be made at all.
-  // Step to `table`, re-deriving the per-table view state: its own layer, and none of the
-  // line / section / merged selections, which belonged to the table being left.
+  // Leaving a table is leaving the boundary pass as far as the rebuild is concerned, so a
+  // step that owes one waits for it: the moved border is re-detected before the table it
+  // belongs to is left, rather than being left for whenever the pass happens to end.
   const stepToTable = useCallback(
     (table) => {
-      leaveFor(layerKeyForStage(table.confirmationStage), () => {
+      leaveFor(() => {
         onSelectTable(table.tableId);
-        setSelectedLayer(layerKeyForStage(table.confirmationStage));
         setSelectedLine(null);
         setSelectedSectionRow(null);
-        setSelectedMergedCell(null);
+        setSelectedColouredIndex(null);
+        setPendingSelection(null);
       });
     },
     [onSelectTable, leaveFor]
   );
 
+  // Next and Previous walk the whole document: the next table on this page, else the next
+  // page, and past the last page the first one — the host wraps there, so walking far enough
+  // returns to the start rather than stopping. Previous is the exact reverse.
+  //
+  // Which table to land on after a page change is decided here and consumed once the new
+  // page's tables have arrived: Next lands on the first table of the page it moved to,
+  // Previous on the last. A ref, not state, because nothing renders from it.
+  // A one-page document has no page to move to, so the document's wrap is this page's wrap
+  // and the step is made here: the page prop would never change, and the landing selection
+  // below waits on exactly that change.
+  const onlyPage = !hasPrevPage && !hasNextPage;
+  const pageEndTable = useCallback(
+    (end) => {
+      const ordered = orderedPageTables(
+        samePageTables.filter((t) => !t.deleted)
+      );
+      if (ordered.length === 0) return null;
+      return end === 'first' ? ordered[0] : ordered[ordered.length - 1];
+    },
+    [samePageTables]
+  );
+
   const handleNext = useCallback(() => {
     const next = nextTableOnPage(samePageTables, selectedTable?.tableId);
-    if (!next) {
-      leaveFor(null, onNextPage);
+    if (next) {
+      stepToTable(next);
       return;
     }
-    stepToTable(next);
-  }, [samePageTables, selectedTable, onNextPage, leaveFor, stepToTable]);
+    if (onlyPage) {
+      const first = pageEndTable('first');
+      if (first) stepToTable(first);
+      return;
+    }
+    pageEdgeSelectionRef.current = 'first';
+    leaveFor(onNextPage);
+  }, [
+    samePageTables,
+    selectedTable,
+    stepToTable,
+    leaveFor,
+    onNextPage,
+    onlyPage,
+    pageEndTable,
+  ]);
 
-  // Layers-panel Previous: the mirror of Next — back through the page's tables first, and
-  // only the page itself once the first of them is reached. Same debt either way: the page
-  // it leaves takes its changed-bounds set and expected counts with it.
   const handlePrev = useCallback(() => {
     const prev = prevTableOnPage(samePageTables, selectedTable?.tableId);
-    if (!prev) {
-      leaveFor(null, onPrevPage);
+    if (prev) {
+      stepToTable(prev);
       return;
     }
-    stepToTable(prev);
-  }, [samePageTables, selectedTable, onPrevPage, leaveFor, stepToTable]);
+    if (onlyPage) {
+      const last = pageEndTable('last');
+      if (last) stepToTable(last);
+      return;
+    }
+    pageEdgeSelectionRef.current = 'last';
+    leaveFor(onPrevPage);
+  }, [
+    samePageTables,
+    selectedTable,
+    stepToTable,
+    leaveFor,
+    onPrevPage,
+    onlyPage,
+    pageEndTable,
+  ]);
 
-  // Select a Layers row, rebuilding first when the layer being LEFT has outstanding work.
-  //
-  // The rebuilds used to hang off the Colours and Borders ticks. They are transitions now,
-  // which is where they belong: what makes a rebuild necessary is moving on to a layer that
-  // would be drawn from geometry the edits have invalidated, not the act of confirming a row.
-  const handleSelectLayer = useCallback(
-    (nextLayer) => {
-      if (nextLayer === selectedLayer) return;
-      leaveFor(nextLayer, () => setSelectedLayer(nextLayer));
-    },
-    [selectedLayer, leaveFor]
-  );
+  // Toggle one layer's eye. Nothing else follows from it: a flag decides what is drawn and
+  // never what can be edited.
+  const handleToggleLayer = useCallback((key) => {
+    setLayerVisibility((current) => ({ ...current, [key]: !current[key] }));
+  }, []);
 
-  // Toggle a Layer row's tick. Special Areas is the only tickable row, and its tick confirms
-  // the table: the row/checked pair maps through nextConfirmationStage and the new stage is
-  // committed. The blocking grid-lines rebuilds that Colours and Borders ticks used to fire are
-  // handled by `handleSelectLayer` now, and a created table's grid detection by the Calculate
-  // button in the Borders options.
-  const handleToggleTick = useCallback(
-    (rowNumber, checked) => {
-      if (!selectedTable) return;
-      const nextStage = nextConfirmationStage(
-        rowNumber,
-        selectedTable.confirmationStage ?? 0,
-        checked
-      );
-      // replaceTableById, not a top-level map: the tick must land on a table joined under
-      // another table's grid too, and that table is held in its root's `next` map.
-      commitTables(
-        replaceTableById(normalisedTables, selectedTable.tableId, {
-          ...selectedTable,
-          confirmationStage: nextStage,
-        })
-      );
-    },
-    [selectedTable, commitTables, normalisedTables]
-  );
+  // Arm a grid tool, or disarm it when it is already armed. Only one is ever armed, and
+  // disarming the Special tool takes its armed entry with it.
+  const handleSelectTool = useCallback((key) => {
+    setTool((current) => {
+      const next = current === key ? null : key;
+      if (next !== 'special') setSpecialTool(null);
+      return next;
+    });
+  }, []);
+
+  // Arm one of the Special tool's entries, or disarm it when it is already armed. Whatever
+  // the previous entry was accumulating is dropped: a half-finished coloured-row selection
+  // must not be submittable from another entry.
+  const handleSelectSpecialTool = useCallback((key) => {
+    setSpecialTool((current) => (current === key ? null : key));
+    setPendingSelection(null);
+    setSelectedColouredIndex(null);
+    setColourPickMode(null);
+    setColourDraft({ foreground: null, background: null });
+  }, []);
+
+  // End the boundary pass: settle what it owes, save the document, and only then move on to
+  // the contents pass at the page's first non-deleted table. A failed save abandons the
+  // switch — the toast the host raised is the user's feedback, the document stays dirty, and
+  // the user stays in borderMode to retry.
+  const handleValidateTables = useCallback(() => {
+    leaveFor(async () => {
+      const saved = await onSave();
+      if (!saved) return;
+      setEditorMode('grid');
+      setTool(null);
+      setSpecialTool(null);
+      const first = orderedPageTables(
+        samePageTables.filter((t) => !t.deleted)
+      )[0];
+      if (first) onSelectTable(first.tableId);
+    });
+  }, [leaveFor, onSave, samePageTables, onSelectTable]);
 
   // Loading overlay shown while the page image loads or a Calculate/Recalculate poll runs.
   const loadingOverlay = !error && (imageLoading || actionBusy) && (
@@ -1162,12 +1120,20 @@ export default function PageTableEditor({
               ? metadata.name
               : `${metadata.name} — Page ${pageImage.page + 1}`}
           </Box>
-          <RawProcessedToggle value={imageStyle} onChange={setImageStyle} />
           <DimDocumentToggle on={dimDocument} onChange={setDimDocument} />
           <EditorScaleSelector percent={scalePercent} onChange={setScalePercent} />
         </Box>
 
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          {editorMode === 'grid' ? (
+            <GridToolbar tool={tool} onSelectTool={handleSelectTool} />
+          ) : null}
+          {editorMode === 'grid' && tool === 'special' ? (
+            <SpecialToolMenu
+              specialTool={specialTool}
+              onSelectSpecialTool={handleSelectSpecialTool}
+            />
+          ) : null}
           <Box
             sx={{
               flex: 1,
@@ -1189,8 +1155,10 @@ export default function PageTableEditor({
                   page={pageImage.page}
                   metadataTables={normalisedTables}
                   selectedTableId={selectedTableId}
-                  mode={selectedLayer}
-                  locked={lockedLayers.includes(selectedLayer)}
+                  editorMode={editorMode}
+                  tool={tool}
+                  specialTool={specialTool}
+                  layerVisibility={layerVisibility}
                   dim={dimDocument}
                   onEditTables={handleEditTables}
                   onSelectTable={onSelectTable}
@@ -1198,33 +1166,26 @@ export default function PageTableEditor({
                   pdfId={metadata.pdfId}
                   onRequestCreate={registerCreate}
                   onRequestDelete={registerDelete}
-                  onRequestRowsAction={registerRows}
-                  onRequestColumnsAction={registerColumns}
-                  onRequestSpecialAction={registerSpecial}
                   onSelectedLineChange={setSelectedLine}
                   onSelectedSectionRowChange={setSelectedSectionRow}
-                  // The name a newly drawn section title starts with. Decided here because it
-                  // reads the collected column names, and passed down rather than derived
-                  // there so the editor holds no config of its own.
-                  newSectionTitleColumnName={nextSectionTitleColumnName(
-                    selectedTable,
-                    columnNameOptions,
-                    defaultSectionTitleColumnName()
-                  )}
-                  selectedMergedCell={selectedMergedCell}
-                  onSelectedMergedCellChange={setSelectedMergedCell}
                   colouredAreas={currentColouredAreas}
                   selectedColouredIndex={selectedColouredIndex}
                   onSelectColouredArea={setSelectedColouredIndex}
                   onColouredAreasChange={commitColouredAreas}
-                  colourAddMode={colourAddMode}
-                  onColourAdded={() => setColourAddMode(false)}
+                  pendingSelection={pendingSelection}
+                  onPendingSelectionChange={setPendingSelection}
+                  onColourSeed={setColourDraft}
                   colourPickMode={colourPickMode}
                   onClearColourPick={() => setColourPickMode(null)}
                   onColourPreview={setColourPreview}
                   onColourPicked={(hex) => {
                     setColourPreview(null);
-                    if (selectedColouredIndex == null || !colourPickMode) return;
+                    if (!colourPickMode) return;
+                    // A picked colour lands in the draft, and — when the selection is an
+                    // area already saved — on that area straight away, so what is on the
+                    // page and what the swatch shows never disagree.
+                    setColourDraft((draft) => ({ ...draft, [colourPickMode]: hex }));
+                    if (selectedColouredIndex == null) return;
                     commitColouredAreas(
                       currentColouredAreas.map((area, i) =>
                         i === selectedColouredIndex
@@ -1239,21 +1200,18 @@ export default function PageTableEditor({
           </Box>
 
           <LayersPanel
+            editorMode={editorMode}
+            layerVisibility={layerVisibility}
+            onToggleLayer={handleToggleLayer}
+            tool={tool}
+            specialTool={specialTool}
             selectedTable={selectedTable}
             samePageTables={samePageTables}
             pageColouredAreas={pageColouredAreas}
-            selectedLayer={selectedLayer}
-            confirmationStage={selectedTable?.confirmationStage ?? null}
-            hasPrevPage={hasPrevPage}
-            hasNextPage={hasNextPage}
-            onSelectLayer={handleSelectLayer}
-            onToggleTick={handleToggleTick}
             onPrev={handlePrev}
             onNext={handleNext}
-            hasSelectedLine={Boolean(selectedLine)}
-            hasInternalLines={(selectedTable?.rowHeights?.length ?? 0) > 1}
+            onValidateTables={handleValidateTables}
             isCreatedUnconfirmed={isCreatedUnconfirmed}
-            lockedLayers={lockedLayers}
             expectedColumns={selectedExpectedCounts.expectedColumns}
             expectedRows={selectedExpectedCounts.expectedRows}
             onExpectedCountsChange={handleExpectedCountsChange}
@@ -1265,64 +1223,37 @@ export default function PageTableEditor({
               selectedTable && detectCreatedTableGrid(selectedTable)
             }
             onCancelCreated={cancelCreated}
-            onAddAbove={() => rowsActionRef.current?.('addAbove')}
-            onAddBelow={() => rowsActionRef.current?.('addBelow')}
-            onAddRow={() => rowsActionRef.current?.('addRow')}
-            onAddLeft={() => columnsActionRef.current?.('addLeft')}
-            onAddRight={() => columnsActionRef.current?.('addRight')}
-            onDeleteLine={() => {
-              if (selectedLayer === 'rows') rowsActionRef.current?.('deleteLine');
-              else if (selectedLayer === 'columns')
-                columnsActionRef.current?.('deleteLine');
+            onDeleteHeader={() => {
+              if (!selectedTable) return;
+              commitTables(
+                replaceTableById(normalisedTables, selectedTable.tableId, {
+                  ...selectedTable,
+                  headerCount: 0,
+                })
+              );
             }}
-            onSetTitle={() => specialActionRef.current?.('setTitle')}
-            onDeleteTitle={() => specialActionRef.current?.('deleteTitle')}
-            onRemoveHeader={() => specialActionRef.current?.('removeHeader')}
-            onAddHeader={() => specialActionRef.current?.('addHeader')}
-            onAddSubTitleRow={() =>
-              specialActionRef.current?.('addSubTitleRow')
-            }
-            onDeleteSubTitleRow={() =>
-              specialActionRef.current?.('deleteSubTitleRow')
-            }
-            onAddHiddenRow={() => specialActionRef.current?.('addHiddenRow')}
-            // A hidden row IS a section-title row, so it is deleted by the same action: both
-            // buttons remove whichever section-title row is selected.
-            onDeleteHiddenRow={() =>
-              specialActionRef.current?.('deleteSubTitleRow')
-            }
-            headerCount={selectedTable?.headerCount ?? 0}
-            hasSectionRowSelected={selectedSectionRow != null}
-            sectionAreaSelected={selectedSection?.data != null}
-            columnName={selectedSection?.columnName ?? null}
-            columnNameOptions={columnNameOptions}
-            onColumnNameChange={setSectionColumnName}
-            onMergeCell={() => specialActionRef.current?.('mergeCell')}
-            onExtendColumn={() => specialActionRef.current?.('extendColumn')}
-            onReduceColumn={() => specialActionRef.current?.('reduceColumn')}
-            onExtendRow={() => specialActionRef.current?.('extendRow')}
-            onReduceRow={() => specialActionRef.current?.('reduceRow')}
-            canExtendColumn={mergeLimits.canExtendColumn}
-            canReduceColumn={mergeLimits.canReduceColumn}
-            canExtendRow={mergeLimits.canExtendRow}
-            canReduceRow={mergeLimits.canReduceRow}
-            colouredSelected={selectedColouredIndex != null}
+            hasPendingSelection={hasPendingSelection}
+            hasSavedAreaSelected={selectedColouredIndex != null}
             foregroundColour={
               colourPickMode === 'foreground' && colourPreview != null
                 ? colourPreview
-                : selectedColouredArea?.foreground
+                : selectedColouredArea?.foreground ?? colourDraft.foreground
             }
             backgroundColour={
               colourPickMode === 'background' && colourPreview != null
                 ? colourPreview
-                : selectedColouredArea?.background
+                : selectedColouredArea?.background ?? colourDraft.background
             }
             colourPickMode={colourPickMode}
-            onColourAdd={() => {
-              setColourAddMode(true);
-              setColourPickMode(null);
-            }}
+            onToggleForegroundPick={() =>
+              setColourPickMode((m) => (m === 'foreground' ? null : 'foreground'))
+            }
+            onToggleBackgroundPick={() =>
+              setColourPickMode((m) => (m === 'background' ? null : 'background'))
+            }
+            onColourSubmit={handleColourSubmit}
             onColourDelete={() => {
+              if (selectedColouredIndex == null) return;
               commitColouredAreas(
                 currentColouredAreas.filter(
                   (_, i) => i !== selectedColouredIndex
@@ -1331,12 +1262,6 @@ export default function PageTableEditor({
               setSelectedColouredIndex(null);
               setColourPickMode(null);
             }}
-            onToggleForegroundPick={() =>
-              setColourPickMode((m) => (m === 'foreground' ? null : 'foreground'))
-            }
-            onToggleBackgroundPick={() =>
-              setColourPickMode((m) => (m === 'background' ? null : 'background'))
-            }
           />
         </Box>
         {loadingOverlay}

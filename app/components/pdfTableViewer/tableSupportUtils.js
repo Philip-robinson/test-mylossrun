@@ -1591,6 +1591,23 @@ export function splitEntry(arr, i) {
   return [...arr.slice(0, i), half, { ...half }, ...arr.slice(i + 1)];
 }
 
+// Split one PDFValue array's entry at index i into two entries whose values are `firstValue`
+// and the remainder, each copying the original entry's non-value fields. Used where the
+// split point is chosen by the user rather than taken as the middle — a grid line added
+// under the pointer. The two parts occupy the old cell's span, so the axis SUM (hence
+// bounds) is unchanged. `firstValue` is clamped into the entry, so a split at or beyond
+// either edge is impossible.
+export function splitEntryAt(arr, i, firstValue) {
+  const total = arr[i].value;
+  const first = Math.min(Math.max(firstValue, 0), total);
+  return [
+    ...arr.slice(0, i),
+    { ...arr[i], value: first },
+    { ...arr[i], value: total - first },
+    ...arr.slice(i + 1),
+  ];
+}
+
 // Merge divider k (1-based): fold cell k's value into the near cell k-1 and drop cell k.
 // The axis SUM is unchanged (bounds preserved). The surviving entry keeps cell k-1's
 // non-value fields. Returns a NEW array (immutable).

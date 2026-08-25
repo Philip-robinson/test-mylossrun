@@ -148,42 +148,11 @@ export function stagedGridEditorEnabled() {
   return true;
 }
 
-// Confirmation stage a table is moved to on entering the editor with nothing recorded
-// against it. The Layers rows are no longer gates to be climbed one at a time, so a table
-// starting from scratch opens on Special Areas: stage 4 puts the four earlier layers behind
-// it and leaves Special Areas as the one row still to confirm.
-export function entryConfirmationStage() {
-  return 4;
-}
-
-// Width of the slot each Layers row reserves for its tick, whether or not it has one. Only
-// Special Areas is confirmed by a tick, and without a reserved slot the other four rows'
-// counts would sit a checkbox's width further right than its own.
+// Width of the slot each Layers row reserves for its eye, whether or not it has one.
+// Borders has none, and without a reserved slot its count would sit an icon's width
+// further right than every other row's.
 export function layerTickSlotWidthPx() {
   return 42;
-}
-
-// The Layers rows whose editing is locked while the selected table is amalgamated into a
-// grid of tables. The grid fixes the table's page colours, its outer border and its column
-// arrangement — the joined tables share them — so those three are display-only; Rows and
-// Special Areas remain editable.
-export function gridLockedLayerKeys() {
-  return ['colours', 'border', 'columns'];
-}
-
-// Column name given to the first section title in a document that has none yet. A section
-// title supplies a value for a named column, so a name is needed before it means anything;
-// this is the one offered when there is nothing to copy from.
-export function defaultSectionTitleColumnName() {
-  return 'Section Title';
-}
-
-// How many of a row's leading grid squares a new section title's data area covers. Section
-// titles are written across the left of their row in these documents, so the area is drawn
-// there automatically rather than left to the user. Clamped to the columns the table has, so a
-// single-column table gets one square.
-export function sectionTitleAreaColumnSpan() {
-  return 2;
 }
 
 // Default zoom/scale (percent) for the staged editor's scale selector.
@@ -222,30 +191,72 @@ export function processedImageStyle() {
   return 'PROCESSED';
 }
 
-// The rendering the editor opens on: the page as the extraction reads it.
-export function defaultImageStyle() {
-  return processedImageStyle();
-}
-
-// Layer row colours (Border, Rows, Columns, Special Cells, Colours).
+// Layer row colours (Border, Rows, Columns, Special Cells, Colours), and the
+// 10%-opacity background colour each layer's row takes when its eye is off. Both
+// live in globals.css; these name them.
 export function layerBorderColour() {
-  return 'blue';
+  return 'var(--border-colour)';
 }
 
 export function layerRowsColour() {
-  return 'orange';
+  return 'var(--rows-colour)';
 }
 
 export function layerColumnsColour() {
-  return 'purple';
+  return 'var(--columns-colour)';
 }
 
 export function layerSpecialCellsColour() {
-  return 'green';
+  return 'var(--special-colour)';
 }
 
 export function layerColoursColour() {
-  return 'brown';
+  return 'var(--colours-colour)';
+}
+
+export function layerBorderBackgroundColour() {
+  return 'var(--border-background-colour)';
+}
+
+export function layerRowsBackgroundColour() {
+  return 'var(--rows-background-colour)';
+}
+
+export function layerColumnsBackgroundColour() {
+  return 'var(--columns-background-colour)';
+}
+
+export function layerSpecialCellsBackgroundColour() {
+  return 'var(--special-background-colour)';
+}
+
+export function layerColoursBackgroundColour() {
+  return 'var(--colours-background-colour)';
+}
+
+// The colour a grid line is drawn in when its layer's eye is off.
+export function layerGrey() {
+  return 'var(--layer-grey)';
+}
+
+// The grid tool-bar's icon geometry: each button's square size, the thickness of the
+// Rows/Columns bar drawn inside it, and the stroke width of the Special hollow square.
+export function gridToolIconSizePx() {
+  return 20;
+}
+
+export function gridToolLineThicknessPx() {
+  return 3;
+}
+
+export function gridToolSquareStrokePx() {
+  return 2;
+}
+
+// Column name a section title drawn with the Section Title Row tool starts with. It is a
+// placeholder: nothing reads it, and naming the column is later work.
+export function sectionTitlePlaceholderColumnName() {
+  return '~~SECTION-TITLE~~';
 }
 
 // 50%-transparent highlight lines drawn either side of a selected row line.
@@ -284,22 +295,6 @@ export function sectionTitleMarkerDash() {
 // dotted boundary of the selected section-title row (Special Cells layer).
 export function selectedSectionTitleHighlight() {
   return 'rgba(0,128,0,0.5)';
-}
-
-// Stroke colour of the outline drawn around a merged cell's block in the staged
-// grid editor.
-export function mergedCellMarkerColour() {
-  return 'dodgerblue';
-}
-
-// 20%-transparent blue wash filling the block a merged cell occupies.
-export function mergedCellFill() {
-  return 'rgba(30,144,255,0.2)';
-}
-
-// 50%-transparent blue highlight drawn over the currently-selected merged cell.
-export function selectedMergedCellHighlight() {
-  return 'rgba(30,144,255,0.5)';
 }
 
 // The `confirmationStage` at or above which a table is fully confirmed — all five
@@ -544,11 +539,7 @@ export default {
   excelContentType,
   excelFileSuffix,
   stagedGridEditorEnabled,
-  entryConfirmationStage,
   layerTickSlotWidthPx,
-  gridLockedLayerKeys,
-  defaultSectionTitleColumnName,
-  sectionTitleAreaColumnSpan,
   defaultScalePercent,
   scalePercentOptions,
   baseImageWidthPx,
@@ -556,12 +547,21 @@ export default {
   documentDimOpacity,
   rawImageStyle,
   processedImageStyle,
-  defaultImageStyle,
   layerBorderColour,
   layerRowsColour,
   layerColumnsColour,
   layerSpecialCellsColour,
   layerColoursColour,
+  layerBorderBackgroundColour,
+  layerRowsBackgroundColour,
+  layerColumnsBackgroundColour,
+  layerSpecialCellsBackgroundColour,
+  layerColoursBackgroundColour,
+  layerGrey,
+  gridToolIconSizePx,
+  gridToolLineThicknessPx,
+  gridToolSquareStrokePx,
+  sectionTitlePlaceholderColumnName,
   selectedRowHighlight,
   selectedColumnHighlight,
   layersPanelWidthPx,
@@ -569,9 +569,6 @@ export default {
   sectionTitleMarkerColour,
   sectionTitleMarkerDash,
   selectedSectionTitleHighlight,
-  mergedCellMarkerColour,
-  mergedCellFill,
-  selectedMergedCellHighlight,
   confirmedTableStage,
   readyTableStage,
   confirmedTickBadgeColour,

@@ -1,44 +1,41 @@
 'use client';
 
-// A single row in the "Layers" panel of the staged grid editor: a large colour
-// dot, the layer's label, its count, and — on the one row confirmed by a tick —
-// a checkbox. Purely presentational and controlled: all state lives in the parent.
+// A single row in the "Layers" panel of the staged grid editor: a large colour dot, the
+// layer's label, its count, and an eye stating whether the layer is drawn. The eye is not
+// a separate control — clicking anywhere on the row toggles the layer. Purely
+// presentational and controlled: all state lives in the parent.
 //
-// Every row is selectable. The rows were once gates unlocked one at a time by the
-// table's confirmation stage; they are not any more, so a click always selects.
-// A tick, though, is live only on the row that is currently selected.
+// Borders is rendered untoggleable: it is always drawn, so it carries no eye and no click.
 
-import { Box, Checkbox, Typography } from '@mui/material';
-import LockIcon from '@mui/icons-material/Lock';
+import { Box, Typography } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { layerTickSlotWidthPx } from 'config';
 
 export default function LayerRow({
   colour,
+  backgroundColour,
   label,
   count,
-  selected,
-  tickable,
-  ticked,
-  locked = false,
-  onSelect,
-  onToggleTick,
+  on = true,
+  toggleable = true,
+  onToggle,
 }) {
   return (
     <Box
       data-testid={'layer-row'}
-      onClick={onSelect}
+      data-on={on ? 'true' : 'false'}
+      onClick={toggleable ? () => onToggle(!on) : undefined}
       sx={{
         display: 'flex',
         alignItems: 'center',
         gap: 1,
         px: 1,
         py: 0.75,
-        cursor: 'pointer',
-        // Selected rows are tinted with a 90%-transparent version of their dot colour.
-        backgroundColor: selected
-          ? `color-mix(in srgb, ${colour} 10%, transparent)`
-          : 'transparent',
+        cursor: toggleable ? 'pointer' : 'default',
+        // A layer that is off carries its own 10%-opacity background, so the panel states
+        // what is hidden without the icons having to be read.
+        backgroundColor: on ? 'transparent' : backgroundColour,
         borderRadius: 1,
       }}
     >
@@ -56,10 +53,8 @@ export default function LayerRow({
       <Typography data-testid={'layer-count'} variant={'body2'}>
         {count}
       </Typography>
-      {/* The slot is present on every row, so an untickable row's count lines up with a
-          tickable one's rather than sitting a checkbox's width further right. An untickable
-          row states whether it can be worked on: an eye when it can, a padlock when the
-          selected table's grid has made it display-only. */}
+      {/* The slot is present on every row, so an untoggleable row's count lines up with a
+          toggleable one's rather than sitting an icon's width further right. */}
       <Box
         data-testid={'layer-tick-slot'}
         sx={{
@@ -70,30 +65,21 @@ export default function LayerRow({
           alignItems: 'center',
         }}
       >
-        {tickable ? (
-          // The tick is live only while its own row is selected: confirming a layer is a
-          // statement about the work just done on it, so the row has to be the one being
-          // looked at. Clicking the row selects it and the tick becomes usable.
-          <Checkbox
-            data-testid={'layer-tick'}
-            checked={ticked}
-            disabled={!selected}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => onToggleTick(e.target.checked)}
-          />
-        ) : locked ? (
-          <LockIcon
-            data-testid={'layer-lock'}
-            fontSize={'small'}
-            color={'disabled'}
-          />
-        ) : (
-          <VisibilityIcon
-            data-testid={'layer-eye'}
-            fontSize={'small'}
-            color={'disabled'}
-          />
-        )}
+        {toggleable ? (
+          on ? (
+            <VisibilityIcon
+              data-testid={'layer-eye'}
+              fontSize={'small'}
+              color={'disabled'}
+            />
+          ) : (
+            <VisibilityOffIcon
+              data-testid={'layer-eye-off'}
+              fontSize={'small'}
+              color={'disabled'}
+            />
+          )
+        ) : null}
       </Box>
     </Box>
   );

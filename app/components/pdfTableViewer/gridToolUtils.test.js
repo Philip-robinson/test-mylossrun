@@ -1,4 +1,5 @@
 import {
+  cellBounds,
   columnBounds,
   columnIndexAtFraction,
   rowBounds,
@@ -76,6 +77,33 @@ describe('columnBounds', () => {
   it('returns null for an out-of-range index', () => {
     expect(columnBounds(TABLE, -1)).toBeNull();
     expect(columnBounds(TABLE, 2)).toBeNull();
+  });
+});
+
+describe('cellBounds', () => {
+  it('is the intersection of the row band and the column band', () => {
+    expect(cellBounds(TABLE, 1, 1)).toEqual({
+      left: 0.30000000000000004,
+      top: 0.30000000000000004,
+      width: 0.2,
+      height: 0.1,
+    });
+  });
+
+  it('starts the first cell at the table origin', () => {
+    expect(cellBounds(TABLE, 0, 0)).toEqual({
+      left: 0.1,
+      top: 0.2,
+      width: 0.2,
+      height: 0.1,
+    });
+  });
+
+  it('returns null for an out-of-range row or column', () => {
+    expect(cellBounds(TABLE, 3, 0)).toBeNull();
+    expect(cellBounds(TABLE, -1, 0)).toBeNull();
+    expect(cellBounds(TABLE, 0, 2)).toBeNull();
+    expect(cellBounds(TABLE, 0, -1)).toBeNull();
   });
 });
 

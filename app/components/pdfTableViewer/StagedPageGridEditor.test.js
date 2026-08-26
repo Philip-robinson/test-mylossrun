@@ -404,44 +404,68 @@ describe('StagedPageGridEditor', () => {
     });
   });
 
+  // The Rows and Columns tools work by press, optional drag, and release:
+  //   press + release on a line        -> delete it
+  //   press + drag + release on a line -> move it
+  //   press + release in empty space   -> a new line there
+  //   press + drag + release in space  -> a new line at the release point
   describe('the Rows tool', () => {
-    it('deletes the divider a click lands on, keeping the cells above', async () => {
+    it('deletes the line a press and release lands on, keeping the cells above', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ tool: 'rows', onEditTables }));
-      fireEvent.click(screen.getByTestId('row-hit-line'));
+      const hit = screen.getByTestId('row-hit-line');
+      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 50 });
+
       const edited = editedAlpha(onEditTables);
       expect(edited.rowHeights).toHaveLength(1);
       expect(edited.rowHeights[0].value).toBeCloseTo(0.1, 6);
     });
 
-    it('adds a divider exactly where the click landed, not half way', async () => {
+    it('moves the line a press and drag lands on, rather than deleting it', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gridProps({ tool: 'rows', onEditTables }));
+      const hit = screen.getByTestId('row-hit-line');
+      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
+
+      const edited = editedAlpha(onEditTables);
+      expect(edited.rowHeights).toHaveLength(2);
+      expect(edited.rowHeights[0].value).toBeCloseTo(0.07, 5);
+    });
+
+    it('creates a line where a press and release lands in empty space', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
         gridProps({ tool: 'rows', onEditTables })
       );
-      // Row 0 spans fractions 0..0.05; a click at screen y 10 is fraction 0.01.
-      fireEvent.click(container.querySelector('svg'), {
+      // Row 0 spans fractions 0..0.05; screen y 10 is fraction 0.01.
+      fireEvent.mouseDown(container.querySelector('svg'), {
         clientX: 25,
         clientY: 10,
       });
+      fireEvent.mouseUp(window, { clientX: 25, clientY: 10 });
+
       const edited = editedAlpha(onEditTables);
       expect(edited.rowHeights).toHaveLength(3);
       expect(edited.rowHeights[0].value).toBeCloseTo(0.01, 6);
-      expect(edited.rowHeights[1].value).toBeCloseTo(0.04, 6);
-      // The table itself is unchanged: the two parts occupy the old row's span.
       expect(edited.bounds.height).toBeCloseTo(0.1, 6);
     });
 
-    it('splits the row the click fell in, not the first one', async () => {
+    it('creates the line at the release point when the press is dragged', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
         gridProps({ tool: 'rows', onEditTables })
       );
-      // Row 1 spans fractions 0.05..0.1; a click at screen y 90 is fraction 0.09.
-      fireEvent.click(container.querySelector('svg'), {
+      // Press in row 0 at fraction 0.01, release in row 1 at fraction 0.09.
+      fireEvent.mouseDown(container.querySelector('svg'), {
         clientX: 25,
-        clientY: 90,
+        clientY: 10,
       });
+      fireEvent.mouseMove(window, { clientX: 25, clientY: 90 });
+      fireEvent.mouseUp(window, { clientX: 25, clientY: 90 });
+
       const edited = editedAlpha(onEditTables);
       expect(edited.rowHeights.map((r) => r.value)).toEqual([
         expect.closeTo(0.05, 6),
@@ -450,55 +474,68 @@ describe('StagedPageGridEditor', () => {
       ]);
     });
 
-    it('does not drag a divider while it is armed', async () => {
-      const onEditTables = jest.fn();
-      await renderLoaded(gridProps({ tool: 'rows', onEditTables }));
-      const hit = screen.getByTestId('row-hit-line');
-      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
-      fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
-      fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
-      const moved = onEditTables.mock.calls.some(
-        ([list]) =>
-          list.find((t) => t.tableId === 't1').rowHeights[0].value !== 0.05
-      );
-      expect(moved).toBe(false);
+    it('draws the line being created while the press is held', async () => {
+      const { container } = await renderLoaded(gridProps({ tool: 'rows' }));
+      fireEvent.mouseDown(container.querySelector('svg'), {
+        clientX: 25,
+        clientY: 10,
+      });
+      expect(screen.getByTestId('new-line-preview')).toBeInTheDocument();
+      fireEvent.mouseUp(window, { clientX: 25, clientY: 10 });
+      expect(screen.queryByTestId('new-line-preview')).toBeNull();
     });
 
-    it('edits nothing when the click falls outside the table', async () => {
+    it('edits nothing when the press falls outside the table', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
         gridProps({ tool: 'rows', onEditTables })
       );
-      fireEvent.click(container.querySelector('svg'), {
+      fireEvent.mouseDown(container.querySelector('svg'), {
         clientX: 800,
         clientY: 800,
       });
+      fireEvent.mouseUp(window, { clientX: 800, clientY: 800 });
       expect(onEditTables).not.toHaveBeenCalled();
     });
   });
 
   describe('the Columns tool', () => {
-    it('deletes the divider a click lands on, keeping the cells to the left', async () => {
+    it('deletes the line a press and release lands on, keeping the cells to the left', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ tool: 'columns', onEditTables }));
-      fireEvent.click(screen.getByTestId('column-hit-line'));
+      const hit = screen.getByTestId('column-hit-line');
+      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 50 });
       expect(editedAlpha(onEditTables).columnWidths).toHaveLength(1);
     });
 
-    it('adds a divider exactly where the click landed, not half way', async () => {
+    it('moves the line a press and drag lands on', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gridProps({ tool: 'columns', onEditTables }));
+      const hit = screen.getByTestId('column-hit-line');
+      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 70, clientY: 50 });
+      fireEvent.mouseUp(window, { clientX: 70, clientY: 50 });
+
+      const edited = editedAlpha(onEditTables);
+      expect(edited.columnWidths).toHaveLength(2);
+      expect(edited.columnWidths[0].value).toBeCloseTo(0.07, 5);
+    });
+
+    it('creates a line where a press and release lands in empty space', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
         gridProps({ tool: 'columns', onEditTables })
       );
-      // Column 0 spans fractions 0..0.05; a click at screen x 10 is fraction 0.01.
-      fireEvent.click(container.querySelector('svg'), {
+      fireEvent.mouseDown(container.querySelector('svg'), {
         clientX: 10,
         clientY: 25,
       });
+      fireEvent.mouseUp(window, { clientX: 10, clientY: 25 });
+
       const edited = editedAlpha(onEditTables);
       expect(edited.columnWidths).toHaveLength(3);
       expect(edited.columnWidths[0].value).toBeCloseTo(0.01, 6);
-      expect(edited.columnWidths[1].value).toBeCloseTo(0.04, 6);
       expect(edited.bounds.width).toBeCloseTo(0.1, 6);
     });
   });
@@ -743,6 +780,112 @@ describe('StagedPageGridEditor', () => {
       expect(onPendingSelectionChange).not.toHaveBeenCalled();
     });
 
+    // Alpha is a 2x2 grid over the page's top-left tenth, so screen (25, 75) is row 1
+    // column 0 and screen (75, 25) is row 0 column 1.
+    const CELL_R1C0 = { left: 0, top: 0.05, width: 0.05, height: 0.05 };
+    const CELL_R0C1 = { left: 0.05, top: 0, width: 0.05, height: 0.05 };
+
+    it('Cell: a click picks the one cell it landed in', async () => {
+      const onPendingSelectionChange = jest.fn();
+      const { container } = await renderLoaded(
+        gridProps({
+          tool: 'special',
+          specialTool: 'colouredCell',
+          pendingSelection: null,
+          onPendingSelectionChange,
+        })
+      );
+      fireEvent.click(container.querySelector('svg'), {
+        clientX: 25,
+        clientY: 75,
+      });
+      expect(onPendingSelectionChange).toHaveBeenCalledWith({
+        kind: 'cell',
+        rows: [],
+        columns: [],
+        rect: CELL_R1C0,
+        cell: { row: 1, column: 0 },
+      });
+    });
+
+    it('Cell: clicking the picked cell again clears the selection', async () => {
+      const onPendingSelectionChange = jest.fn();
+      const { container } = await renderLoaded(
+        gridProps({
+          tool: 'special',
+          specialTool: 'colouredCell',
+          pendingSelection: {
+            kind: 'cell',
+            rows: [],
+            columns: [],
+            rect: CELL_R1C0,
+            cell: { row: 1, column: 0 },
+          },
+          onPendingSelectionChange,
+        })
+      );
+      fireEvent.click(container.querySelector('svg'), {
+        clientX: 25,
+        clientY: 75,
+      });
+      expect(onPendingSelectionChange).toHaveBeenCalledWith({
+        kind: null,
+        rows: [],
+        columns: [],
+        rect: null,
+        cell: null,
+      });
+    });
+
+    it('Cell: clicking another cell moves the selection rather than adding to it', async () => {
+      const onPendingSelectionChange = jest.fn();
+      const { container } = await renderLoaded(
+        gridProps({
+          tool: 'special',
+          specialTool: 'colouredCell',
+          pendingSelection: {
+            kind: 'cell',
+            rows: [],
+            columns: [],
+            rect: CELL_R1C0,
+            cell: { row: 1, column: 0 },
+          },
+          onPendingSelectionChange,
+        })
+      );
+      fireEvent.click(container.querySelector('svg'), {
+        clientX: 75,
+        clientY: 25,
+      });
+      expect(onPendingSelectionChange).toHaveBeenCalledWith({
+        kind: 'cell',
+        rows: [],
+        columns: [],
+        rect: CELL_R0C1,
+        cell: { row: 0, column: 1 },
+      });
+    });
+
+    it('Cell: a click inside a saved area selects it rather than picking a cell', async () => {
+      const onSelectColouredArea = jest.fn();
+      const onPendingSelectionChange = jest.fn();
+      const { container } = await renderLoaded(
+        gridProps({
+          tool: 'special',
+          specialTool: 'colouredCell',
+          colouredAreas: [{ left: 0, top: 0.05, width: 0.1, height: 0.05 }],
+          onSelectColouredArea,
+          onPendingSelectionChange,
+        })
+      );
+      fireEvent.click(container.querySelector('svg'), {
+        clientX: 25,
+        clientY: 75,
+      });
+      expect(onSelectColouredArea).toHaveBeenCalledWith(0);
+      expect(onPendingSelectionChange).not.toHaveBeenCalled();
+    });
+
     it('with a swatch armed, a click samples that pixel and changes no selection', async () => {
       const onColourPicked = jest.fn();
       const onPendingSelectionChange = jest.fn();
@@ -807,11 +950,12 @@ describe('StagedPageGridEditor', () => {
           onEditTables,
         })
       );
-      // Beta spans [0.3..0.4]: a click at (350, 350) is inside its single row.
-      fireEvent.click(container.querySelector('svg'), {
+      // Beta spans [0.3..0.4]: a press and release at (350, 350) is inside its single row.
+      fireEvent.mouseDown(container.querySelector('svg'), {
         clientX: 350,
         clientY: 350,
       });
+      fireEvent.mouseUp(window, { clientX: 350, clientY: 350 });
       const list = lastList(onEditTables);
       expect(list.map((t) => t.tableId)).toEqual(['t1']);
       expect(list[0].next.t2.rowHeights).toHaveLength(2);

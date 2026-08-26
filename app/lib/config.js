@@ -253,6 +253,38 @@ export function gridToolSquareStrokePx() {
   return 2;
 }
 
+// The grid tool-bar's group box: the border that encloses the buttons, its corner
+// rounding, and its shadow. The shadow has zero offset so it reads as a halo on all four
+// sides rather than a drop on two.
+export function gridToolbarBorderWidthPx() {
+  return 1;
+}
+
+export function gridToolbarBorderColour() {
+  return layerGrey();
+}
+
+export function gridToolbarCornerRadiusPx() {
+  return 8;
+}
+
+export function gridToolbarShadow() {
+  return '0 0 6px 1px rgba(0,0,0,0.18)';
+}
+
+// The Special tools that pick something to colour, in menu order. One list, read by the
+// editor to decide a colour tool is armed and by the Options block to decide the colour
+// selectors are shown.
+export function colourSpecialToolKeys() {
+  return [
+    'colouredRows',
+    'colouredColumns',
+    'colouredTable',
+    'colouredCell',
+    'colouredArea',
+  ];
+}
+
 // Column name a section title drawn with the Section Title Row tool starts with. It is a
 // placeholder: nothing reads it, and naming the column is later work.
 export function sectionTitlePlaceholderColumnName() {
@@ -561,6 +593,11 @@ export default {
   gridToolIconSizePx,
   gridToolLineThicknessPx,
   gridToolSquareStrokePx,
+  gridToolbarBorderWidthPx,
+  gridToolbarBorderColour,
+  gridToolbarCornerRadiusPx,
+  gridToolbarShadow,
+  colourSpecialToolKeys,
   sectionTitlePlaceholderColumnName,
   selectedRowHighlight,
   selectedColumnHighlight,

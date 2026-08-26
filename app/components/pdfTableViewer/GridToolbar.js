@@ -1,8 +1,11 @@
 'use client';
 
-// The vertical tool-bar at the left of the editing area, present in gridMode only. Its
-// three buttons arm the tools that edit a table's rows, its columns and its special
-// areas; only one is ever armed, and none being armed is the normal resting state.
+// The vertical tool-bar of the grid editor, present in gridMode only. Its three buttons
+// arm the tools that edit a table's rows, its columns and its special areas; only one is
+// ever armed, and none being armed is the normal resting state.
+//
+// A bordered, shadowed group box that hugs its buttons. It does not place itself: the rail
+// that holds it decides where it sits.
 //
 // Controlled and stateless: it reports which button was clicked and the parent decides
 // what that does to the armed tool.
@@ -10,6 +13,10 @@
 import { Box, Stack, Typography } from '@mui/material';
 import GridToolButton from 'components/pdfTableViewer/GridToolButton';
 import {
+  gridToolbarBorderColour,
+  gridToolbarBorderWidthPx,
+  gridToolbarCornerRadiusPx,
+  gridToolbarShadow,
   gridToolIconSizePx,
   gridToolLineThicknessPx,
   gridToolSquareStrokePx,
@@ -109,6 +116,9 @@ export default function GridToolbar({ tool = null, onSelectTool }) {
         alignItems: 'center',
         gap: 1,
         p: 0.5,
+        border: `${gridToolbarBorderWidthPx()}px solid ${gridToolbarBorderColour()}`,
+        borderRadius: `${gridToolbarCornerRadiusPx()}px`,
+        boxShadow: gridToolbarShadow(),
       }}
     >
       {TOOL_DEFS.map(({ key, caption, testId, background, Icon }) => (

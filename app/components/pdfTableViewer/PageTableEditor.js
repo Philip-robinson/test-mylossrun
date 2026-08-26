@@ -8,8 +8,7 @@ import StagedPageGridEditor from 'components/pdfTableViewer/StagedPageGridEditor
 import LayersPanel from 'components/pdfTableViewer/LayersPanel';
 import EditorScaleSelector from 'components/pdfTableViewer/EditorScaleSelector';
 import DimDocumentToggle from 'components/pdfTableViewer/DimDocumentToggle';
-import GridToolbar from 'components/pdfTableViewer/GridToolbar';
-import SpecialToolMenu from 'components/pdfTableViewer/SpecialToolMenu';
+import GridToolRail from 'components/pdfTableViewer/GridToolRail';
 import {
   metadataTablesToOverlay,
   normaliseTableBounds,
@@ -1126,11 +1125,10 @@ export default function PageTableEditor({
 
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
           {editorMode === 'grid' ? (
-            <GridToolbar tool={tool} onSelectTool={handleSelectTool} />
-          ) : null}
-          {editorMode === 'grid' && tool === 'special' ? (
-            <SpecialToolMenu
+            <GridToolRail
+              tool={tool}
               specialTool={specialTool}
+              onSelectTool={handleSelectTool}
               onSelectSpecialTool={handleSelectSpecialTool}
             />
           ) : null}

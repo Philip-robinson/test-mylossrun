@@ -83,6 +83,20 @@ export const columnBounds = (table, columnIndex) => {
   };
 };
 
+// The page-fraction rectangle of one cell: the intersection of its row's band and its
+// column's band. Null when either index is one the table does not have.
+export const cellBounds = (table, rowIndex, columnIndex) => {
+  const row = rowBounds(table, rowIndex);
+  const column = columnBounds(table, columnIndex);
+  if (!row || !column) return null;
+  return {
+    left: column.left,
+    top: row.top,
+    width: column.width,
+    height: row.height,
+  };
+};
+
 // The 0-based row whose band holds the vertical centre of `rect`, clamped to the first
 // row when that centre is above the table and to the last when it is below. Null when
 // the table has no rows.

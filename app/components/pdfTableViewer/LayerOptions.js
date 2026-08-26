@@ -11,14 +11,7 @@
 import { Box, Button, Stack } from '@mui/material';
 import ColourSelectors from 'components/pdfTableViewer/ColourSelectors';
 import ExpectedCountsFields from 'components/pdfTableViewer/ExpectedCountsFields';
-
-// The Special tools whose Options content is the colour selectors.
-const COLOUR_TOOLS = [
-  'colouredRows',
-  'colouredColumns',
-  'colouredTable',
-  'colouredArea',
-];
+import { colourSpecialToolKeys } from 'config';
 
 // One Options button. Kept tiny and local — every button in this block shares
 // the same look and only differs by testid / label / handler / disabled state.
@@ -114,7 +107,7 @@ export default function LayerOptions({
         onClick={onDeleteHeader}
       />,
     ];
-  } else if (tool === 'special' && COLOUR_TOOLS.includes(specialTool)) {
+  } else if (tool === 'special' && colourSpecialToolKeys().includes(specialTool)) {
     // Coloured Table colours the whole table, so it has no selection step and its
     // selectors are offered straight away; the other three wait for something selected.
     const ready =

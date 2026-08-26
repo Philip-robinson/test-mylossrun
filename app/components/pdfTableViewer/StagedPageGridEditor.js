@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 import toast from 'react-hot-toast';
 import {
+  colourSpecialToolKeys,
   documentDimOpacity,
   hitLineWidthPx,
   layerBorderColour,
@@ -46,6 +47,7 @@ import {
   tablesOnPage,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import {
+  cellBounds,
   columnBounds,
   columnIndexAtFraction,
   rowBounds,
@@ -238,6 +240,12 @@ export function StagedPageGridEditor({
   // onSelectedLineChange so the Options block (Task 13) can enable/disable its buttons.
   const [selectedLine, setSelectedLine] = useState(null);
 
+  // The Rows / Columns tools' new-line gesture: a press in empty space draws a line that
+  // follows the pointer and is written where it is released. `newLine` is the live preview
+  // ({ orientation, position } in page fractions); the ref carries the gesture itself.
+  const [newLine, setNewLine] = useState(null);
+  const newLineDragRef = useRef(null);
+
   // The selected section-title row's `tableRow` (its 0-based row band in the selected
   // table), or null. `sectionAreaRect` is the live rubber-band preview (page fractions)
   // while the Section Title Row tool drags out a title's data area.
@@ -281,9 +289,15 @@ export function StagedPageGridEditor({
   const showHeader = showSpecial || headerToolArmed;
   const showOtherSpecial = showSpecial && !headerToolArmed;
 
-  // Grid lines are draggable only in the contents pass, and only while no tool is armed:
-  // an armed tool takes the click that would otherwise start a drag.
-  const linesDraggable = gridMode && tool === null;
+  // Grid lines are draggable throughout the contents pass. An armed Rows or Columns tool
+  // does not take the drag away — it decides what a press that does NOT move means, which
+  // handleDragEnd settles on release.
+  const linesDraggable = gridMode;
+
+  // The axis a tool is armed for, or null: 'row' for the Rows tool, 'column' for Columns.
+  const toolFor = (orientation) =>
+    (orientation === 'row' && tool === 'rows') ||
+    (orientation === 'column' && tool === 'columns');
 
   // Convert a pointer event's screen coordinates to page fractions (0..1). Null when the
   // geometry is not ready. X and Y scale independently (preserveAspectRatio="none").
@@ -542,12 +556,24 @@ export function StagedPageGridEditor({
       window.removeEventListener('mouseup', handleDragEnd);
       return;
     }
-    // Internal grid-line gesture: a sub-threshold gesture is a CLICK
-    // that SELECTS the line (no metadata change); a drag reconciles the moved divider.
+    // Internal grid-line gesture. A sub-threshold gesture is a press-and-release: with the
+    // matching tool armed that DELETES the line, and otherwise it selects it. A real drag
+    // reconciles the moved divider either way.
     if (drag && (drag.kind === 'grid-v' || drag.kind === 'grid-h')) {
+      const orientation = drag.kind === 'grid-v' ? 'column' : 'row';
+      if (!drag.moved && toolFor(orientation)) {
+        dragRef.current = null;
+        window.removeEventListener('mousemove', handleDragMove);
+        window.removeEventListener('mouseup', handleDragEnd);
+        deleteDividerAt(
+          orientation === 'column' ? 'columnWidths' : 'rowHeights',
+          drag.k
+        );
+        return;
+      }
       if (!drag.moved) {
         setSelectedLine({
-          orientation: drag.kind === 'grid-v' ? 'column' : 'row',
+          orientation,
           index: drag.k,
         });
       } else {
@@ -914,15 +940,10 @@ export function StagedPageGridEditor({
     return null;
   };
 
-  // The tools that pick rows, columns or a rectangle to colour.
-  const COLOUR_TOOLS = [
-    'colouredRows',
-    'colouredColumns',
-    'colouredTable',
-    'colouredArea',
-  ];
   const colourToolArmed =
-    gridMode && tool === 'special' && COLOUR_TOOLS.includes(specialTool);
+    gridMode &&
+    tool === 'special' &&
+    colourSpecialToolKeys().includes(specialTool);
   // The gestures that rubber-band a rectangle rather than acting on a click.
   const armedForDrag =
     gridMode &&
@@ -958,7 +979,69 @@ export function StagedPageGridEditor({
     reportPending(next, has || current.length ? null : boundsOf(index));
   };
 
+  // ---- New grid line: press in empty space, drag, release -----------------------------
+
+  const handleNewLineMove = (e) => {
+    const g = newLineDragRef.current;
+    if (!g) return;
+    const frac = eventToFraction(e);
+    if (!frac) return;
+    g.cur = frac;
+    setNewLine({
+      orientation: g.orientation,
+      position: g.orientation === 'row' ? frac.fy : frac.fx,
+    });
+  };
+
+  const handleNewLineEnd = () => {
+    window.removeEventListener('mousemove', handleNewLineMove);
+    window.removeEventListener('mouseup', handleNewLineEnd);
+    const g = newLineDragRef.current;
+    newLineDragRef.current = null;
+    setNewLine(null);
+    suppressNextClickRef.current = true;
+    setTimeout(() => {
+      suppressNextClickRef.current = false;
+    }, 0);
+    if (!g || !selected) return;
+    // The line is written where the pointer was released, which is where the user last saw
+    // the preview — a press with no movement releases where it was pressed, so the two
+    // cases are one.
+    const frac = g.cur;
+    if (g.orientation === 'row') {
+      const row = rowIndexAtFraction(selected, frac);
+      if (row == null) return;
+      const band = rowBounds(selected, row);
+      if (band) addDividerAt('rowHeights', row, frac.fy - band.top);
+      return;
+    }
+    const column = columnIndexAtFraction(selected, frac);
+    if (column == null) return;
+    const band = columnBounds(selected, column);
+    if (band) addDividerAt('columnWidths', column, frac.fx - band.left);
+  };
+
   const handleOverlayMouseDown = (e) => {
+    // The Rows and Columns tools: a press inside the table but not on a line begins a new
+    // line, which follows the pointer until it is released. A press ON a line is taken by
+    // that line's own hit line, which starts a move instead.
+    if (gridMode && (tool === 'rows' || tool === 'columns') && selected) {
+      const frac = eventToFraction(e);
+      if (!frac) return;
+      const orientation = tool === 'rows' ? 'row' : 'column';
+      const inside =
+        rowIndexAtFraction(selected, frac) != null &&
+        columnIndexAtFraction(selected, frac) != null;
+      if (!inside) return;
+      newLineDragRef.current = { orientation, cur: frac };
+      setNewLine({
+        orientation,
+        position: orientation === 'row' ? frac.fy : frac.fx,
+      });
+      window.addEventListener('mousemove', handleNewLineMove);
+      window.addEventListener('mouseup', handleNewLineEnd);
+      return;
+    }
     // The Section Title Row and Coloured Area tools rubber-band a rectangle; every other
     // tool acts on the click, which the click handler takes.
     if (armedForDrag && selected) {
@@ -1038,23 +1121,6 @@ export function StagedPageGridEditor({
     setSelectedLine(null);
   };
 
-  // A click on a divider's hit line while the matching tool is armed removes it. Returns
-  // true when the click was consumed, so the add path does not also fire.
-  const handleToolLineClick = (orientation, k, e) => {
-    if (!gridMode) return false;
-    if (orientation === 'row' && tool === 'rows') {
-      e.stopPropagation();
-      deleteDividerAt('rowHeights', k);
-      return true;
-    }
-    if (orientation === 'column' && tool === 'columns') {
-      e.stopPropagation();
-      deleteDividerAt('columnWidths', k);
-      return true;
-    }
-    return false;
-  };
-
   // The Special tool's row actions: the header's last row, a hidden row, or removing an
   // existing section-title row.
   const applySpecialRowClick = (row) => {
@@ -1123,22 +1189,35 @@ export function StagedPageGridEditor({
       const row = rowIndexAtFraction(selected, frac);
       const column = columnIndexAtFraction(selected, frac);
       if (row != null && column != null) {
-        if (tool === 'rows') {
-          const band = rowBounds(selected, row);
-          if (band) addDividerAt('rowHeights', row, frac.fy - band.top);
-          return;
-        }
-        if (tool === 'columns') {
-          const band = columnBounds(selected, column);
-          if (band) addDividerAt('columnWidths', column, frac.fx - band.left);
-          return;
-        }
+        // The Rows and Columns tools do all their work on the press/release gesture above.
+        if (tool === 'rows' || tool === 'columns') return;
         if (specialTool === 'colouredRows') {
           togglePending('rows', row, (i) => rowBounds(selected, i));
           return;
         }
         if (specialTool === 'colouredColumns') {
           togglePending('columns', column, (i) => columnBounds(selected, i));
+          return;
+        }
+        if (specialTool === 'colouredCell') {
+          // One cell at a time: a fresh cell replaces whatever was picked, and the picked
+          // cell clicked again clears. Identity is the row/column pair, not the rectangle,
+          // which is a pair of floating-point fractions recomputed on every click.
+          const picked = pendingSelection?.cell;
+          const same =
+            picked != null && picked.row === row && picked.column === column;
+          const bounds = cellBounds(selected, row, column);
+          const next = same
+            ? { kind: null, rows: [], columns: [], rect: null, cell: null }
+            : {
+                kind: 'cell',
+                rows: [],
+                columns: [],
+                rect: bounds,
+                cell: { row, column },
+              };
+          // Seed the swatches only when arriving from nothing, as togglePending does.
+          reportPending(next, same || picked != null ? null : bounds);
           return;
         }
         if (
@@ -1242,6 +1321,8 @@ export function StagedPageGridEditor({
       window.removeEventListener('mouseup', handleColourPickEnd);
       window.removeEventListener('mousemove', handleSectionAreaMove);
       window.removeEventListener('mouseup', handleSectionAreaEnd);
+      window.removeEventListener('mousemove', handleNewLineMove);
+      window.removeEventListener('mouseup', handleNewLineEnd);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1385,13 +1466,9 @@ export function StagedPageGridEditor({
             stroke={'transparent'}
             strokeWidth={hitLineWidthPx()}
             vectorEffect={'non-scaling-stroke'}
-            cursor={tool === 'rows' ? 'pointer' : 'ns-resize'}
+            cursor={'ns-resize'}
             style={{ pointerEvents: 'stroke' }}
-            onMouseDown={(e) => {
-              if (tool === 'rows') return;
-              handleLineHit('row', k, e);
-            }}
-            onClick={(e) => handleToolLineClick('row', k, e)}
+            onMouseDown={(e) => handleLineHit('row', k, e)}
           />
         );
         if (
@@ -1469,13 +1546,9 @@ export function StagedPageGridEditor({
             stroke={'transparent'}
             strokeWidth={hitLineWidthPx()}
             vectorEffect={'non-scaling-stroke'}
-            cursor={tool === 'columns' ? 'pointer' : 'ew-resize'}
+            cursor={'ew-resize'}
             style={{ pointerEvents: 'stroke' }}
-            onMouseDown={(e) => {
-              if (tool === 'columns') return;
-              handleLineHit('column', k, e);
-            }}
-            onClick={(e) => handleToolLineClick('column', k, e)}
+            onMouseDown={(e) => handleLineHit('column', k, e)}
           />
         );
         if (
@@ -1854,6 +1927,36 @@ export function StagedPageGridEditor({
     );
   };
 
+  // The line the new-line gesture is about to write, drawn in its layer's colour so it
+  // reads as the line it will become.
+  const renderNewLinePreview = () => {
+    if (!newLine || !selected) return null;
+    const b = selected.bounds;
+    const horizontal = newLine.orientation === 'row';
+    return (
+      <line
+        data-testid={'new-line-preview'}
+        x1={horizontal ? b.left * pixelWidth : newLine.position * pixelWidth}
+        y1={horizontal ? newLine.position * pixelHeight : b.top * pixelHeight}
+        x2={
+          horizontal
+            ? (b.left + b.width) * pixelWidth
+            : newLine.position * pixelWidth
+        }
+        y2={
+          horizontal
+            ? newLine.position * pixelHeight
+            : (b.top + b.height) * pixelHeight
+        }
+        style={{
+          stroke: horizontal ? layerRowsColour() : layerColumnsColour(),
+        }}
+        strokeWidth={1}
+        vectorEffect={'non-scaling-stroke'}
+      />
+    );
+  };
+
   // The coloured-area tools' pending selection: the rows, columns or rectangle picked but
   // not yet written out. Drawn as a wash inside a dotted outline, which is what
   // distinguishes it from a saved area (dotted outline, no wash).
@@ -1946,6 +2049,7 @@ export function StagedPageGridEditor({
           {renderSpecial()}
           {renderColours()}
           {renderPendingSelection()}
+          {renderNewLinePreview()}
           {renderCreatePreview()}
           {renderSectionAreaPreview()}
         </svg>

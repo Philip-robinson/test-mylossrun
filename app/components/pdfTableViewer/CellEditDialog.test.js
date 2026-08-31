@@ -10,6 +10,7 @@ import {
   draggedPosition,
   findSourceValue,
 } from 'components/pdfTableViewer/reviewEditUtils';
+import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 // Config is MOCKED with sentinels, and every expectation is derived by CALLING the
 // mocked accessor rather than by naming a literal, so a change to a real constant
 // can never fail a test here.
@@ -17,17 +18,15 @@ import {
   confirmColour,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
-  reviewCellEditRowCount,
 } from 'config';
 
 jest.mock('config', () => ({
   __esModule: true,
   cancelColour: jest.fn(() => 'rgb(9, 0, 0)'),
   confirmColour: jest.fn(() => 'rgb(0, 9, 0)'),
-  // Deliberately wider than half the stubbed viewport below, so the placement test
-  // exercises dialogPlacement's clamping rather than a free position.
+  // Deliberately wide enough that the stubbed viewport below leaves room on only one
+  // side of some anchors, so the placement tests exercise both sides of the rule.
   reviewCellEditDialogWidthPx: jest.fn(() => 220),
-  reviewCellEditRowCount: jest.fn(() => 4),
   maxCellEditorImageHeight: jest.fn(() => 66),
 }));
 
@@ -173,22 +172,36 @@ beforeEach(() => {
 });
 
 describe('CellEditDialog', () => {
-  it('pre-fills the text field from the cell and lets it be edited without confirming', async () => {
+  // The correction is typed into the CELL now, so the dialog must carry no field of its
+  // own: two places to type one value is one too many, and the second would be the one
+  // the tick did not read.
+  it('holds no text field of its own', () => {
     renderDialog();
 
-    const field = screen.getByTestId('cell-edit-text');
-    expect(field).toHaveValue(ordinaryCell.text);
-    // MUI's `minRows` is honoured by TextareaAutosize's own measurement, which leaves
-    // no `rows` attribute (and measures 0 in jsdom), so the strongest available check
-    // is that the row count comes from config at all rather than from a literal.
-    expect(reviewCellEditRowCount).toHaveBeenCalled();
+    expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+    expect(screen.queryByTestId('cell-edit-text')).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
 
-    await userEvent.clear(field);
-    await userEvent.type(field, 'Corrected');
+  it("states the cell's confidence under the buttons", () => {
+    renderDialog();
 
-    expect(field).toHaveValue('Corrected');
-    expect(onConfirm).not.toHaveBeenCalled();
-    expect(onCancel).not.toHaveBeenCalled();
+    const confidence = screen.getByTestId('cell-edit-confidence');
+    expect(confidence).toHaveTextContent(confidenceLabel(ordinaryCell.confidence));
+    // Under, not over: the buttons come first in document order within the dialog.
+    const dialog = screen.getByTestId('cell-edit-dialog');
+    const children = Array.from(dialog.children);
+    expect(children.indexOf(confidence)).toBeGreaterThan(
+      children.indexOf(screen.getByTestId('cell-edit-buttons'))
+    );
+  });
+
+  it('states the confidence of whichever cell it is showing', () => {
+    renderDialog({ cell: sectionTitleCell });
+
+    expect(screen.getByTestId('cell-edit-confidence')).toHaveTextContent(
+      confidenceLabel(sectionTitleCell.confidence)
+    );
   });
 
   it('requests the image once, for the source cell of the source table', () => {
@@ -247,7 +260,7 @@ describe('CellEditDialog', () => {
     ).not.toBeInTheDocument();
   });
 
-  // A tall crop must not push the text field off the bottom of the dialog, so the image
+  // A tall crop must not push the buttons off the bottom of the dialog, so the image
   // area is capped and scrolls instead of growing.
   it('caps the image area at the configured height and scrolls it', () => {
     renderDialog({ image: bothImages });
@@ -312,40 +325,33 @@ describe('CellEditDialog', () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it('calls onConfirm with the edited text when the confirm button is clicked', async () => {
+  // The dialog reports that the correction was accepted and nothing more: the text is
+  // the panel's, typed into the cell, so passing one back would be passing back a copy
+  // the dialog never saw change.
+  it('calls onConfirm alone when the confirm button is clicked', async () => {
     renderDialog();
 
-    const field = screen.getByTestId('cell-edit-text');
-    await userEvent.clear(field);
-    await userEvent.type(field, 'Corrected Ltd');
     await userEvent.click(screen.getByTestId('cell-edit-confirm'));
 
     expect(onConfirm).toHaveBeenCalledTimes(1);
-    expect(onConfirm).toHaveBeenCalledWith('Corrected Ltd');
     expect(onCancel).not.toHaveBeenCalled();
   });
 
   // "Confirm and next" is the same save with something else done afterwards, so the dialog
   // reports it separately and leaves the panel — which alone knows what "next" is — to
   // decide where that goes.
-  it('calls onConfirmAndNext with the edited text, and not the plain confirm', async () => {
+  it('calls onConfirmAndNext, and not the plain confirm', async () => {
     renderDialog();
 
-    const field = screen.getByTestId('cell-edit-text');
-    await userEvent.clear(field);
-    await userEvent.type(field, 'Corrected Ltd');
     await userEvent.click(screen.getByTestId('cell-edit-confirm-next'));
 
     expect(onConfirmAndNext).toHaveBeenCalledTimes(1);
-    expect(onConfirmAndNext).toHaveBeenCalledWith('Corrected Ltd');
     expect(onConfirm).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  // All three buttons are one block beside the text field, topped level with it — the
-  // field grows downwards as it is typed into or dragged taller, and buttons pinned to
-  // its bottom edge would walk down the dialog with it.
-  it('keeps the buttons together, aligned with the top of the text field', () => {
+  // With no field to sit beside, all three buttons share one row of their own.
+  it('keeps the three buttons together on one row', () => {
     renderDialog();
 
     const buttons = screen.getByTestId('cell-edit-buttons');
@@ -356,10 +362,7 @@ describe('CellEditDialog', () => {
     ]) {
       expect(buttons).toContainElement(screen.getByTestId(id));
     }
-    // The field and the block are siblings of one row that tops them level.
-    const row = buttons.parentElement;
-    expect(row).toContainElement(screen.getByTestId('cell-edit-text'));
-    expect(row).toHaveStyle({ alignItems: 'flex-start' });
+    expect(buttons).toHaveStyle({ display: 'flex', alignItems: 'center' });
   });
 
   it('labels the next button and gives it the confirm colour', () => {
@@ -416,12 +419,10 @@ describe('CellEditDialog', () => {
     expect(dialog.style.width).toBe(`${reviewCellEditDialogWidthPx()}px`);
   });
 
-  // Where the click landed only matters for an element too wide to have the dialog beside
-  // it — the review screen's title spans the editor. The dialog then goes below it, on the
-  // side of the pointer. jsdom reports every element 0px tall, and a zero-height dialog
-  // always fits above, so the height is stubbed to reach the branch at all.
-  describe('placement against a full-width element', () => {
-    const wide = { left: 5, top: 40, right: 495, bottom: 70, width: 490, height: 30 };
+  // The dialog is bottom-aligned with the cell and put BESIDE it, because the cell now
+  // holds the field the correction is typed into and must stay visible. jsdom reports
+  // every element 0px tall, so the height is stubbed to make the alignment observable.
+  describe('placement beside the cell', () => {
     const dialogHeight = 120;
     let heightSpy;
 
@@ -435,43 +436,60 @@ describe('CellEditDialog', () => {
       heightSpy.mockRestore();
     });
 
-    const expectedFor = (pointer) =>
-      dialogPlacement(
-        wide,
+    const positionOf = () => {
+      const dialog = screen.getByTestId('cell-edit-dialog');
+      return { left: dialog.style.left, top: dialog.style.top };
+    };
+
+    it("lands its bottom right corner on the cell's bottom left corner", () => {
+      renderDialog();
+
+      const expected = dialogPlacement(
+        anchorRect,
         { width: reviewCellEditDialogWidthPx(), height: dialogHeight },
-        { width: window.innerWidth, height: window.innerHeight },
-        pointer
+        { width: window.innerWidth, height: window.innerHeight }
       );
-
-    it('goes below it, to the left of the pointer', () => {
-      const pointer = { x: 400, y: 55 };
-      renderDialog({ anchorRect: wide, anchorPointer: pointer });
-
-      const expected = expectedFor(pointer);
-      expect(expected.placement).toBe('below');
-      const dialog = screen.getByTestId('cell-edit-dialog');
-      expect(dialog.style.left).toBe(`${expected.left}px`);
-      expect(dialog.style.top).toBe(`${expected.top}px`);
+      expect(expected.placement).toBe('left');
+      expect(positionOf()).toEqual({
+        left: `${anchorRect.left - reviewCellEditDialogWidthPx()}px`,
+        top: `${anchorRect.bottom - dialogHeight}px`,
+      });
     });
 
-    it('goes below it, to the right of a pointer near the left edge', () => {
-      const pointer = { x: 60, y: 55 };
-      renderDialog({ anchorRect: wide, anchorPointer: pointer });
+    it("lands its bottom left corner on the cell's bottom right corner when the left will not fit", () => {
+      // Near the left edge: 100 - 220 is off the screen, and 160 + 220 is not.
+      const nearLeft = {
+        left: 100,
+        top: 500,
+        right: 160,
+        bottom: 520,
+        width: 60,
+        height: 20,
+      };
+      renderDialog({ anchorRect: nearLeft });
 
-      const expected = expectedFor(pointer);
-      expect(expected.left).toBe(pointer.x);
-      const dialog = screen.getByTestId('cell-edit-dialog');
-      expect(dialog.style.left).toBe(`${pointer.x}px`);
+      expect(positionOf()).toEqual({
+        left: `${nearLeft.right}px`,
+        top: `${nearLeft.bottom - dialogHeight}px`,
+      });
     });
 
-    it('aligns below with the element when no pointer is supplied', () => {
-      renderDialog({ anchorRect: wide });
+    it('comes down the screen until it fits when the cell is too high for it', () => {
+      const high = {
+        left: 400,
+        top: 10,
+        right: 460,
+        bottom: 30,
+        width: 60,
+        height: 20,
+      };
+      renderDialog({ anchorRect: high });
 
-      const expected = expectedFor(undefined);
-      expect(expected.left).toBe(wide.left);
-      const dialog = screen.getByTestId('cell-edit-dialog');
-      expect(dialog.style.left).toBe(`${wide.left}px`);
-      expect(dialog.style.top).toBe(`${expected.top}px`);
+      // Bottom-aligning would put the top at -90, so it settles at the top instead.
+      expect(positionOf()).toEqual({
+        left: `${high.left - reviewCellEditDialogWidthPx()}px`,
+        top: '0px',
+      });
     });
   });
 

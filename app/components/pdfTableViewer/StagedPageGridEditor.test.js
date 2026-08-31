@@ -180,10 +180,17 @@ describe('StagedPageGridEditor', () => {
       });
     });
 
-    it('shows the selected table label (name + cols × rows)', async () => {
-      await renderLoaded(baseProps({ selectedTableId: 't1' }));
-      expect(screen.getByTestId('selected-label-name')).toHaveTextContent('Alpha');
-      expect(screen.getByTestId('selected-label-size')).toHaveTextContent('2 × 2');
+    it('shows each table label (name + cols × rows)', async () => {
+      const { container } = await renderLoaded(baseProps({ selectedTableId: 't1' }));
+      const label = container.querySelector(
+        '[data-testid="selected-label"][data-tableid="t1"]'
+      );
+      expect(label.querySelector('[data-testid="selected-label-name"]')).toHaveTextContent(
+        'Alpha'
+      );
+      expect(label.querySelector('[data-testid="selected-label-size"]')).toHaveTextContent(
+        '2 × 2'
+      );
     });
 
     it('calls onSelectTable with the id of a clicked table', async () => {
@@ -212,6 +219,295 @@ describe('StagedPageGridEditor', () => {
         triggerDelete('t1');
       });
       expect(editedAlpha(onEditTables).deleted).toBe(true);
+    });
+  });
+
+  // Every table on the page carries a boundary; only the selected one is drawn in the border
+  // colour and only it can be dragged. The colours are var(--…) values jsdom drops, so
+  // data-selected is what states which is which.
+  describe('every table on the page is drawn', () => {
+    const boundaries = (container) =>
+      container.querySelectorAll('[data-testid="table-boundary"]');
+
+    // beta joined under alpha's grid: on the page, but off the top-level list.
+    const joined = () => [
+      { ...alpha(), grid: [['t1', 't2']], next: { t2: beta() } },
+    ];
+
+    it('draws one boundary per table in the boundary pass', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1' })
+      );
+      const rects = boundaries(container);
+      expect(rects).toHaveLength(2);
+      expect(
+        [...rects].map((r) => r.getAttribute('data-tableid'))
+      ).toEqual(['t1', 't2']);
+      expect(
+        [...rects].map((r) => r.getAttribute('data-selected'))
+      ).toEqual(['true', 'false']);
+    });
+
+    it('draws one boundary per table in the contents pass too', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't2', editorMode: 'grid' })
+      );
+      const rects = boundaries(container);
+      expect(rects).toHaveLength(2);
+      expect(
+        [...rects].map((r) => r.getAttribute('data-selected'))
+      ).toEqual(['false', 'true']);
+    });
+
+    it('gives the four draggable edges to the selected table alone', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1' })
+      );
+      const hits = container.querySelectorAll('[data-testid="hit-line"]');
+      expect(hits).toHaveLength(4);
+      expect(
+        [...hits].every((h) => h.getAttribute('data-tableid') === 't1')
+      ).toBe(true);
+    });
+
+    it('selects an unselected table when its rectangle is clicked', async () => {
+      const onSelectTable = jest.fn();
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1', onSelectTable })
+      );
+      // A client coordinate maps to a fraction by /PIXELS, so beta's 0.3..0.4 is 300..400.
+      // The click lands inside beta, well clear of alpha at 0..100.
+      fireEvent.click(container.querySelector('svg'), {
+        clientX: 350,
+        clientY: 350,
+      });
+      expect(onSelectTable).toHaveBeenCalledWith('t2');
+    });
+
+    it('draws a table joined under another table on the same page', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ metadataTables: joined(), selectedTableId: 't1' })
+      );
+      expect(
+        [...boundaries(container)].map((r) => r.getAttribute('data-tableid'))
+      ).toEqual(['t1', 't2']);
+    });
+  });
+
+  // The Title tool sets metadata.tables[].title. Everything downstream of that field — the
+  // calculate-cells request, the merge back, the left list's title line — already exists;
+  // this is the gesture that fills it in.
+  describe('the Title tool', () => {
+    const titleProps = (overrides = {}) =>
+      baseProps({
+        selectedTableId: 't1',
+        editorMode: 'grid',
+        tool: 'special',
+        specialTool: 'title',
+        ...overrides,
+      });
+
+    it('writes the drawn rectangle onto the selected table', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(titleProps({ onEditTables }));
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 500, clientY: 500 });
+      fireEvent.mouseMove(window, { clientX: 700, clientY: 560 });
+      fireEvent.mouseUp(window, { clientX: 700, clientY: 560 });
+
+      const written = lastList(onEditTables).find((t) => t.tableId === 't1');
+      expect(written.title.bounds.left).toBeCloseTo(0.5, 5);
+      expect(written.title.bounds.top).toBeCloseTo(0.5, 5);
+      expect(written.title.bounds.width).toBeCloseTo(0.2, 5);
+      expect(written.title.bounds.height).toBeCloseTo(0.06, 5);
+      expect(written.title.text).toBe('');
+      expect(written.title.confidence).toBe(0);
+    });
+
+    it('treats a sub-threshold press as a click and writes no title', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(titleProps({ onEditTables }));
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 500, clientY: 500 });
+      fireEvent.mouseMove(window, { clientX: 501, clientY: 501 });
+      fireEvent.mouseUp(window, { clientX: 501, clientY: 501 });
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+
+    it('is not clamped to the table: a title may be drawn above it', async () => {
+      const onEditTables = jest.fn();
+      // alpha sits at fraction 0..0.1; the drag runs well above and left of it.
+      const below = { ...alpha(), bounds: { left: 0.2, top: 0.2, width: 0.1, height: 0.1 } };
+      const { container } = await renderLoaded(
+        titleProps({ metadataTables: [below], onEditTables })
+      );
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 150, clientY: 100 });
+      fireEvent.mouseMove(window, { clientX: 350, clientY: 160 });
+      fireEvent.mouseUp(window, { clientX: 350, clientY: 160 });
+
+      const written = lastList(onEditTables).find((t) => t.tableId === 't1');
+      expect(written.title.bounds.top).toBeCloseTo(0.1, 5);
+      expect(written.title.bounds.top).toBeLessThan(below.bounds.top);
+    });
+
+    it('draws the title rect while the Special Areas layer is on, and not while it is off',
+      async () => {
+        const titled = {
+          ...alpha(),
+          title: { bounds: { left: 0.5, top: 0.5, width: 0.2, height: 0.06 }, text: '', confidence: 0 },
+        };
+        const { rerender, container } = await renderLoaded(
+          titleProps({ metadataTables: [titled] })
+        );
+        expect(screen.getByTestId('title-rect')).toBeInTheDocument();
+
+        rerender(
+          <StagedPageGridEditor
+            {...titleProps({
+              metadataTables: [titled],
+              specialTool: null,
+              tool: null,
+              layerVisibility: { rows: true, columns: true, special: false, colours: true },
+            })}
+          />
+        );
+        expect(container.querySelector('[data-testid="title-rect"]')).toBeNull();
+      });
+
+    it('gives the title four draggable sides only while the tool is armed', async () => {
+      const titled = {
+        ...alpha(),
+        title: { bounds: { left: 0.5, top: 0.5, width: 0.2, height: 0.06 }, text: '', confidence: 0 },
+      };
+      const { container, rerender } = await renderLoaded(
+        titleProps({ metadataTables: [titled] })
+      );
+      expect(
+        container.querySelectorAll('[data-testid="title-hit-line"]')
+      ).toHaveLength(4);
+
+      rerender(
+        <StagedPageGridEditor
+          {...titleProps({ metadataTables: [titled], specialTool: null })}
+        />
+      );
+      expect(
+        container.querySelectorAll('[data-testid="title-hit-line"]')
+      ).toHaveLength(0);
+    });
+  });
+
+  // Both labels follow every drawn boundary. The Link label states a table's part in a
+  // linked group, and opens or ends the linking session that forms one.
+  describe('the per-table labels', () => {
+    const linked = () => [
+      { ...alpha(), name: 'Root', next: { t2: { ...beta(), name: 'Child' } } },
+    ];
+
+    const labels = (container, testid) =>
+      [...container.querySelectorAll(`[data-testid="${testid}"]`)];
+
+    it('draws a name label and a link label for every table', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1' })
+      );
+      expect(labels(container, 'selected-label')).toHaveLength(2);
+      expect(labels(container, 'link-label')).toHaveLength(2);
+    });
+
+    it('colours the selected table label apart from the rest', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1' })
+      );
+      expect(
+        labels(container, 'selected-label').map((l) => l.getAttribute('data-colour'))
+      ).toEqual(['border', 'grey']);
+    });
+
+    it('reads Selected for a table in no group', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1' })
+      );
+      expect(
+        labels(container, 'link-label').map((l) => l.textContent)
+      ).toEqual(['Selected', 'Selected']);
+    });
+
+    it('reads Linked for a root and Linked to for its member', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ metadataTables: linked(), selectedTableId: 't1' })
+      );
+      expect(
+        labels(container, 'link-label').map((l) => l.textContent)
+      ).toEqual(['Linked', 'Linked to Root']);
+    });
+
+    it('reads End Linking, in the emphasis colour, for the session root', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1', linkingRootId: 't1' })
+      );
+      const [first, second] = labels(container, 'link-label');
+      expect(first).toHaveTextContent('End Linking');
+      expect(first).toHaveAttribute('data-colour', 'emphasis');
+      expect(second).toHaveTextContent('Selected');
+    });
+
+    it('opens a session from a Selected label and ends it from End Linking', async () => {
+      const onToggleLinking = jest.fn();
+      const { container, rerender } = await renderLoaded(
+        baseProps({ selectedTableId: 't1', onToggleLinking })
+      );
+      fireEvent.click(labels(container, 'link-label')[0]);
+      expect(onToggleLinking).toHaveBeenCalledWith('t1');
+
+      onToggleLinking.mockClear();
+      rerender(
+        <StagedPageGridEditor
+          {...baseProps({
+            selectedTableId: 't1',
+            linkingRootId: 't1',
+            onToggleLinking,
+          })}
+        />
+      );
+      fireEvent.click(labels(container, 'link-label')[0]);
+      expect(onToggleLinking).toHaveBeenCalledWith(null);
+    });
+
+    // The contents pass is about one table's insides; forming groups belongs to the boundary
+    // pass, where the Pages list that picks the members is on screen.
+    it('takes no click on any link label in the contents pass', async () => {
+      const onToggleLinking = jest.fn();
+      const { container } = await renderLoaded(
+        baseProps({
+          selectedTableId: 't1',
+          editorMode: 'grid',
+          onToggleLinking,
+        })
+      );
+      labels(container, 'link-label').forEach((l) => fireEvent.click(l));
+      expect(onToggleLinking).not.toHaveBeenCalled();
+    });
+
+    it('still shows the link labels in the contents pass', async () => {
+      const { container } = await renderLoaded(
+        baseProps({ selectedTableId: 't1', editorMode: 'grid' })
+      );
+      expect(labels(container, 'link-label')).toHaveLength(2);
+    });
+
+    it('takes no click on a Linked to label', async () => {
+      const onToggleLinking = jest.fn();
+      const { container } = await renderLoaded(
+        baseProps({
+          metadataTables: linked(),
+          selectedTableId: 't1',
+          onToggleLinking,
+        })
+      );
+      fireEvent.click(labels(container, 'link-label')[1]);
+      expect(onToggleLinking).not.toHaveBeenCalled();
     });
   });
 
@@ -285,6 +581,36 @@ describe('StagedPageGridEditor', () => {
       );
       expect(created.extractionMechanism).toBe('MANUAL');
       expect(created.confirmationStage).toBeNull();
+      expect(toast).not.toHaveBeenCalled();
+    });
+
+    it('reports a rejected rubber-band drag rather than failing silently', async () => {
+      const onEditTables = jest.fn();
+      const onCreatedTable = jest.fn();
+      let triggerCreate;
+      const { container } = await renderLoaded(
+        baseProps({
+          selectedTableId: 't1',
+          onEditTables,
+          onCreatedTable,
+          onRequestCreate: (fn) => {
+            triggerCreate = fn;
+          },
+        })
+      );
+      act(() => {
+        triggerCreate();
+      });
+      // Drawn over alpha, which occupies the page's top-left corner: an overlap, so
+      // buildManualTable refuses it.
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 10, clientY: 10 });
+      fireEvent.mouseMove(window, { clientX: 60, clientY: 60 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 60 });
+
+      expect(onEditTables).not.toHaveBeenCalled();
+      expect(onCreatedTable).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -374,7 +700,9 @@ describe('StagedPageGridEditor', () => {
       expect(screen.queryByTestId('coloured-area-0')).toBeNull();
     });
 
-    it('never draws a title rectangle or a merged-cell block', async () => {
+    // The Title tool sets the title rectangle, so it is drawn with the other special areas.
+    // A merged-cell block has no renderer here.
+    it('draws a title rectangle with the special areas, and no merged-cell block', async () => {
       const withTitleAndMerge = {
         ...alpha(),
         title: {
@@ -389,13 +717,58 @@ describe('StagedPageGridEditor', () => {
       await renderLoaded(
         gridProps({ metadataTables: [withTitleAndMerge, beta()] })
       );
-      expect(screen.queryByTestId('title-rect')).toBeNull();
+      expect(screen.getByTestId('title-rect')).toBeInTheDocument();
       expect(screen.queryByTestId('merged-cell-0')).toBeNull();
     });
 
     it('moves a grid line while no tool is armed', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ onEditTables }));
+      const hit = screen.getByTestId('row-hit-line');
+      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
+      expect(editedAlpha(onEditTables).rowHeights[0].value).toBeCloseTo(0.07, 5);
+    });
+
+    // A Special tool acts on a press anywhere in the table, so a press that happened to
+    // land on a divider must do what the tool is for and not move the divider. The grid
+    // lines stay drawn; only the hit line that would take the press is withheld.
+    describe.each([
+      ['header'],
+      ['title'],
+      ['hideRow'],
+      ['sectionTitle'],
+      ['colouredRows'],
+      ['colouredColumns'],
+      ['colouredTable'],
+      ['colouredCell'],
+      ['colouredArea'],
+    ])('with the %s Special tool armed', (specialTool) => {
+      it('offers no grid-line hit lines to drag', async () => {
+        await renderLoaded(gridProps({ tool: 'special', specialTool }));
+        expect(screen.queryByTestId('row-hit-line')).toBeNull();
+        expect(screen.queryByTestId('column-hit-line')).toBeNull();
+      });
+
+      it('still draws the grid lines', async () => {
+        const { container } = await renderLoaded(
+          gridProps({ tool: 'special', specialTool })
+        );
+        expect(
+          container.querySelectorAll('[data-testid="row-line"]').length
+        ).toBeGreaterThan(0);
+        expect(
+          container.querySelectorAll('[data-testid="column-line"]').length
+        ).toBeGreaterThan(0);
+      });
+    });
+
+    it('leaves the grid lines draggable when Special is armed with no tool picked', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gridProps({ tool: 'special', specialTool: null, onEditTables })
+      );
       const hit = screen.getByTestId('row-hit-line');
       fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
       fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
@@ -917,7 +1290,13 @@ describe('StagedPageGridEditor', () => {
       await renderLoaded(
         baseProps({ metadataTables: joinedPair(), selectedTableId: 't2' })
       );
-      expect(await screen.findByTestId('selected-label')).toHaveTextContent('Beta');
+      await waitFor(() =>
+        expect(
+          document.querySelector(
+            '[data-testid="selected-label"][data-tableid="t2"]'
+          )
+        ).toHaveTextContent('Beta')
+      );
     });
 
     it('commits an edit to a joined table back inside its root', async () => {

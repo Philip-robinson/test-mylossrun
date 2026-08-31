@@ -101,3 +101,13 @@ export const adjacentPoorCell = (poorCells, selected, step) => {
   const target = current + step;
   return target >= 0 && target < cells.length ? cells[target] : null;
 };
+
+// How confidently the extraction read one value, as the edit dialog states it —
+// "Confidence 87%" — rounded to a whole percent because the scale is 0–100 and a
+// fraction of a percent is not a distinction the reader can act on. A value that
+// carries no confidence at all reads "Confidence unknown" rather than "0%", which
+// would claim a bad reading where in fact there was no reading.
+export const confidenceLabel = (confidence) =>
+  typeof confidence === 'number' && Number.isFinite(confidence)
+    ? `Confidence ${Math.round(confidence)}%`
+    : 'Confidence unknown';

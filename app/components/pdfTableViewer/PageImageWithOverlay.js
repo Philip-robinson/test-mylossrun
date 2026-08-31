@@ -41,6 +41,7 @@ import {
 } from 'components/pdfTableViewer/gridUtilities';
 import ConfirmedTickBadge from 'components/pdfTableViewer/ConfirmedTickBadge';
 import MergeLinkBadge from 'components/pdfTableViewer/MergeLinkBadge';
+import LinkedGroupOutline from 'components/pdfTableViewer/LinkedGroupOutline';
 import {
   CONFIDENCE_COLOUR_VARS,
   buildCalcHint,
@@ -242,6 +243,10 @@ export function PageImageWithOverlay({
   tables,
   thumbnailTables,
   thumbnailMergeRoles = null,
+  // Supplied only while a linking session is open: makes each thumbnail table clickable so
+  // it can be picked to join the group. Absent, the thumbnails behave exactly as before —
+  // the overlay takes no pointer events and the click reaches the page behind it.
+  onThumbnailTableClick = null,
   withGrid,
   onHoverTable,
   metadataTables,
@@ -833,7 +838,7 @@ export function PageImageWithOverlay({
       confidence: 100, // 0-100 percent; 100 = full
       bounds: { top: T, left: L, width: W, height: H },
       // The 1×1 grid's single cell (its square IS the whole table). confidence 0 -> red;
-      // header false (per-cell header is a back-end concern). Task 5.
+      // header false (per-cell header is a back-end concern).
       cells: [makeDefaultCell(0, 0, { top: T, left: L, width: W, height: H })],
       title: null,
       sectionTitles: null,
@@ -992,8 +997,8 @@ export function PageImageWithOverlay({
       }[menu.boundaryKind]
     : null;
 
-  // "Just a border": exactly one column and one row. Such a table offers Calculate (Task 9)
-  // on its boundary menu; a multi-cell table offers Recalculate instead (Task 10). The two
+  // "Just a border": exactly one column and one row. Such a table offers Calculate on its
+  // boundary menu; a multi-cell table offers Recalculate instead. The two
   // are mutually exclusive on this 1×1 test.
   const calcAvailable =
     !!menuTable &&
@@ -1483,7 +1488,8 @@ export function PageImageWithOverlay({
             left: 0,
             width: '100%',
             height: '100%',
-            pointerEvents: interactive ? 'auto' : 'none',
+            pointerEvents:
+              interactive || onThumbnailTableClick ? 'auto' : 'none',
           }}
         >
           {drawnTables.map((t, i) => (
@@ -1499,6 +1505,24 @@ export function PageImageWithOverlay({
                 vectorEffect={'non-scaling-stroke'}
               />
               {withGrid && gridLines(t)}
+              {/* A transparent hit rect over the table, present only while a linking session
+                  wants one, so a click can pick this table rather than change the page. */}
+              {onThumbnailTableClick && t.tableId ? (
+                <rect
+                  data-testid={'thumbnail-table-hit'}
+                  data-tableid={t.tableId}
+                  x={t.left}
+                  y={t.top}
+                  width={t.width}
+                  height={t.height}
+                  fill={'transparent'}
+                  style={{ cursor: 'pointer' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onThumbnailTableClick(t.tableId);
+                  }}
+                />
+              ) : null}
               {/* Locked (linked) tables are display-only: no hit lines, so no drag,
                   resize, or menu gesture can ever start on them. */}
               {interactive && !t.locked && hitLines(t, handleHit)}
@@ -1557,6 +1581,21 @@ export function PageImageWithOverlay({
               key={`tick-${t.tableId}`}
               left={`${((t.left + t.width) / dims.w) * 100}%`}
               top={`${(t.top / dims.h) * 100}%`}
+            />
+          ))}
+      {/* Right column only: the linked-group ring, drawn around every member of a linked
+          group — the root as well as the tables joined under it. Placed by percentage of the
+          natural image size for the same preserveAspectRatio reason as the labels above. */}
+      {dims &&
+        thumbnailOverlayTables
+          .filter((t) => t.mergeRole)
+          .map((t) => (
+            <LinkedGroupOutline
+              key={`linked-${t.tableId}`}
+              left={`${(t.left / dims.w) * 100}%`}
+              top={`${(t.top / dims.h) * 100}%`}
+              width={`${(t.width / dims.w) * 100}%`}
+              height={`${(t.height / dims.h) * 100}%`}
             />
           ))}
       {/* Right column only: the merge link badge, marking a table's part in a merge — one

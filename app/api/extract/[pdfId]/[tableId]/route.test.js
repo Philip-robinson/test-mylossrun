@@ -19,7 +19,12 @@ describe('GET /api/extract/[pdfId]/[tableId]', () => {
 
   const pdfId = '9b2f0c52-7c1e-4f7a-9a0d-1c2b3d4e5f6a';
   const tableId = 'table-1';
-  const mergedTable = { tableId, cells: [{ row: 0, column: 0, text: 'A' }] };
+  const mergedTables = {
+    tables: [
+      { name: 'North', cells: [{ row: 0, column: 0, text: 'A' }] },
+      { name: 'South', cells: [{ row: 0, column: 0, text: 'B' }] },
+    ],
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -47,17 +52,20 @@ describe('GET /api/extract/[pdfId]/[tableId]', () => {
     };
   }
 
-  it('dispatches to the upstream extract URL and returns the polled table', async () => {
+  it('dispatches to the upstream extract URL and returns the polled tables', async () => {
     global.fetch.mockResolvedValue(
       dispatchResponse({ status: 'PROCESSING', statusIds: ['status-1'] })
     );
-    pollStatus.mockResolvedValue(mergedTable);
+    pollStatus.mockResolvedValue(mergedTables);
 
     const response = await GET(makeRequest(), makeParams());
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toEqual({ table: mergedTable });
+    // The worker's payload already carries the single `tables` key, so it is returned
+    // as it stands rather than wrapped again.
+    expect(body).toEqual(mergedTables);
+    expect(body.tables).toHaveLength(2);
     expect(global.fetch).toHaveBeenCalledWith(
       `https://api.example.com/mylossrun/extract/${pdfId}/${tableId}`,
       expect.objectContaining({
@@ -75,7 +83,7 @@ describe('GET /api/extract/[pdfId]/[tableId]', () => {
     global.fetch.mockResolvedValue(
       dispatchResponse({ status: 'PROCESSING', statusIds: ['status-1'] })
     );
-    pollStatus.mockResolvedValue(mergedTable);
+    pollStatus.mockResolvedValue(mergedTables);
 
     await GET(makeRequest(), makeParams('a/b c', 'table 1/2'));
 

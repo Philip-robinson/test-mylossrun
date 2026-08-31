@@ -5,9 +5,9 @@ import { decodeBody, pollStatus } from '../../../_lib/status_poll';
 
 // Proxy for the asynchronous table-extraction worker: dispatch
 // GET /mylossrun/extract/{pdfId}/{tableId}, which allocates a single status id,
-// then long-poll that status until it is terminal. The merged table travels as
-// the READY envelope's `data` and is returned as `{ table }`, mirroring
-// find-tables' `{ tables }` shape.
+// then long-poll that status until it is terminal. The merged tables travel as
+// the READY envelope's `data`, which is already an object with a single `tables`
+// key — mirroring find-tables' shape — so it is returned as it stands.
 export async function GET(request, { params }) {
   logRequest(request);
   try {
@@ -32,11 +32,11 @@ export async function GET(request, { params }) {
       throw new Error('Extract dispatch returned no status id');
     }
 
-    const table = await pollStatus(statusIds[0], guard, {
+    const tables = await pollStatus(statusIds[0], guard, {
       intervalMs: extractPollIntervalMs(),
       timeoutMs: extractPollTimeoutMs(),
     });
-    return NextResponse.json({ table }, { status: 200 });
+    return NextResponse.json(tables, { status: 200 });
   } catch (error) {
     return errorResponse('Extract table', error);
   }

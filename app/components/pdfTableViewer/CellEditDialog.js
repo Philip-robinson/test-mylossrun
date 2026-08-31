@@ -1,9 +1,14 @@
 'use client';
 
 // The extraction review screen's cell-edit dialog: a small floating box, opened by
-// clicking a cell of the merged table, showing that cell as it appears in the PDF
-// above an editable copy of the text the extraction read from it. The tick hands the
-// corrected text back to the panel; the X changes nothing.
+// clicking a cell of the merged table, showing that cell as it appears in the PDF above
+// the buttons that settle the correction and the confidence the extraction read it with.
+// The tick hands the correction back to the panel; the X changes nothing.
+//
+// It holds no text and no field of its own. The correction is typed into the CELL, in
+// the grid, where the value belongs — the dialog is what the typing is checked against,
+// so it shows the original crop and keeps out of the way of the cell. That is also why
+// it is placed beside the cell rather than over it: see `dialogPlacement`.
 //
 // It owns no open state and takes no `open` prop — ReviewTablePanel renders it only
 // while a cell is being edited, so mounting IS opening. It also owns no image cache
@@ -18,12 +23,12 @@
 //
 // A cell whose source reference is blank (`cellSourceKey` is null) has nothing in the
 // metadata to write back to, so there is no rectangle to crop and no correction worth
-// taking: the dialog still opens and still shows the text, but confirm is disabled and
-// cancel is the only way out. Silently accepting an edit that could not be persisted,
+// taking: the dialog still opens and still shows the confidence, but confirm is disabled
+// and cancel is the only way out. Silently accepting an edit that could not be persisted,
 // and would vanish at the next extraction, is worse than visibly refusing it.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Box, Button, TextField } from '@mui/material';
+import { Box, Button, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckIcon from '@mui/icons-material/Check';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
@@ -35,12 +40,12 @@ import {
   findSourceTable,
   findSourceValue,
 } from 'components/pdfTableViewer/reviewEditUtils';
+import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 import {
   cancelColour,
   confirmColour,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
-  reviewCellEditRowCount,
 } from 'config';
 
 export default function CellEditDialog({
@@ -49,18 +54,16 @@ export default function CellEditDialog({
   tables,
   reviewedTableId,
   anchorRect,
-  anchorPointer,
   image,
   onRequestImage,
   onCancel,
   onConfirm,
   onConfirmAndNext,
 }) {
-  const [text, setText] = useState(cell?.text ?? '');
   const dialogRef = useRef(null);
-  // The dialog's own height decides whether it fits above the cell, so it is measured
+  // The dialog's own height decides where its bottom edge can be put, so it is measured
   // rather than assumed; 0 until the first measurement, which simply means the first
-  // paint prefers the space above.
+  // paint aligns its top with the cell's bottom.
   const [height, setHeight] = useState(0);
   // Where the user has dragged the dialog to, or null while it still sits where it was
   // placed. Once set it OVERRIDES the computed placement, because a position the user
@@ -74,21 +77,16 @@ export default function CellEditDialog({
   const key = cellSourceKey(cell);
 
   // Clicking a second cell while the dialog is open re-uses this instance with a new
-  // `cell`, so the edited text follows the cell rather than the mount. Keyed on the
-  // source key so a re-render for any other reason never discards what has been typed.
+  // `cell`. A new cell is a new question, and the answer to where the dialog should go
+  // is the one computed beside THAT cell — so the drag is forgotten with it.
   useEffect(() => {
-    setText(cell?.text ?? '');
-    // A new cell is a new question, and the answer to "where should this go?" is the
-    // one computed beside THAT cell — so the drag is forgotten with the text.
     setDragged(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  // Measured after every paint, because the height changes when the image lands and
-  // again if the textarea is dragged taller, and re-placing on a stale height would
-  // leave the dialog overlapping the cell it edits. The equality guard is what makes a
-  // dependency-free effect safe: an unchanged measurement sets no state, so the chain
-  // of updates stops after one round.
+  // Measured after every paint, because the height changes when the image lands, and
+  // placing on a stale height would leave the dialog's bottom edge off the cell's.
+  // The equality guard is what makes a dependency-free effect safe: an unchanged
+  // measurement sets no state, so the chain of updates stops after one round.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const measured = dialogRef.current?.offsetHeight ?? 0;
@@ -126,11 +124,7 @@ export default function CellEditDialog({
 
   const size = { width: reviewCellEditDialogWidthPx(), height };
   const viewport = { width: window.innerWidth, height: window.innerHeight };
-  // `anchorPointer` is where the click that opened the dialog landed, and only decides
-  // which side of it the dialog goes when there is room neither above nor beside the
-  // element. Undefined when the dialog was opened without a click.
-  const position =
-    dragged ?? dialogPlacement(anchorRect, size, viewport, anchorPointer);
+  const position = dragged ?? dialogPlacement(anchorRect, size, viewport);
 
   // Dragging is driven by pointer events rather than mouse events so that a touch or a
   // stylus works the same way. The handle captures the pointer, so a fast drag that
@@ -191,9 +185,8 @@ export default function CellEditDialog({
         gap: 1,
       }}
     >
-      {/* The drag handle. A strip of its own rather than the whole dialog: a drag
-          started anywhere would fight the textarea for the same gesture, and dragging
-          text out of the field is a thing people legitimately do. */}
+      {/* The drag handle. A strip of its own rather than the whole dialog, so that a
+          gesture started on a button stays that button's click. */}
       <Box
         data-testid={'cell-edit-drag'}
         onPointerDown={handlePointerDown}
@@ -214,7 +207,7 @@ export default function CellEditDialog({
       >
         <DragHandleIcon fontSize={'small'} />
       </Box>
-      {/* The crop, which now has the dialog's full interior width to itself. */}
+      {/* The crop, which has the dialog's full interior width to itself. */}
       <Box
         sx={{
           // Deliberately NOT a flex container. As a flex item the crop was squashed on
@@ -226,8 +219,7 @@ export default function CellEditDialog({
           // size it should be shown at — but a cell wider than the dialog, or a tall
           // one, still has to be contained. Width is handled by scaling the image
           // down; height by scrolling, because scaling a tall crop to fit would shrink
-          // it past reading and growing to fit it would push the text field out of the
-          // dialog.
+          // it past reading.
           maxHeight: maxCellEditorImageHeight(),
           overflowY: 'auto',
         }}
@@ -241,8 +233,7 @@ export default function CellEditDialog({
             // The only constraint is on width: `max-width: 100%` scales a crop too wide
             // for the dialog down to fit, and `height: auto` makes the height follow so
             // the proportions hold. A crop that is then still too tall overflows and the
-            // area above scrolls. `margin: 0 auto` centres it, which is what the removed
-            // `justify-content` used to do.
+            // area above scrolls. `margin: 0 auto` centres it.
             style={{
               display: 'block',
               margin: '0 auto',
@@ -252,69 +243,54 @@ export default function CellEditDialog({
           />
         )}
       </Box>
-      {/* The field and the buttons are topped level rather than bottomed: the textarea
-          grows downwards as it is typed into or dragged taller, and buttons pinned to its
-          bottom edge would walk down the dialog with it. */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-        <TextField
-          multiline
-          minRows={reviewCellEditRowCount()}
-          size={'small'}
-          fullWidth
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          inputProps={{ 'data-testid': 'cell-edit-text' }}
-          // The textarea is left resizeable because a cell can hold far more text than
-          // the configured row count shows, and the dialog is small on purpose.
-          sx={{ '& textarea': { resize: 'vertical' } }}
+      {/* The three buttons, on one row now that there is no field to sit beside. */}
+      <Box
+        data-testid={'cell-edit-buttons'}
+        sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
+      >
+        <RoundIconButton
+          colour={cancelColour()}
+          icon={<CloseIcon />}
+          testId={'cell-edit-cancel'}
+          onClick={onCancel}
         />
-        <Box
-          data-testid={'cell-edit-buttons'}
+        <RoundIconButton
+          colour={confirmColour()}
+          icon={<CheckIcon />}
+          testId={'cell-edit-confirm'}
+          onClick={onConfirm}
+          disabled={!key}
+        />
+        {/* The same save, with the panel asked to move on to the next low confidence
+            cell afterwards. It is reported separately rather than as a flag on
+            onConfirm because the dialog has no idea what "next" is — the panel owns the
+            list and the selection. Disabled on exactly the same terms as the tick: what
+            it does first is the tick's job, and a save that cannot happen cannot be
+            followed by anything. */}
+        <Button
+          data-testid={'cell-edit-confirm-next'}
+          size={'small'}
+          variant={'contained'}
+          startIcon={<CheckIcon />}
+          disabled={!key}
+          onClick={onConfirmAndNext}
           sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: 1,
-            flexShrink: 0,
+            backgroundColor: confirmColour(),
+            '&:hover': { backgroundColor: confirmColour() },
           }}
         >
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <RoundIconButton
-              colour={cancelColour()}
-              icon={<CloseIcon />}
-              testId={'cell-edit-cancel'}
-              onClick={onCancel}
-            />
-            <RoundIconButton
-              colour={confirmColour()}
-              icon={<CheckIcon />}
-              testId={'cell-edit-confirm'}
-              onClick={() => onConfirm(text)}
-              disabled={!key}
-            />
-          </Box>
-          {/* The same save, with the panel asked to move on to the next low confidence
-              cell afterwards. It is reported separately rather than as a flag on
-              onConfirm because the dialog has no idea what "next" is — the panel owns the
-              list and the selection. Disabled on exactly the same terms as the tick: what
-              it does first is the tick's job, and a save that cannot happen cannot be
-              followed by anything. */}
-          <Button
-            data-testid={'cell-edit-confirm-next'}
-            size={'small'}
-            variant={'contained'}
-            startIcon={<CheckIcon />}
-            disabled={!key}
-            onClick={() => onConfirmAndNext(text)}
-            sx={{
-              backgroundColor: confirmColour(),
-              '&:hover': { backgroundColor: confirmColour() },
-            }}
-          >
-            {'Next'}
-          </Button>
-        </Box>
+          {'Next'}
+        </Button>
       </Box>
+      {/* How confidently this value was read, under the buttons: it is the reason the
+          cell is worth looking at, and the crop above is what that claim is about. */}
+      <Typography
+        data-testid={'cell-edit-confidence'}
+        variant={'body2'}
+        color={'text.secondary'}
+      >
+        {confidenceLabel(cell?.confidence)}
+      </Typography>
     </Box>
   );
 }

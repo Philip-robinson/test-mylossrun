@@ -5,6 +5,7 @@ import {
   belowHighConfidenceCells,
   cellCoordinate,
   columnLabel,
+  confidenceLabel,
   flaggedForReviewLabel,
   lowConfidenceTitle,
 } from 'components/pdfTableViewer/reviewUtils';
@@ -282,6 +283,28 @@ describe('reviewUtils', () => {
       expect(adjacentPoorCell([], null, 1)).toBeNull();
       expect(adjacentPoorCell([], { label: 'A1' }, -1)).toBeNull();
       expect(adjacentPoorCell(undefined, null, 1)).toBeNull();
+    });
+  });
+
+  describe('confidenceLabel', () => {
+    it('states the confidence as a whole percent', () => {
+      expect(confidenceLabel(87)).toBe('Confidence 87%');
+      expect(confidenceLabel(100)).toBe('Confidence 100%');
+      expect(confidenceLabel(0)).toBe('Confidence 0%');
+    });
+
+    it('rounds a fractional confidence', () => {
+      expect(confidenceLabel(87.4)).toBe('Confidence 87%');
+      expect(confidenceLabel(87.5)).toBe('Confidence 88%');
+    });
+
+    it('says unknown rather than 0% when there is no confidence at all', () => {
+      // Padding and appended labels carry no reading; claiming 0% would report a bad
+      // reading where in fact there was none.
+      expect(confidenceLabel(undefined)).toBe('Confidence unknown');
+      expect(confidenceLabel(null)).toBe('Confidence unknown');
+      expect(confidenceLabel('90')).toBe('Confidence unknown');
+      expect(confidenceLabel(NaN)).toBe('Confidence unknown');
     });
   });
 });

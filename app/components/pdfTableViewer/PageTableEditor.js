@@ -17,6 +17,7 @@ import {
   linkedTablesWithParents,
   mapAllTables,
   replaceTableById,
+  tableSetChanged,
   buildCalcHint,
   mergeFindGridLines,
   overlapArea,
@@ -44,20 +45,6 @@ import {
   processedImageStyle,
   rawImageStyle,
 } from 'config';
-
-// A table with no expected-count hints typed yet: both fields blank.
-const BLANK_EXPECTED_COUNTS = { expectedColumns: '', expectedRows: '' };
-
-// The empty hint map. Shared (rather than a fresh {} per clear) so re-clearing an already
-// empty map is referentially identical and React skips the re-render.
-const NO_EXPECTED_COUNTS = {};
-
-// True when either expected-count field of one table's hint entry has been filled in. A
-// missing entry counts as blank.
-function hasExpectedCount(counts) {
-  const { expectedColumns, expectedRows } = counts ?? BLANK_EXPECTED_COUNTS;
-  return (expectedColumns ?? '') !== '' || (expectedRows ?? '') !== '';
-}
 
 // Whether two bounds differ. Compared FIELD BY FIELD, not by reference: every edit reported up
 // from the editor rebuilds the bounds object, so a reference test would call every reported
@@ -94,7 +81,7 @@ export default function PageTableEditor({
   onChange,
   deletedPreview = null,
   onHoverTable,
-  // Staged-editor props supplied by the host (Task 14); defaulted so this component can be
+  // Staged-editor props supplied by the host; defaulted so this component can be
   // rendered (and tested) standalone.
   selectedTableId = null,
   onSelectTable = () => {},
@@ -103,7 +90,17 @@ export default function PageTableEditor({
   onPrevPage = () => {},
   onNextPage = () => {},
   onColouredAreasChange = () => {},
-  onExpectedCountsMapChange = () => {},
+  // Bumped by the host after every successful save. A save is the only thing that can
+  // change what the back end renders for a page — coloured areas drive the PROCESSED
+  // rendering — so it is the signal that every page image already fetched is stale.
+  savedRevision = 0,
+  // The table rooting an open linking session, or null. Held by the host and only passed
+  // through: this component keeps nothing of the session itself.
+  linkingRootId = null,
+  onToggleLinking = () => {},
+  // Reports which pass the editor is in, so the host can hide the Pages list in the contents
+  // pass. The pass itself stays this component's own state.
+  onEditorModeChange = () => {},
   // Saves the document, resolving to whether the save reached the server. "Validate Tables"
   // persists the boundary pass through it before the contents pass begins.
   onSave = async () => true,
@@ -164,13 +161,6 @@ export default function PageTableEditor({
   // Drives the Special Cells "Delete Section Title Row" button and the "Column name" combo.
   const [selectedSectionRow, setSelectedSectionRow] = useState(null);
 
-  // ---- Borders-layer expected-count hints (transient, not persisted) ------------------
-  // tableId -> { expectedColumns, expectedRows }, both strings, blank being ''. Nothing on
-  // PDFTable stores these: they are per-table hints typed in the Borders layer and consumed
-  // by the layer-transition / recalculation calls. Keyed by tableId so switching table (or
-  // layer) and back preserves what was typed; cleared on a page or document change below.
-  const [expectedCounts, setExpectedCounts] = useState(NO_EXPECTED_COUNTS);
-
   // ---- Colours-layer view state (transient, not persisted) ----------------------------
   // The selected coloured area's index on the displayed page, or null.
   const [selectedColouredIndex, setSelectedColouredIndex] = useState(null);
@@ -193,6 +183,12 @@ export default function PageTableEditor({
 
   const containerRef = useRef(null);
 
+  // Report the pass up whenever it changes, including the initial 'border'. An effect rather
+  // than a call beside each setEditorMode, so a future switch cannot forget to report.
+  useEffect(() => {
+    onEditorModeChange(editorMode);
+  }, [editorMode, onEditorModeChange]);
+
   // Which end of the next page's tables to select once that page's tables arrive: 'first'
   // after a Next that ran off the end of a page, 'last' after a Previous that ran off the
   // start, and null when the page changed by any other route (a thumbnail click, the list),
@@ -204,8 +200,8 @@ export default function PageTableEditor({
   const imageCacheRef = useRef(new Map());
 
   // The tableIds whose `bounds` have changed since the page was loaded (or since the last
-  // SUCCESSFUL Borders find-grid-lines call). Together with the expected-count hints it gates
-  // the blocking Borders-tick call: with no moved border and no expected count the back end has
+  // SUCCESSFUL Borders find-grid-lines call), and the tableIds created in it. Gates the
+  // blocking Borders-tick call: with no moved border and no created table the back end has
   // nothing new to work from, so the request would be pure latency.
   //
   // Deliberately recorded for ANY reported bounds change: a bounds change invalidates the
@@ -297,36 +293,6 @@ export default function PageTableEditor({
       null,
     [samePageTables, selectedTableId]
   );
-
-  // The selected table's expected-count hints, or blanks when it has no entry yet (and
-  // when there is no selected table at all — the fields are hidden in that case).
-  const selectedExpectedCounts =
-    (selectedTable ? expectedCounts[selectedTable.tableId] : null) ??
-    BLANK_EXPECTED_COUNTS;
-
-  // Record one field of the selected table's hints, leaving every other table's entry
-  // untouched.
-  const handleExpectedCountsChange = useCallback(
-    (field, value) => {
-      if (!selectedTable) return;
-      setExpectedCounts((prev) => ({
-        ...prev,
-        [selectedTable.tableId]: {
-          ...(prev[selectedTable.tableId] ?? BLANK_EXPECTED_COUNTS),
-          [field]: value,
-        },
-      }));
-    },
-    [selectedTable]
-  );
-
-  // Report the whole hint map up to the host whenever it changes — including when it is
-  // cleared on a page or document change below. These values are transient view state owned
-  // here, and this is the host's only channel to them. An effect rather than a call at each
-  // mutation site, so a future write or clear cannot forget to report.
-  useEffect(() => {
-    onExpectedCountsMapChange(expectedCounts);
-  }, [expectedCounts, onExpectedCountsMapChange]);
 
   const pageColouredAreas = metadata.pages?.[displayPage]?.colouredAreas;
   const isCreatedUnconfirmed =
@@ -455,32 +421,40 @@ export default function PageTableEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayPage, samePageTables]);
 
-  // The expected-count hints are scoped to the page being worked on, so a newly displayed
-  // page always starts with both fields blank. The changed-bounds set is page-scoped in the
-  // same way: the border call it arms is made for one page at a time.
+  // The changed-bounds set is page-scoped: the border call it arms is made for one page at a
+  // time.
   //
   // The provisional border moves and coloured areas go with them, DISCARDED rather than
   // reported: a page left through `leaveFor` has already flushed them, so anything still held
   // here was left by another route — the thumbnails, the left-hand list — and was never
   // confirmed by the rebuild that gives it its point.
   useEffect(() => {
-    setExpectedCounts(NO_EXPECTED_COUNTS);
     changedBoundsRef.current = new Set();
     setPendingTables(null);
     setPendingColouredAreas(null);
   }, [displayPage]);
 
-  // This component is not remounted per document, so the hints — and the changed-bounds set
-  // and anything held provisionally, which are keyed by page number / by the current
-  // document's tableIds and so only meaningful within one document — also have to be dropped
-  // when the displayed PDF changes.
+  // This component is not remounted per document, so the changed-bounds set and anything
+  // held provisionally — keyed by page number / by the current document's tableIds, and so
+  // only meaningful within one document — have to be dropped when the displayed PDF changes.
   useEffect(() => {
-    setExpectedCounts(NO_EXPECTED_COUNTS);
     changedBoundsRef.current = new Set();
     imageCacheRef.current = new Map();
     setPendingTables(null);
     setPendingColouredAreas(null);
   }, [metadata.pdfId]);
+
+  // A save changes the page the back end renders — the coloured areas it just stored are
+  // what the PROCESSED rendering flattens — so every cached rendering is stale. Dropping
+  // the whole cache marks them all as needing reload without fetching any of them: each is
+  // re-fetched when its page or zoom is next displayed. The displayed page reloads at once,
+  // because `savedRevision` is a dependency of both fetch effects below.
+  //
+  // Declared BEFORE those effects so it runs first in the same commit and they see an
+  // empty cache, which is the same ordering the per-document reset above relies on.
+  useEffect(() => {
+    imageCacheRef.current = new Map();
+  }, [savedRevision]);
 
   // Measure the container pixel width (legacy branch only). The backend derives render dpi
   // from a target pixel width, so fetches are driven off the measured layout rather than a
@@ -548,7 +522,7 @@ export default function PageTableEditor({
     return () => {
       cancelled = true;
     };
-  }, [staged, metadata.pdfId, page, measuredWidth, imageStyle]);
+  }, [staged, metadata.pdfId, page, measuredWidth, imageStyle, savedRevision]);
 
   // Staged branch: debounce scalePercent -> debouncedScale so a burst of zoom steps
   // coalesces into a single refetch (scaleDebounceMs()). The initial value already equals
@@ -601,7 +575,7 @@ export default function PageTableEditor({
     return () => {
       cancelled = true;
     };
-  }, [staged, metadata.pdfId, page, debouncedScale, imageStyle]);
+  }, [staged, metadata.pdfId, page, debouncedScale, imageStyle, savedRevision]);
 
   // Derive the centre overlay's flat pixel-space tables from the normalised metadata,
   // scaled by the get-image pixel dimensions (legacy branch). Empty until the page image
@@ -663,20 +637,28 @@ export default function PageTableEditor({
   const handleEditTables = (nextTables) => {
     mapAllTables(nextTables, (t) => {
       const before = findTableById(normalisedTables, t.tableId);
-      // A table created in this session has no `before` to compare, so it is not recorded as
-      // bounds-changed: it has no previous geometry to have moved away from, and the create
-      // flow already runs its own grid-lines Calculate that detects its geometry. It becomes
-      // eligible for the border call only once its border is moved or a count is typed.
-      if (!before) return t;
-      if (boundsDiffer(before.bounds, t.bounds)) {
+      // A table created in this session has no `before` to compare against, but it is the
+      // table that most needs detecting: it carries a border and no grid at all. It is
+      // recorded like a moved border, so leaving the table, the page or the pass detects it.
+      // The Calculate button remains the way to detect it WITHOUT leaving, and clears the
+      // record when it succeeds so the two never run the same detection twice.
+      if (!before || boundsDiffer(before.bounds, t.bounds)) {
         changedBoundsRef.current.add(t.tableId);
       }
       return t;
     });
-    // A border move is held until the boundary pass is left, along with the rebuild it arms;
-    // every edit made in the contents pass goes straight up. The legacy branch has neither
-    // pass and reports every edit immediately, as it always has.
-    if (staged && editorMode === 'border') {
+    // What is held is decided by what the edit DID, not by which pass it happened in. A
+    // border move is held until the boundary pass is left, along with the rebuild it arms.
+    // A change to the SET of tables — a create, a delete — is reported at once whatever the
+    // pass: the host lists from that set, so the Document Overview, the thumbnails and the
+    // Save button's dirty flag all go stale while it is held. Anything held alongside it
+    // travels with it, as a flush would have sent it, and the rebuild it armed still happens
+    // because changedBoundsRef is a ref that outlives the commit.
+    if (
+      staged &&
+      editorMode === 'border' &&
+      !tableSetChanged(normalisedTables, nextTables)
+    ) {
       setPendingTables(nextTables);
       return;
     }
@@ -746,8 +728,8 @@ export default function PageTableEditor({
   // ---- Staged Layers-panel wiring -----------------------------------------------------
 
   // Detect the grid inside a just-created border table. ONE blocking call: find-grid-lines,
-  // hinted with the drawn border (and the expected row/column counts if the user typed them),
-  // to DETECT bounds/columnWidths/rowHeights inside it. A freshly drawn border needs this
+  // hinted with the drawn border, to DETECT bounds/columnWidths/rowHeights inside it. A
+  // freshly drawn border needs this
   // because buildManualTable gives it a single full-width column, a single full-height row and
   // one cell — it has no interior grid at all until this call supplies one.
   //
@@ -769,15 +751,13 @@ export default function PageTableEditor({
       setActionBusy(true);
       try {
         // buildCalcHint takes (table, rows, cols): rows BEFORE columns. It emits neither
-        // `cells` nor `title`, and includes each expected count only when it is non-blank. The
-        // page's coloured areas travel on the request, not per hint, so its fourth argument is
-        // left off.
-        const counts = expectedCounts[t.tableId] ?? BLANK_EXPECTED_COUNTS;
+        // `cells` nor `title`, and its row/column counts are always null. The page's coloured
+        // areas travel on the request, not per hint, so its fourth argument is left off.
         const gridResponse = await findGridLines(
           metadata.pdfId,
           displayPage,
           currentColouredAreas,
-          [buildCalcHint(t, counts.expectedRows, counts.expectedColumns)]
+          [buildCalcHint(t, null, null)]
         );
         const returned = gridResponse?.tables ?? [];
         const merged = mergeFindGridLines(
@@ -794,6 +774,8 @@ export default function PageTableEditor({
           return;
         }
         commitTables(merged);
+        // Detected here, so leaving owes no detection for it.
+        changedBoundsRef.current.delete(t.tableId);
       } catch (err) {
         toast.error(err.message);
       } finally {
@@ -805,13 +787,12 @@ export default function PageTableEditor({
       metadata.pdfId,
       displayPage,
       currentColouredAreas,
-      expectedCounts,
       normalisedTables,
       commitTables,
     ]
   );
 
-  // Leaving the boundary pass having moved a border (or typed an expected count) is a
+  // Leaving the boundary pass having moved a border or created a table is a
   // DELIBERATE blocking step: re-detect the grid lines of those tables, wait for the response,
   // merge it, and ONLY THEN run `after` — so nothing is worked on before the re-detected
   // geometry has landed. Note this deliberately OVERWRITES a hand-positioned border with the
@@ -836,13 +817,10 @@ export default function PageTableEditor({
           displayPage,
           currentColouredAreas,
           // buildCalcHint takes (table, rows, cols): rows BEFORE columns. It emits neither
-          // `cells` nor `title`, and includes each expected count only when it is non-blank.
-          // The page's coloured areas travel on the request, not per hint, so its fourth
-          // argument is left off.
-          hintTables.map((h) => {
-            const counts = expectedCounts[h.tableId] ?? BLANK_EXPECTED_COUNTS;
-            return buildCalcHint(h, counts.expectedRows, counts.expectedColumns);
-          })
+          // `cells` nor `title`, and its row/column counts are always null. The page's
+          // coloured areas travel on the request, not per hint, so its fourth argument is
+          // left off.
+          hintTables.map((h) => buildCalcHint(h, null, null))
         );
         // Reported through the flush rather than as a bare commit: what was held provisionally
         // travels with what the detector returned, as ONE write, and only now — a failed call
@@ -866,7 +844,6 @@ export default function PageTableEditor({
       metadata.pdfId,
       displayPage,
       currentColouredAreas,
-      expectedCounts,
       normalisedTables,
       flushPending,
     ]
@@ -876,24 +853,22 @@ export default function PageTableEditor({
   // what to do once its merge has landed — or null when nothing is owed and the move can
   // simply be made.
   //
-  // Only the boundary pass owes one: a moved border or a typed expected count invalidates the
-  // detected grid, so it is re-detected before that pass is left, whether the move is to
-  // another table, to another page, or on to the contents pass. Coloured-area edits made in
-  // the contents pass deliberately do NOT re-probe — the user is validating those grids by
-  // hand, and a probe would overwrite the work in progress.
+  // Only the boundary pass owes one: a moved border, and a table created with no grid at all,
+  // both need detecting before that pass is left, whether the move is to another table, to
+  // another page, or on to the contents pass. Coloured-area edits made in the contents pass
+  // deliberately do NOT re-probe — the user is validating those grids by hand, and a probe
+  // would overwrite the work in progress.
   //
   // The changed-bounds set is read here rather than memoised: it is a ref, and the host may
   // not have re-rendered this component since the edit that armed it.
   const owedRebuild = useCallback(() => {
     if (editorMode !== 'border') return null;
-    const hintTables = samePageTables.filter(
-      (t) =>
-        changedBoundsRef.current.has(t.tableId) ||
-        hasExpectedCount(expectedCounts[t.tableId])
+    const hintTables = samePageTables.filter((t) =>
+      changedBoundsRef.current.has(t.tableId)
     );
     if (hintTables.length === 0) return null;
     return (after) => runBorderGridLines(after, hintTables);
-  }, [editorMode, samePageTables, expectedCounts, runBorderGridLines]);
+  }, [editorMode, samePageTables, runBorderGridLines]);
 
   // Make a move, first settling whatever the pass being left owes: what is held provisionally
   // is reported to the host, and the rebuild it arms is made. Each rebuild is blocking and runs
@@ -1161,7 +1136,8 @@ export default function PageTableEditor({
                   onEditTables={handleEditTables}
                   onSelectTable={onSelectTable}
                   onCreatedTable={setCreatedTableId}
-                  pdfId={metadata.pdfId}
+                  linkingRootId={linkingRootId}
+                  onToggleLinking={onToggleLinking}
                   onRequestCreate={registerCreate}
                   onRequestDelete={registerDelete}
                   onSelectedLineChange={setSelectedLine}
@@ -1210,9 +1186,6 @@ export default function PageTableEditor({
             onNext={handleNext}
             onValidateTables={handleValidateTables}
             isCreatedUnconfirmed={isCreatedUnconfirmed}
-            expectedColumns={selectedExpectedCounts.expectedColumns}
-            expectedRows={selectedExpectedCounts.expectedRows}
-            onExpectedCountsChange={handleExpectedCountsChange}
             onDeleteTable={() =>
               deleteActionRef.current?.(selectedTable?.tableId)
             }

@@ -10,7 +10,6 @@
 
 import { Box, Button, Stack } from '@mui/material';
 import ColourSelectors from 'components/pdfTableViewer/ColourSelectors';
-import ExpectedCountsFields from 'components/pdfTableViewer/ExpectedCountsFields';
 import { colourSpecialToolKeys } from 'config';
 
 // One Options button. Kept tiny and local — every button in this block shares
@@ -34,10 +33,6 @@ export default function LayerOptions({
   tool = null,
   specialTool = null,
   isCreatedUnconfirmed = false,
-  hasSelectedTable = false,
-  expectedColumns = '',
-  expectedRows = '',
-  onExpectedCountsChange,
   onDeleteTable,
   onCreateTable,
   onConfirmCreated,
@@ -83,18 +78,6 @@ export default function LayerOptions({
           testId={'opt-cancel-created'}
           label={'Cancel'}
           onClick={onCancelCreated}
-        />
-      );
-    }
-    // The expected column/row hints describe one table, so they are only shown once a
-    // table is selected — a page with no table gets the buttons alone.
-    if (hasSelectedTable) {
-      content.push(
-        <ExpectedCountsFields
-          key={'expected-counts'}
-          expectedColumns={expectedColumns}
-          expectedRows={expectedRows}
-          onChange={onExpectedCountsChange}
         />
       );
     }

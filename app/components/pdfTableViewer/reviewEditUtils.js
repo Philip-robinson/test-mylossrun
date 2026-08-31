@@ -132,52 +132,56 @@ export const applyEditToGrid = (rows, cell, text, confidence) => {
   });
 };
 
+// True when two getBoundingClientRect-shaped rectangles describe the same box.
+// Compared member by member because a fresh measurement is a NEW object every time,
+// so identity says nothing; this is what lets a caller re-measure after every paint
+// and set state only when the box has actually moved.
+export const sameRect = (a, b) =>
+  a === b ||
+  (a != null &&
+    b != null &&
+    a.left === b.left &&
+    a.top === b.top &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.right === b.right &&
+    a.bottom === b.bottom);
+
 // Hold `value` within [min, max], with `min` winning when the range is empty -
 // which is what keeps a dialog larger than the viewport pinned at 0 rather than
 // pushed off the near edge.
 const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
 
-// Where to put the edit dialog so that it never covers the cell being edited:
-// above it when there is room, else to its left, else to its right, else below
-// it. Pure arithmetic on a getBoundingClientRect-shaped `cellRect`, a
-// { width, height } `dialogSize`, a { width, height } `viewport` and an optional
-// { x, y } `pointer`.
+// Where to put the edit dialog so that it never covers the cell being edited,
+// which now holds the field the correction is typed into. Pure arithmetic on a
+// getBoundingClientRect-shaped `cellRect`, a { width, height } `dialogSize` and a
+// { width, height } `viewport`.
 //
-// The right is fit-checked rather than taken as an unconditional last resort:
-// a WIDE element - the review screen's title spans almost the whole editor -
-// leaves room on neither side, and an unchecked right opened the dialog off the
-// screen. Below is the true last resort, and it always fits somewhere because
-// the left is free to move.
-export const dialogPlacement = (cellRect, dialogSize, viewport, pointer) => {
-  const above = cellRect.top - dialogSize.height;
-  if (above >= 0) {
-    return {
-      left: clamp(cellRect.left, 0, viewport.width - dialogSize.width),
-      top: above,
-      placement: 'above',
-    };
-  }
-  const top = clamp(cellRect.top, 0, viewport.height - dialogSize.height);
+// The dialog is bottom-aligned with the cell and put BESIDE it: its bottom right
+// corner on the cell's bottom left corner when there is room to the left,
+// otherwise its bottom left corner on the cell's bottom right corner. A cell too
+// high on the screen for the dialog to reach up from its bottom edge - and one
+// too low for the dialog to hang below it - is answered by moving the dialog until
+// it fits, which is what the top clamp does.
+//
+// The final fallback is the pathological case only: a dialog wider than the space
+// on either side of the cell fits nowhere beside it, so it is pinned to the
+// nearest edge rather than being placed off screen.
+export const dialogPlacement = (cellRect, dialogSize, viewport) => {
+  const top = clamp(
+    cellRect.bottom - dialogSize.height,
+    0,
+    viewport.height - dialogSize.height,
+  );
   const left = cellRect.left - dialogSize.width;
   if (left >= 0) return { left, top, placement: 'left' };
   if (cellRect.right + dialogSize.width <= viewport.width) {
     return { left: cellRect.right, top, placement: 'right' };
   }
-  // Below the element, with the pointer choosing the side: to its left while that
-  // stays on screen, otherwise to its right. Without a pointer - confirm-and-next
-  // reopens the dialog with no click behind it - it aligns with the element itself.
-  const belowTop = clamp(cellRect.bottom, 0, viewport.height - dialogSize.height);
-  const leftOfPointer = pointer == null ? null : pointer.x - dialogSize.width;
-  const belowLeft =
-    leftOfPointer === null
-      ? cellRect.left
-      : leftOfPointer >= 0
-        ? leftOfPointer
-        : pointer.x;
   return {
-    left: clamp(belowLeft, 0, viewport.width - dialogSize.width),
-    top: belowTop,
-    placement: 'below',
+    left: clamp(left, 0, viewport.width - dialogSize.width),
+    top,
+    placement: 'left',
   };
 };
 

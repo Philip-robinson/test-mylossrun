@@ -19,15 +19,14 @@ const shown = () => ALL_TESTIDS.filter((id) => screen.queryByTestId(id) !== null
 describe('LayerOptions', () => {
   describe('borderMode', () => {
     it('offers the table-boundary actions', () => {
-      render(<LayerOptions editorMode={'border'} hasSelectedTable />);
+      render(<LayerOptions editorMode={'border'} />);
       expect(shown()).toEqual(['opt-delete-table', 'opt-create-table']);
-      expect(screen.getByTestId('opt-expected-columns')).toBeInTheDocument();
-      expect(screen.getByTestId('opt-expected-rows')).toBeInTheDocument();
     });
 
-    it('omits the expected counts when no table is selected', () => {
-      render(<LayerOptions editorMode={'border'} hasSelectedTable={false} />);
+    it('renders no expected-count fields', () => {
+      render(<LayerOptions editorMode={'border'} />);
       expect(screen.queryByTestId('opt-expected-columns')).toBeNull();
+      expect(screen.queryByTestId('opt-expected-rows')).toBeNull();
     });
 
     it('adds Calculate and Cancel while a created table is unconfirmed', () => {

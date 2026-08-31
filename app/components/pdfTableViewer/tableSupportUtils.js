@@ -7,10 +7,13 @@
 import {
   highConfidence,
   lowConfidence,
+  reviewEditedCellConfidence,
 } from 'config';
 import {
+  comesAfter,
   hasSavedGrid,
   isAmalgamated,
+  sortByOrder,
 } from 'components/pdfTableViewer/gridUtilities';
 import { collectColumnNames } from 'components/pdfTableViewer/layerUtils';
 import { newUUID } from 'common/utils';
@@ -280,6 +283,14 @@ export function cellSpanSignature(table) {
     .join('|');
 }
 
+// The tables a root holds in `next` with no grid laid out for them, in document order.
+// Empty for a table with no links, and for one whose group has a saved grid, which is
+// described by its grid size instead.
+export function additionalTables(t) {
+  if (!t || hasSavedGrid(t)) return [];
+  return sortByOrder(Object.values(t.next ?? {}));
+}
+
 // The size lines for a left-column table entry, as { sizeLine, tablesLine } — an object
 // rather than one newline-joined string so the function stays purely arithmetic and the
 // caller decides how the two lines are laid out.
@@ -298,8 +309,9 @@ export function cellSpanSignature(table) {
 // `columnName`s across the table and every table reachable through its `next` map, since
 // each named sub-title supplies a column of the joined result.
 //
-// `tablesLine` is null for a table with no saved link grid, otherwise the grid's own
-// dimensions as "A × B Tables".
+// `tablesLine` is the grid's own dimensions as "A × B Tables" for a table with a saved link
+// grid, "Additional tables N" for a root holding links with no grid laid out for them, and
+// null for a table with neither.
 export function tableSizeLabel(t) {
   // Sub-title rows within a table's own row range — the same guard the editor's
   // renderSectionTitles applies before drawing one.
@@ -323,6 +335,9 @@ export function tableSizeLabel(t) {
     baseColumns = (t.columnWidths ?? []).length;
     baseRows = (t.rowHeights ?? []).length;
     subTitles = subTitleRows(t);
+    // No grid size to report, so the line states how many tables the group holds.
+    const extra = additionalTables(t).length;
+    if (extra > 0) tablesLine = `Additional tables ${extra}`;
   } else {
     const resolve = (r, c) => {
       if (r === 0 && c === 0) return t; // (0,0) is always the Root table itself
@@ -423,6 +438,100 @@ export function mergeRolesByTableId(tables) {
     roles[table.tableId] = MERGE_ROLE_JOINED;
   });
   return roles;
+}
+
+// Every table in `list`, at the top level and inside every `next` map.
+const allTablesDeep = (list) => [
+  ...(list ?? []),
+  ...linkedTablesWithParents(list).map(({ table }) => table),
+];
+
+// Whether the SET of tables differs between two top-level lists: which table ids exist, and
+// whether each is soft-deleted. Geometry, names, cells and every other field are ignored.
+export function tableSetChanged(before, after) {
+  const project = (list) => {
+    const map = new Map();
+    allTablesDeep(list).forEach((t) => map.set(t.tableId, Boolean(t.deleted)));
+    return map;
+  };
+  const a = project(before);
+  const b = project(after);
+  if (a.size !== b.size) return true;
+  for (const [id, deleted] of a) {
+    if (!b.has(id) || b.get(id) !== deleted) return true;
+  }
+  return false;
+}
+
+// The four states a table's Link label can be in.
+export const LINK_LABEL_END_LINKING = 'endLinking';
+export const LINK_LABEL_ROOT = 'root';
+export const LINK_LABEL_JOINED = 'joined';
+export const LINK_LABEL_PLAIN = 'plain';
+
+// A table's Link label: its state and the text to draw. `roles` is a mergeRolesByTableId
+// map, `parents` a linkedTablesWithParents list, and `linkingRootId` the table rooting an
+// open linking session, or null. The session wins over the role, so the root of a group
+// being added to reads "End Linking" rather than "Linked".
+export function linkLabelText(table, roles, parents, linkingRootId) {
+  const id = table?.tableId;
+  if (id != null && id === linkingRootId) {
+    return { state: LINK_LABEL_END_LINKING, text: 'End Linking' };
+  }
+  const role = (roles ?? {})[id];
+  if (role === MERGE_ROLE_JOINED) {
+    const entry = (parents ?? []).find((e) => e.table.tableId === id);
+    return {
+      state: LINK_LABEL_JOINED,
+      text: `Linked to ${entry?.parentName ?? id}`,
+    };
+  }
+  if (role === MERGE_ROLE_ROOT) {
+    return { state: LINK_LABEL_ROOT, text: 'Linked' };
+  }
+  return { state: LINK_LABEL_PLAIN, text: 'Selected' };
+}
+
+// Whether `table` may join the linked group rooted at `root`: it must not be the root, must
+// be in no group already, and must come after the root in document order.
+export function canJoinLinkGroup(table, root, roles) {
+  if (!table || !root) return false;
+  if (table.tableId === root.tableId) return false;
+  if ((roles ?? {})[table.tableId]) return false;
+  return comesAfter(table, root);
+}
+
+// Take one table back out of the linked group rooted at `rootId` and return it to the
+// top-level list, placed in document order among the tables already there rather than
+// appended, so the Document Overview still reads down the document.
+//
+// The root's saved grid is dropped WHOLE, not just the removed table's cell: it was laid out
+// over a membership that no longer holds, and a grid still naming the table that just left
+// would keep it in the extraction. `next` goes to null once the last member leaves, so the
+// root stops reading as amalgamated.
+//
+// Only a DIRECT member is removable: `rootId` must name a top-level table and `tableId` a key
+// of its own `next` map. Anything else — an unknown id, a member of another group, a table
+// nested deeper — returns the list unchanged BY REFERENCE, so the caller can test for it.
+export function removeFromLinkGroup(tables, rootId, tableId) {
+  const list = tables ?? [];
+  const root = list.find((t) => t.tableId === rootId);
+  const removed = root?.next?.[tableId];
+  if (!removed) return list;
+
+  const rest = Object.fromEntries(
+    Object.entries(root.next).filter(([id]) => id !== tableId)
+  );
+  const withoutMember = list.map((t) =>
+    t.tableId === rootId
+      ? { ...t, next: Object.keys(rest).length > 0 ? rest : null, grid: null }
+      : t
+  );
+
+  const at = withoutMember.findIndex((t) => comesAfter(t, removed));
+  return at === -1
+    ? [...withoutMember, removed]
+    : [...withoutMember.slice(0, at), removed, ...withoutMember.slice(at)];
 }
 
 // The table carrying `tableId`, looked for at the top level and then inside each table's
@@ -561,44 +670,43 @@ export function buildCalcReplacement(menuTable, resultTable) {
   );
 }
 
-// A cell holding NOTHING a re-read could destroy: no text (null or blank) and a confidence
-// at or below zero. That is exactly the makeDefaultCell shape — the placeholder
-// buildManualTable seeds a freshly drawn border with, and the one fillGridCells materialises
-// for an uncovered grid square. A cell carrying extracted text is never empty, whatever its
-// confidence.
-const cellIsEmpty = (cell) =>
-  !(cell.text ?? '').trim() && (cell.confidence ?? 0) <= 0;
-
 // The cells of `prevTable` that survive having its geometry replaced by `geometry`
 // ({ bounds, columnWidths, rowHeights }) from a find-grid-lines response.
 //
-// The merge deliberately KEEPS cells — their text is not re-read here — but two kinds of
-// retained cell are provably stale against the new grid and must go, so the fillGridCells
-// pass that follows can materialise them afresh at the right grid square:
+// A cell anchored OUTSIDE the new grid is dropped: its row/column no longer indexes an axis
+// entry, so it describes a square that does not exist. The fillGridCells pass that follows
+// materialises whatever the drop leaves uncovered.
 //
-// * one anchored OUTSIDE the new grid: its row/column no longer indexes an axis entry, so it
-//   describes a square that does not exist;
-// * an EMPTY cell whose drawn grid square moved or resized. The motivating case is a
-//   manually drawn border: buildManualTable seeds it with a single 1×1 cell whose bounds ARE
-//   the whole border, because at that moment the table really is one column by one row. Once
-//   detection supplies an interior grid, square (0,0) is only a fraction of that border but
-//   the placeholder still covers all of it — and being already "covered", fillGridCells
-//   skips it, so the Review crop (which reads cell.bounds) showed the WHOLE table in A1.
+// Every other cell is carried over under the SAME rule reconcileCells applies to an axis
+// edit — compare the drawn grid square at the cell's (row, column) before and after:
 //
-// A cell with text is left alone even when its square changed: its bounds are the tighter OCR
-// text box, and discarding real extracted text is not this merge's job.
+// * square unchanged: keep the cell exactly as it is, tighter OCR bounds and confidence
+//   included. Nothing about the region it was read from has moved.
+// * square moved or resized: adopt the new square as the cell's bounds and zero its
+//   confidence. The text is kept, because discarding real extracted text is not this
+//   merge's job — but it is now a claim about a different piece of the page, so it has to
+//   read as one: confidence 0 renders the cell red and puts it in the next re-read.
+//
+// Adopting the new square is not cosmetic. `cell.bounds` is the rectangle
+// buildCalcCellsRequestTable sends as the region to READ and the rectangle the review
+// screen crops, so a cell left sitting on its old square makes the next Calculate read the
+// wrong strip of the page. When a re-detected grid gains or loses a row at the top, every
+// retained cell is off by one and Calculate silently copies each row's text into the row
+// below it, leaving the table's last row never read at all.
 export function retainMergedCells(prevTable, geometry) {
   const R = (geometry.rowHeights ?? []).length;
   const C = (geometry.columnWidths ?? []).length;
-  return (prevTable.cells ?? []).filter((cell) => {
-    if (cell.row >= R || cell.column >= C) return false;
-    if (!cellIsEmpty(cell)) return true;
-    return !boundsDiffer(
-      gridSquareBounds(prevTable, cell.row, cell.column),
-      gridSquareBounds(geometry, cell.row, cell.column),
-      GRID_SQUARE_EPS
-    );
-  });
+  return (prevTable.cells ?? [])
+    .filter((cell) => cell.row < R && cell.column < C)
+    .map((cell) => {
+      // recalcCellBounds rather than gridSquareBounds: it sums the spanned axis entries,
+      // so a rowSpan/columnSpan > 1 cell is compared and re-seated across its whole block
+      // rather than against its top-left square alone.
+      const before = recalcCellBounds(prevTable, cell);
+      const after = recalcCellBounds(geometry, cell);
+      if (!boundsDiffer(before, after, GRID_SQUARE_EPS)) return cell;
+      return { ...cell, bounds: after, confidence: 0 };
+    });
 }
 
 // Merge a find-grid-lines response into the full metadata tables list. The response carries
@@ -608,8 +716,9 @@ export function retainMergedCells(prevTable, geometry) {
 // Matching is by BOUNDS OVERLAP, not `tableInPage` (which is an unreliable positional index):
 // for each returned table the same-page, non-soft-deleted metadata table with the LARGEST
 // overlap area has its bounds/columnWidths/rowHeights replaced (id, name, title, stage are
-// kept, and so are its cells bar the ones retainMergedCells finds stale against the new
-// grid). The other non-soft-deleted tables the returned table also overlaps are spurious
+// kept, and so are its cells — re-seated onto the new grid by retainMergedCells, which drops
+// the ones the new grid has no square for). The other non-soft-deleted tables the returned
+// table also overlaps are spurious
 // duplicates and are HARD-deleted (removed from the list); this is distinct from the soft
 // `deleted` flag, which records a deliberate manual deselection and is therefore never matched,
 // resurrected, or hard-deleted here. A returned table that overlaps no live table is APPENDED as
@@ -705,7 +814,7 @@ export function titlesEqual(a, b) {
 
 // The low-confidence (RED) cells of a table: those with confidence == null or below
 // lowConfidence() (50). This is the SAME predicate confidenceColour uses to paint a cell
-// red — the orange band (< highConfidence(), 80) is deliberately EXCLUDED, because
+// red — the orange band (< highConfidence(), 70) is deliberately EXCLUDED, because
 // Recalculate only re-reads the cells the UI marks red. Tolerates a missing cells array.
 export function selectLowConfidenceCells(cells) {
   return (cells ?? []).filter(
@@ -894,18 +1003,32 @@ export function buildCalcCellsRequestTable(table) {
 //   - returned `specials` map POSITIONALLY onto specialAreaEntries(table) — the same order the
 //     request was built from — updating each section title's `data` or the footer, bounds kept.
 // Nothing else changes: no bounds, no axes, no confirmationStage, no name.
+// Whether a reading was entered by hand and so outranks a fresh read of the same
+// rectangle. A correction is recorded at reviewEditedCellConfidence(), which is what
+// `_is_low` already reads to keep the next extraction off that region; the page-exit
+// re-read has to honour the same mark or it silently retypes what the user just fixed.
+//
+// Moving a rectangle is not a case this has to allow for: an edit that moves a cell zeroes
+// its confidence (zeroConfidenceInRects), so a moved cell is no longer at the manual mark
+// and is re-read exactly as it should be. What this protects is the other case — a
+// structural edit elsewhere on the page dragging every cell of the table through a re-read
+// it did not need.
+const manuallyEntered = (reading) =>
+  reading?.confidence === reviewEditedCellConfidence();
+
 export function mergeCalcCellsResponse(table, responseTable) {
   const byKey = new Map(
     (responseTable?.cells ?? []).map((cell) => [`${cell.row},${cell.column}`, cell])
   );
   const cells = (table.cells ?? []).map((cell) => {
+    if (manuallyEntered(cell)) return cell;
     const read = byKey.get(`${cell.row},${cell.column}`);
     return read ? { ...cell, text: read.text, confidence: read.confidence } : cell;
   });
 
   const merged = { ...table, cells };
 
-  if (responseTable?.title && table.title) {
+  if (responseTable?.title && table.title && !manuallyEntered(table.title)) {
     merged.title = {
       ...table.title,
       text: responseTable.title.text,
@@ -923,6 +1046,7 @@ export function mergeCalcCellsResponse(table, responseTable) {
       const entry = entries[i];
       if (!entry || !read) return;
       if (entry.kind === 'footer') {
+        if (manuallyEntered(table.footer)) return;
         merged.footer = {
           ...table.footer,
           text: read.text,
@@ -930,6 +1054,7 @@ export function mergeCalcCellsResponse(table, responseTable) {
         };
         return;
       }
+      if (manuallyEntered((table.sectionTitles ?? [])[entry.index]?.data)) return;
       sectionTitles = (sectionTitles ?? []).map((section, index) =>
         index === entry.index
           ? {

@@ -1,17 +1,24 @@
 'use client';
 
-// The extraction review screen: fills the editor's middle panel and shows the single
-// flat table produced by merging a linked group, so the user can see what will be built
-// before committing to it. Exit hands the panel back to the editor; clicking any cell —
-// or the table's title, which sits above the grid — opens the cell-edit dialog, whose
-// correction is written both into what is displayed and, through `onEditTables`, into
-// the editor's locally held document metadata. `onEditTables` marks the document dirty
-// and the editor's Save button stays the persistence point for ordinary editing.
+// The extraction review screen: fills the editor's middle panel and shows the tables
+// produced by merging a linked group, so the user can see what will be built before
+// committing to it. A group carrying the placeholder section-title column arrives as one
+// table per section, and the tab strip under the grid is how the reviewer moves between
+// them; a group without one arrives as a single table and shows no strip at all.
 //
-// Export is the way out the other side: it saves through `onSave`, turns the merged
-// table into a spreadsheet, hands the user the file and returns to the PDF list.
+// Clicking any cell — or the table's title, which sits above the grid — turns that cell
+// into a field and opens the cell-edit dialog beside it. The correction is typed in the
+// cell and settled by the dialog's buttons; the panel holds the text in between, which
+// is why `editing` carries it. A confirmed correction is written both into what is
+// displayed and, through `onEditTables`, into the editor's locally held document
+// metadata. `onEditTables` marks the document dirty and the editor's Save button stays
+// the persistence point for ordinary editing.
+//
+// Exit is the only way out: it saves through `onSave` first, because the export the
+// Document Overview offers is built from what the SERVER holds. Exporting itself lives
+// there rather than here — one workbook covers the whole document.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -23,8 +30,10 @@ import {
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import toast from 'react-hot-toast';
-import { extractTable, getCellImages, tableToExcel } from 'services/images';
+import { extractTable, getCellImages } from 'services/images';
 import CellEditDialog from 'components/pdfTableViewer/CellEditDialog';
+import ReviewCellEditor from 'components/pdfTableViewer/ReviewCellEditor';
+import ReviewTableTabs from 'components/pdfTableViewer/ReviewTableTabs';
 import {
   adjacentPoorCell,
   belowHighConfidenceCells,
@@ -40,6 +49,7 @@ import {
   applyEditToTables,
   cellSourceKey,
   isTitleCell,
+  sameRect,
 } from 'components/pdfTableViewer/reviewEditUtils';
 import {
   highConfidence,
@@ -62,10 +72,6 @@ import {
   reviewTitleLabel,
   reviewWideCellMinCharacters,
 } from 'config';
-import {
-  excelFilename,
-  saveBlob,
-} from 'components/pdfTableViewer/exportUtils';
 
 // Columns are content-sized but capped, and over-long content wraps at word boundaries
 // (never mid-word: `word-break: break-all` would split account numbers and names, which
@@ -180,17 +186,24 @@ export default function ReviewTablePanel({
   onEditTables,
   onExit,
   onSave,
-  originalFilename,
-  onAllFiles,
 }) {
-  const [table, setTable] = useState(null);
+  // Every table the extraction returned, and which of them is on screen. Deliberately not
+  // called `tables`: that prop is the editor's list of PDFTables and is something else.
+  const [mergedTables, setMergedTables] = useState([]);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  // Whether an export is in flight, which locks the panel behind a spinner: the
-  // spreadsheet is built from the table as it stands, so nothing may change under it.
-  const [exporting, setExporting] = useState(false);
-  // The cell being corrected and the on-screen rectangle it occupies:
-  // { cell, rect }, or null when no dialog is open.
+  // Whether the save Exit runs is in flight, which locks the panel behind a spinner so a
+  // second click cannot start a second save.
+  const [exiting, setExiting] = useState(false);
+  // The cell being corrected: the cell itself, the on-screen rectangle it occupies (the
+  // dialog is placed against it), where it is in the grid — `{ rowIndex, columnIndex }`,
+  // or `title: true` for the title — and the text as it currently stands in the field
+  // inside it. Null when no cell is being corrected.
+  //
+  // The text lives HERE rather than in the field or the dialog because the field and the
+  // buttons that commit it are now in two different places: the cell owns the typing and
+  // the dialog owns the tick, and the panel is what they have in common.
   const [editing, setEditing] = useState(null);
   // Where the user is: `{ label, rowIndex, columnIndex }` for the grid cell last clicked
   // or last jumped to from the list, `{ label, title: true }` for the title, or null
@@ -240,7 +253,8 @@ export default function ReviewTablePanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setTable(null);
+    setMergedTables([]);
+    setActiveIndex(0);
     // A coordinate means nothing against a different table.
     setSelected(null);
     const key = JSON.stringify([pdfId, tableId]);
@@ -252,7 +266,7 @@ export default function ReviewTablePanel({
       try {
         const data = await pending;
         if (cancelled) return;
-        setTable(data?.table ?? null);
+        setMergedTables(data?.tables ?? []);
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
@@ -266,14 +280,17 @@ export default function ReviewTablePanel({
     };
   }, [pdfId, tableId]);
 
-  const rows = table?.cells ?? [];
+  // The tab on screen. Everything the panel derives below reads this, so the review bar
+  // and the Go to… list describe the table the user is actually looking at.
+  const activeTable = mergedTables[activeIndex] ?? null;
+  const rows = activeTable?.cells ?? [];
   // Recomputed every render from the DISPLAYED grid, so both the count and the list
   // of places to go shrink as corrections are confirmed. This is the list the GRID asks,
   // and only the grid: it holds nothing but positions, so the title can never match one.
   const poorCells = belowHighConfidenceCells(rows, highConfidence());
   // The title's entry, or null when there is no title or it was read confidently.
   const titleEntry = lowConfidenceTitle(
-    table?.title,
+    activeTable?.title,
     highConfidence(),
     reviewTitleLabel()
   );
@@ -284,16 +301,51 @@ export default function ReviewTablePanel({
 
   // The title as a source reference the edit dialog and the edit helpers understand: it
   // names the table holding the title rather than a position in the grid.
-  const titleCell = table?.title
+  const titleCell = activeTable?.title
     ? {
-        tableId: table.title.tableId,
+        tableId: activeTable.title.tableId,
         titleRef: true,
-        text: table.title.text,
-        confidence: table.title.confidence,
+        text: activeTable.title.text,
+        confidence: activeTable.title.confidence,
       }
     : null;
 
   const titleSelected = selected?.title === true;
+  // Whether the field is in the TITLE rather than in a grid cell.
+  const titleEditing = editing?.title === true;
+
+  // What the field in the cell reports as it is typed into. Written back through the
+  // updater form so that a keystroke arriving after the edit was closed leaves it closed
+  // rather than resurrecting it.
+  const handleEditText = (text) =>
+    setEditing((previous) => previous && { ...previous, text });
+
+  // The rectangle the dialog is placed against, kept true to where the cell actually is.
+  //
+  // It cannot be measured once at the click and left: putting a field INTO the cell
+  // changes the cell. A narrow column widens to the field's floor, the table's automatic
+  // layout redistributes the rest of the row around it, and the cell that was clicked
+  // ends up somewhere other than where it was measured — so a dialog placed on the
+  // click-time rectangle sat over the very cell it is meant to sit beside. The field also
+  // grows as it is typed into, which moves the cell's bottom edge the dialog aligns with.
+  //
+  // Re-measured after every paint for that reason, and guarded on the measurement rather
+  // than on a dependency list: an unchanged rectangle sets no state, so the update this
+  // makes settles after one round instead of measuring for ever.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    if (!editing) return;
+    const element = editing.title
+      ? titleElementRef.current
+      : cellElementsRef.current[`${editing.rowIndex}:${editing.columnIndex}`];
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    setEditing((previous) =>
+      previous && !sameRect(previous.rect, rect)
+        ? { ...previous, rect }
+        : previous
+    );
+  });
 
   // Bring a chosen entry into view. 'nearest' scrolls the least that will do, so
   // something already on screen does not jump, and only the review panel's own scroller
@@ -322,6 +374,16 @@ export default function ReviewTablePanel({
 
   const handleGoToCell = (label) =>
     goToCell(poorEntries.find((entry) => entry.label === label));
+
+  // A grid coordinate means nothing against a different grid, so moving tab drops both the
+  // marked cell and any open dialog — the same reasoning the extraction effect applies when
+  // the addressed table changes. The image cache is keyed by cell SOURCE rather than by
+  // position, so it survives the move and is left alone.
+  const handleTabChange = (index) => {
+    setActiveIndex(index);
+    setSelected(null);
+    setEditing(null);
+  };
 
   // Where each step button would land, computed rather than stored: it is also what
   // decides whether that button has anywhere to go, and one source for both keeps a
@@ -360,7 +422,8 @@ export default function ReviewTablePanel({
   // the caller decide what to do next without repeating the decision about whether the
   // save worked. A title correction leaves the grid alone and comes back with it
   // unchanged, since the title is not in it.
-  const commitCorrection = (text) => {
+  const commitCorrection = () => {
+    const { text } = editing;
     const next = applyEditToTables(
       tables,
       tableId,
@@ -375,30 +438,41 @@ export default function ReviewTablePanel({
       return null;
     }
     if (isTitleCell(editing.cell)) {
-      setTable((prev) => ({
-        ...prev,
-        title: {
-          ...prev.title,
-          text,
-          confidence: reviewEditedCellConfidence(),
-        },
-      }));
+      // Every table of a split carries the SAME title, so a title correction shows on all
+      // of them or on none.
+      setMergedTables((prev) =>
+        prev.map((merged) => ({
+          ...merged,
+          title: merged.title && {
+            ...merged.title,
+            text,
+            confidence: reviewEditedCellConfidence(),
+          },
+        }))
+      );
       onEditTables(next);
-      return table.cells;
+      return activeTable.cells;
     }
-    const cells = applyEditToGrid(
-      table.cells,
-      editing.cell,
-      text,
-      reviewEditedCellConfidence(),
-    );
-    setTable((prev) => ({ ...prev, cells }));
+    // Applied to EVERY tab's grid, not just the visible one: a section-title column's
+    // carried value repeats down many rows and can now repeat across several split tables,
+    // so updating only what is on screen would leave the others showing the old text until
+    // the next extraction.
+    const updated = mergedTables.map((merged) => ({
+      ...merged,
+      cells: applyEditToGrid(
+        merged.cells,
+        editing.cell,
+        text,
+        reviewEditedCellConfidence(),
+      ),
+    }));
+    setMergedTables(updated);
     onEditTables(next);
-    return cells;
+    return updated[activeIndex].cells;
   };
 
-  const handleConfirm = (text) => {
-    commitCorrection(text);
+  const handleConfirm = () => {
+    commitCorrection();
     setEditing(null);
   };
 
@@ -410,9 +484,9 @@ export default function ReviewTablePanel({
   // has already left, and `adjacentPoorCell` would answer by starting again at the top.
   // The cell handed to the dialog comes from the UPDATED grid, since a section-title
   // correction can change the target's text too.
-  const handleConfirmAndNext = (text) => {
+  const handleConfirmAndNext = () => {
     const target = nextPoor;
-    const cells = commitCorrection(text);
+    const cells = commitCorrection();
     if (cells === null || !target) {
       setEditing(null);
       return;
@@ -424,56 +498,39 @@ export default function ReviewTablePanel({
       setEditing({
         cell: titleCell,
         rect: titleElementRef.current?.getBoundingClientRect() ?? editing.rect,
+        title: true,
+        text: titleCell?.text ?? '',
       });
       return;
     }
     const element =
       cellElementsRef.current[`${target.rowIndex}:${target.columnIndex}`];
+    const nextCell = cells[target.rowIndex][target.columnIndex];
     setEditing({
-      cell: cells[target.rowIndex][target.columnIndex],
+      cell: nextCell,
       // Measured after the scroll, so the dialog is placed against where the cell has
       // just moved to rather than where it was.
       rect: element?.getBoundingClientRect() ?? editing.rect,
+      rowIndex: target.rowIndex,
+      columnIndex: target.columnIndex,
+      text: nextCell.text ?? '',
     });
   };
 
-  // Save, build the spreadsheet, save it to the user's downloads and leave.
+  // Leave for the editor, saving first.
   //
-  // The panel locks behind its spinner FIRST, before the save: the lock is what stops a
-  // second Export starting, and a save takes long enough for a second click to land inside
-  // it — which would build and save the workbook twice. The overlay the lock raises covers
-  // the button as well, so in practice the guard below is never reached twice. The lock is
-  // dropped again only on the ways this does NOT go on to hand a file over; on the way that
-  // does, `onAllFiles` takes the panel away with the spinner still up.
+  // The save is not optional and its result is not ignored: the export the Document
+  // Overview offers is built from what the SERVER holds, so leaving with edits unsent would
+  // quietly export the wrong document. A failed save has already raised its own toast, so
+  // there is nothing to add here — the panel simply stays put.
   //
-  // The save comes before the build because the export is built from what the SERVER holds: a
-  // save that did not reach it has already raised its own toast and left the document dirty,
-  // so there is nothing to add here and nothing worth exporting.
-  //
-  // The workbook arrives as bytes — /api/to-excel consumes the presigned URL server-side —
-  // so handing it over is a same-origin blob save that completes before this line returns,
-  // and the return to the PDF list can simply follow it.
-  const handleExport = async () => {
-    if (exporting) return;
-    setExporting(true);
-    try {
-      const saved = await onSave();
-      if (!saved) {
-        setExporting(false);
-        return;
-      }
-      const workbook = await tableToExcel({
-        ...table,
-        pdfId,
-        rootTableId: tableId,
-        originalFilename,
-      });
-      saveBlob(workbook, excelFilename(originalFilename));
-      onAllFiles();
-    } catch (err) {
-      toast.error(err.message);
-      setExporting(false);
-    }
+  // The lock is what stops a second click starting a second save.
+  const handleExit = async () => {
+    if (exiting) return;
+    setExiting(true);
+    const saved = await onSave();
+    setExiting(false);
+    if (saved) onExit();
   };
 
   return (
@@ -592,20 +649,23 @@ export default function ReviewTablePanel({
           view while the grid moves under it — it names what is being read, which is worth
           having to hand throughout. Drawn and flagged exactly as a cell is, and editable
           in the same dialog: the extraction misreads a heading as readily as a value. */}
-      {!loading && !error && table?.title && (
+      {!loading && !error && activeTable?.title && (
         <Box sx={{ flexShrink: 0, px: 1, pt: 1 }}>
           <Box
             data-testid={'review-title'}
             ref={titleElementRef}
             style={titleStyle(Boolean(titleEntry))}
             onClick={(event) => {
+              // A click landing in the field of a title already being corrected is not a
+              // fresh click on the title: restarting the edit would throw away what has
+              // been typed.
+              if (titleEditing) return;
               setSelected({ label: reviewTitleLabel(), title: true });
               setEditing({
                 cell: titleCell,
                 rect: event.currentTarget.getBoundingClientRect(),
-                // The title is nearly as wide as the editor, so the dialog cannot go
-                // beside it and falls back to below, where the click decides the side.
-                pointer: { x: event.clientX, y: event.clientY },
+                title: true,
+                text: activeTable.title.text ?? '',
               });
             }}
           >
@@ -614,10 +674,17 @@ export default function ReviewTablePanel({
                 data-testid={'review-title-selection'}
                 style={cellSelectionStyle()}
               >
-                {table.title.text}
+                {titleEditing ? (
+                  <ReviewCellEditor
+                    value={editing.text}
+                    onChange={handleEditText}
+                  />
+                ) : (
+                  activeTable.title.text
+                )}
               </div>
             ) : (
-              table.title.text
+              activeTable.title.text
             )}
           </Box>
         </Box>
@@ -684,7 +751,7 @@ export default function ReviewTablePanel({
                     // The merged table's leading rows are its headers; there is no
                     // per-cell header flag to consult.
                     const Tag =
-                      rowIndex < (table.headerCount ?? 0) ? 'th' : 'td';
+                      rowIndex < (activeTable.headerCount ?? 0) ? 'th' : 'td';
                     // Flagged on the SAME rule the bar counts by, and deliberately not
                     // on a sourceless position: a blank nothing ever read is not a poor
                     // reading. `poorCells` already applies both, so ask it rather than
@@ -697,6 +764,12 @@ export default function ReviewTablePanel({
                     const isSelected =
                       selected?.rowIndex === rowIndex &&
                       selected?.columnIndex === columnIndex;
+                    // The one position whose text is being typed. Matched on position
+                    // rather than on source: a section title's value repeats down many
+                    // rows, and only the one that was clicked becomes a field.
+                    const isEditing =
+                      editing?.rowIndex === rowIndex &&
+                      editing?.columnIndex === columnIndex;
                     return (
                       <Tag
                         key={columnIndex}
@@ -708,6 +781,10 @@ export default function ReviewTablePanel({
                         }}
                         style={cellStyle(cell, poor)}
                         onClick={(event) => {
+                          // A click landing in the field of the cell already being
+                          // corrected is not a fresh click on the cell: restarting the
+                          // edit would throw away what has been typed.
+                          if (isEditing) return;
                           setSelected({
                             label: cellCoordinate(rowIndex, columnIndex),
                             rowIndex,
@@ -716,7 +793,9 @@ export default function ReviewTablePanel({
                           setEditing({
                             cell,
                             rect: event.currentTarget.getBoundingClientRect(),
-                            pointer: { x: event.clientX, y: event.clientY },
+                            rowIndex,
+                            columnIndex,
+                            text: cell.text ?? '',
                           });
                         }}
                       >
@@ -729,7 +808,14 @@ export default function ReviewTablePanel({
                               data-testid={'review-cell-selection'}
                               style={cellSelectionStyle()}
                             >
-                              {cell.text}
+                              {isEditing ? (
+                                <ReviewCellEditor
+                                  value={editing.text}
+                                  onChange={handleEditText}
+                                />
+                              ) : (
+                                cell.text
+                              )}
                             </div>
                           ) : (
                             cell.text
@@ -744,6 +830,13 @@ export default function ReviewTablePanel({
           </Box>
         )}
       </Box>
+      {/* Under the grid and above the buttons, so moving between sections is where the
+          sections are. Draws nothing at all for a single table. */}
+      <ReviewTableTabs
+        tables={mergedTables}
+        activeIndex={activeIndex}
+        onChange={handleTabChange}
+      />
       <Box
         sx={{
           flexShrink: 0,
@@ -753,31 +846,22 @@ export default function ReviewTablePanel({
           p: 1,
         }}
       >
-        {/* Before Exit, because it is the way FORWARD: leaving without the spreadsheet is
-            the lesser action and reads better as the last resort on the right. */}
-        <Button
-          data-testid={'review-export'}
-          variant={'contained'}
-          size={'small'}
-          onClick={handleExport}
-        >
-          {'Export'}
-        </Button>
         <Button
           data-testid={'review-exit'}
           variant={'outlined'}
           size={'small'}
-          onClick={onExit}
+          disabled={exiting}
+          onClick={handleExit}
         >
           {'Exit'}
         </Button>
       </Box>
-      {/* The export lock. It covers the whole panel — bar, grid and buttons — because the
-          spreadsheet is built from the table as it stands, so nothing may be changed while
-          it is being built. Opaque rather than a tint, so it also reads as "wait". */}
-      {exporting && (
+      {/* The save lock. It covers the whole panel — bar, grid and buttons — because what is
+          being sent is the document as it stands, so nothing may be changed while it goes.
+          Opaque rather than a tint, so it also reads as "wait". */}
+      {exiting && (
         <Box
-          data-testid={'review-exporting'}
+          data-testid={'review-exiting'}
           sx={{
             position: 'absolute',
             top: 0,
@@ -794,7 +878,7 @@ export default function ReviewTablePanel({
           }}
         >
           <CircularProgress />
-          <Typography variant={'body2'}>{'Exporting…'}</Typography>
+          <Typography variant={'body2'}>{'Saving…'}</Typography>
         </Box>
       )}
       {/* Mounting IS opening: the dialog owns no open state, so it exists only while
@@ -806,7 +890,6 @@ export default function ReviewTablePanel({
           tables={tables}
           reviewedTableId={tableId}
           anchorRect={editing.rect}
-          anchorPointer={editing.pointer}
           image={images[cellSourceKey(editing.cell)]}
           onRequestImage={handleRequestImage}
           onCancel={() => setEditing(null)}

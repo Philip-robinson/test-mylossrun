@@ -3,6 +3,7 @@ import SpecialToolMenu from 'components/pdfTableViewer/SpecialToolMenu';
 
 const KEYS = [
   'header',
+  'title',
   'hideRow',
   'sectionTitle',
   'colouredRows',
@@ -13,13 +14,14 @@ const KEYS = [
 ];
 
 describe('SpecialToolMenu', () => {
-  it('lists its eight entries in order with their labels', () => {
+  it('lists its nine entries in order with their labels', () => {
     render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
     const rendered = screen
       .getAllByRole('button')
       .map((b) => b.getAttribute('data-testid'));
     expect(rendered).toEqual(KEYS.map((k) => `special-tool-${k}`));
     expect(screen.getByText('Section')).toBeInTheDocument();
+    expect(screen.getByText('Title')).toBeInTheDocument();
     expect(screen.getByText('Columns')).toBeInTheDocument();
     expect(screen.getByText('Cell')).toBeInTheDocument();
   });
@@ -52,5 +54,33 @@ describe('SpecialToolMenu', () => {
     expect(onSelectSpecialTool).toHaveBeenCalledWith('colouredTable');
     fireEvent.click(screen.getByTestId('special-tool-colouredCell'));
     expect(onSelectSpecialTool).toHaveBeenCalledWith('colouredCell');
+  });
+
+  it('places Title between Header and Hide Row', () => {
+    render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
+    const order = screen
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('data-testid'));
+    expect(order.slice(0, 3)).toEqual([
+      'special-tool-header',
+      'special-tool-title',
+      'special-tool-hideRow',
+    ]);
+  });
+
+  it('reports the Title key and disarms it when it is already armed', () => {
+    const onSelectSpecialTool = jest.fn();
+    render(
+      <SpecialToolMenu
+        specialTool={'title'}
+        onSelectSpecialTool={onSelectSpecialTool}
+      />
+    );
+    expect(screen.getByTestId('special-tool-title')).toHaveAttribute(
+      'data-active',
+      'true'
+    );
+    fireEvent.click(screen.getByTestId('special-tool-title'));
+    expect(onSelectSpecialTool).toHaveBeenCalledWith('title');
   });
 });

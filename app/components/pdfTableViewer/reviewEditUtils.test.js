@@ -8,6 +8,7 @@ import {
   applyEditToGrid,
   dialogPlacement,
   draggedPosition,
+  sameRect,
 } from 'components/pdfTableViewer/reviewEditUtils';
 
 // A cell of the amalgamated grid: a reference back to a source table cell.
@@ -470,134 +471,111 @@ describe('reviewEditUtils', () => {
     });
   });
 
+  describe('sameRect', () => {
+    const rect = {
+      left: 10,
+      top: 20,
+      right: 70,
+      bottom: 40,
+      width: 60,
+      height: 20,
+    };
+
+    it('holds for a distinct object describing the same box', () => {
+      expect(sameRect(rect, { ...rect })).toBe(true);
+      expect(sameRect(rect, rect)).toBe(true);
+    });
+
+    it('fails on any member that differs', () => {
+      for (const member of Object.keys(rect)) {
+        expect(sameRect(rect, { ...rect, [member]: rect[member] + 1 })).toBe(
+          false
+        );
+      }
+    });
+
+    it('is false against nothing, and true for two nothings only by identity', () => {
+      expect(sameRect(rect, null)).toBe(false);
+      expect(sameRect(null, rect)).toBe(false);
+      expect(sameRect(undefined, rect)).toBe(false);
+      expect(sameRect(null, null)).toBe(true);
+    });
+  });
+
   describe('dialogPlacement', () => {
     const size = { width: 200, height: 100 };
     const viewport = { width: 1000, height: 800 };
 
-    it('sits above the cell when there is room', () => {
+    it('puts its bottom right corner on the cell\'s bottom left corner', () => {
       const placement = dialogPlacement(
         { left: 300, top: 400, right: 380, bottom: 420 },
         size,
         viewport,
       );
-      expect(placement).toEqual({ left: 300, top: 300, placement: 'above' });
+      expect(placement).toEqual({ left: 100, top: 320, placement: 'left' });
     });
 
-    it('clamps left to the viewport right edge when above', () => {
+    it('puts its bottom left corner on the cell\'s bottom right corner when the left will not fit', () => {
       const placement = dialogPlacement(
-        { left: 950, top: 400, right: 990, bottom: 420 },
+        { left: 100, top: 400, right: 180, bottom: 420 },
         size,
         viewport,
       );
-      expect(placement.placement).toBe('above');
-      expect(placement.left).toBe(viewport.width - size.width);
+      expect(placement).toEqual({ left: 180, top: 320, placement: 'right' });
     });
 
-    it('sits to the left when there is no room above but room to the left', () => {
+    // The left is preferred, so the right is taken only once the left genuinely runs
+    // off the screen — a cell exactly a dialog's width from the edge still goes left.
+    it('prefers the left while it fits exactly', () => {
+      const placement = dialogPlacement(
+        { left: 200, top: 400, right: 280, bottom: 420 },
+        size,
+        viewport,
+      );
+      expect(placement).toEqual({ left: 0, top: 320, placement: 'left' });
+    });
+
+    it('moves down until it fits when the cell is too high for it', () => {
+      // Bottom edge at 60, dialog 100 tall: aligning the bottoms would put the top at
+      // -40, so it comes down to the top of the screen instead.
       const placement = dialogPlacement(
         { left: 300, top: 40, right: 380, bottom: 60 },
         size,
         viewport,
       );
-      expect(placement).toEqual({ left: 100, top: 40, placement: 'left' });
+      expect(placement).toEqual({ left: 100, top: 0, placement: 'left' });
     });
 
-    it('sits to the right when there is room neither above nor to the left', () => {
+    it('moves up until it fits when the cell is too low for it', () => {
       const placement = dialogPlacement(
-        { left: 100, top: 40, right: 180, bottom: 60 },
+        { left: 300, top: 830, right: 380, bottom: 850 },
         size,
         viewport,
       );
-      expect(placement).toEqual({ left: 180, top: 40, placement: 'right' });
+      expect(placement).toEqual({
+        left: 100,
+        top: viewport.height - size.height,
+        placement: 'left',
+      });
     });
 
     // A wide element — the review screen's title spans almost the whole editor — leaves
-    // room on neither side, so it falls through to below. Before this, `right` was taken
-    // as an unconditional last resort and the dialog opened off the screen.
-    const wide = { left: 20, top: 40, right: 980, bottom: 80 };
-
-    it('sits below, to the left of the pointer, when there is room neither above nor beside', () => {
-      const placement = dialogPlacement(wide, size, viewport, { x: 600, y: 60 });
-      expect(placement).toEqual({ left: 400, top: 80, placement: 'below' });
-    });
-
-    it('sits below and to the right of the pointer when its left would run off screen', () => {
-      const placement = dialogPlacement(wide, size, viewport, { x: 120, y: 60 });
-      expect(placement).toEqual({ left: 120, top: 80, placement: 'below' });
-    });
-
-    it('clamps the below placement to the viewport right edge', () => {
-      const broad = { width: 700, height: 100 };
-      const placement = dialogPlacement(wide, broad, viewport, { x: 400, y: 60 });
-      expect(placement).toEqual({
-        left: viewport.width - broad.width,
-        top: 80,
-        placement: 'below',
-      });
-    });
-
-    it('aligns below with the element itself when there is no pointer', () => {
-      // confirm-and-next reopens the dialog with no click behind it.
+    // room on neither side. It is pinned to the near edge rather than placed off screen.
+    it('pins to the near edge when there is room on neither side', () => {
+      const wide = { left: 20, top: 400, right: 980, bottom: 440 };
       const placement = dialogPlacement(wide, size, viewport);
-      expect(placement).toEqual({ left: wide.left, top: 80, placement: 'below' });
-    });
-
-    it('only goes below once the right genuinely does not fit', () => {
-      // Narrow cell near the left edge: the right still fits, so it is still taken.
-      const placement = dialogPlacement(
-        { left: 100, top: 40, right: 180, bottom: 60 },
-        size,
-        viewport,
-        { x: 140, y: 50 },
-      );
-      expect(placement.placement).toBe('right');
-    });
-
-    it('clamps top to the viewport bottom edge beside the cell', () => {
-      const tall = { width: 200, height: 500 };
-      const left = dialogPlacement(
-        { left: 400, top: 450, right: 480, bottom: 470 },
-        tall,
-        viewport,
-      );
-      expect(left).toEqual({
-        left: 200,
-        top: viewport.height - tall.height,
-        placement: 'left',
-      });
-      const right = dialogPlacement(
-        { left: 100, top: 450, right: 180, bottom: 470 },
-        tall,
-        viewport,
-      );
-      expect(right).toEqual({
-        left: 180,
-        top: viewport.height - tall.height,
-        placement: 'right',
-      });
+      expect(placement).toEqual({ left: 0, top: 340, placement: 'left' });
     });
 
     it('never returns a negative coordinate, even oversized', () => {
       const huge = { width: 1200, height: 900 };
-      const above = dialogPlacement(
-        { left: 300, top: 950, right: 380, bottom: 970 },
+      const placement = dialogPlacement(
+        { left: 300, top: 400, right: 380, bottom: 420 },
         huge,
         viewport,
       );
-      expect(above.placement).toBe('above');
-      expect(above.left).toBe(0);
-      expect(above.top).toBeGreaterThanOrEqual(0);
-      // Wider than the viewport, so nothing fits beside it and it goes below, pinned to
-      // the near edges rather than escaping past the far ones.
-      const beside = dialogPlacement(
-        { left: 100, top: 400, right: 180, bottom: 420 },
-        huge,
-        viewport,
-        { x: 140, y: 410 },
-      );
-      expect(beside.placement).toBe('below');
-      expect(beside.top).toBe(0);
-      expect(beside.left).toBe(0);
+      expect(placement.left).toBe(0);
+      expect(placement.top).toBe(0);
     });
   });
 

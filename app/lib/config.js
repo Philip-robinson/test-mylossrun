@@ -239,6 +239,21 @@ export function layerGrey() {
   return 'var(--layer-grey)';
 }
 
+// The colour a table that is a member of a linked group is emphasised in, and the width
+// and gap (screen px) of the ring that emphasis draws around such a table on a page
+// thumbnail.
+export function linkedEmphasisColour() {
+  return 'var(--linked-emphasis)';
+}
+
+export function linkedGroupOutlineWidthPx() {
+  return 2;
+}
+
+export function linkedGroupOutlineGapPx() {
+  return 2;
+}
+
 // The grid tool-bar's icon geometry: each button's square size, the thickness of the
 // Rows/Columns bar drawn inside it, and the stroke width of the Special hollow square.
 export function gridToolIconSizePx() {
@@ -491,9 +506,18 @@ export function reviewCellEditDialogWidthPx() {
   return 360;
 }
 
-// Initial number of visible rows of the cell-edit dialog's multiline text field.
+// Initial number of visible rows of the in-cell correction field. One, because the
+// field sits inside the grid cell it corrects and a taller one would shove the whole
+// row open; it grows as it is typed into and can be dragged taller.
 export function reviewCellEditRowCount() {
-  return 4;
+  return 1;
+}
+
+// Narrowest the in-cell correction field may be (screen px). A grid column is sized to
+// its content, so without a floor the field in a one-character column would be too
+// small to type a correction into.
+export function reviewCellEditorMinWidthPx() {
+  return 120;
 }
 
 // Tallest the cell-edit dialog's image area may be (screen px). The crop is scaled down to
@@ -590,6 +614,9 @@ export default {
   layerSpecialCellsBackgroundColour,
   layerColoursBackgroundColour,
   layerGrey,
+  linkedEmphasisColour,
+  linkedGroupOutlineWidthPx,
+  linkedGroupOutlineGapPx,
   gridToolIconSizePx,
   gridToolLineThicknessPx,
   gridToolSquareStrokePx,
@@ -636,6 +663,7 @@ export default {
   confirmColour,
   reviewCellEditDialogWidthPx,
   reviewCellEditRowCount,
+  reviewCellEditorMinWidthPx,
   maxCellEditorImageHeight,
   reviewEditedCellConfidence,
   reviewPoorCellSelectWidthPx,

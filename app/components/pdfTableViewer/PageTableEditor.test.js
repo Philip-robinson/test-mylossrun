@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import PageTableEditor from 'components/pdfTableViewer/PageTableEditor';
 import { makeDefaultCell } from 'components/pdfTableViewer/tableSupportUtils';
@@ -699,6 +700,80 @@ describe('PageTableEditor — the two passes', () => {
       expect(getImage).not.toHaveBeenCalled();
     });
 
+    test('a save reloads the displayed page image from the back end', async () => {
+      const view = await enterGridMode();
+      await waitFor(() =>
+        expect(getImage).toHaveBeenCalledWith(
+          PDF_ID,
+          0,
+          baseImageWidthPx(),
+          'PROCESSED'
+        )
+      );
+
+      getImage.mockClear();
+      await act(async () => {
+        view.rerender(
+          <PageTableEditor
+            metadata={metadataWith([TABLE_A])}
+            page={0}
+            onChange={jest.fn()}
+            savedRevision={1}
+          />
+        );
+      });
+
+      // The save may have changed what the back end renders for this page, so the
+      // rendering on screen is re-fetched rather than left as it was.
+      await waitFor(() =>
+        expect(getImage).toHaveBeenCalledWith(
+          PDF_ID,
+          0,
+          baseImageWidthPx(),
+          'PROCESSED'
+        )
+      );
+    });
+
+    test('a save marks the other cached renderings as needing reload', async () => {
+      const view = await enterGridMode();
+      // Both renderings of this page and width are in the cache: RAW from the boundary
+      // pass, PROCESSED from entering grid mode.
+      await waitFor(() =>
+        expect(getImage).toHaveBeenCalledWith(
+          PDF_ID,
+          0,
+          baseImageWidthPx(),
+          'PROCESSED'
+        )
+      );
+
+      await act(async () => {
+        view.rerender(
+          <PageTableEditor
+            metadata={metadataWith([TABLE_A])}
+            page={0}
+            onChange={jest.fn()}
+            savedRevision={1}
+          />
+        );
+      });
+      getImage.mockClear();
+
+      // Toggling Colours off would have been served from the cache before the save.
+      await act(async () => {
+        fireEvent.click(screen.getAllByTestId('layer-row')[3]);
+      });
+      await waitFor(() =>
+        expect(getImage).toHaveBeenCalledWith(
+          PDF_ID,
+          0,
+          baseImageWidthPx(),
+          'RAW'
+        )
+      );
+    });
+
     test('turning a layer off reports it to the editor', async () => {
       await enterGridMode();
       await act(async () => {
@@ -998,6 +1073,165 @@ describe('PageTableEditor — the two passes', () => {
       fireEvent.click(await screen.findByTestId('opt-colour-submit'));
       await waitFor(() => expect(lastStagedProps().pendingSelection).toBeNull());
       expect(lastStagedProps().specialTool).toBe('colouredRows');
+    });
+  });
+
+  // A create or a delete changes WHICH tables exist, and the host lists from that set: the
+  // Document Overview, the thumbnails and the Save button's dirty flag all read it. Such an
+  // edit is therefore reported at once, while a border move is still held until the pass is
+  // left along with the re-detection it arms.
+  describe('borderMode commits a change to the table set at once', () => {
+    test('a created table is reported without leaving the pass', async () => {
+      const onChange = jest.fn();
+      await renderStaged({ onChange });
+
+      const created = { ...TABLE_A, tableId: 'C', name: 'Gamma' };
+      act(() => {
+        lastStagedProps().onEditTables([TABLE_A, TABLE_B, created]);
+      });
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange.mock.calls[0][0].map((t) => t.tableId)).toEqual([
+        'A',
+        'B',
+        'C',
+      ]);
+    });
+
+    test('a deleted table is reported without leaving the pass', async () => {
+      const onChange = jest.fn();
+      await renderStaged({ onChange });
+
+      act(() => {
+        lastStagedProps().onEditTables([
+          { ...TABLE_A, deleted: true },
+          TABLE_B,
+        ]);
+      });
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const a = onChange.mock.calls[0][0].find((t) => t.tableId === 'A');
+      expect(a.deleted).toBe(true);
+    });
+
+    test('a border move is still held until the pass is left', async () => {
+      const onChange = jest.fn();
+      await renderStaged({ onChange });
+
+      act(() => {
+        lastStagedProps().onEditTables([
+          { ...TABLE_A, bounds: { ...TABLE_A.bounds, left: 0.01 } },
+          TABLE_B,
+        ]);
+      });
+
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    test('a create following a held border move reports both in one commit', async () => {
+      const onChange = jest.fn();
+      await renderStaged({ onChange });
+
+      const moved = { ...TABLE_A, bounds: { ...TABLE_A.bounds, left: 0.01 } };
+      act(() => {
+        lastStagedProps().onEditTables([moved, TABLE_B]);
+      });
+      expect(onChange).not.toHaveBeenCalled();
+
+      const created = { ...TABLE_B, tableId: 'C', name: 'Gamma' };
+      act(() => {
+        lastStagedProps().onEditTables([moved, TABLE_B, created]);
+      });
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const written = onChange.mock.calls[0][0];
+      expect(written.map((t) => t.tableId)).toEqual(['A', 'B', 'C']);
+      expect(written.find((t) => t.tableId === 'A').bounds.left).toBeCloseTo(
+        0.01,
+        6
+      );
+    });
+  });
+
+  // Leaving a table, a page or the boundary pass re-detects the grid lines of everything
+  // whose borders changed on that page. A table created in the pass is such a table: it has
+  // borders and no grid at all, so it is the one that most needs detecting.
+  describe('leaving the boundary pass re-detects a created table', () => {
+    const created = () => ({ ...TABLE_A, tableId: 'NEW', name: 'New' });
+
+    const hintIds = () =>
+      findGridLines.mock.calls.flatMap(([, , , hints]) =>
+        hints.map((h) => h.name)
+      );
+
+    // The editor is controlled: it renders from the metadata its host passes down, so a host
+    // that does not feed an edit back would leave a created table invisible to the component
+    // under test. This stand-in host holds the list, exactly as PDFEditTableStructure does.
+    const renderHosted = async () => {
+      stagedGridEditorEnabled.mockReturnValue(true);
+      function Host() {
+        const [tables, setTables] = React.useState([TABLE_A, TABLE_B]);
+        return (
+          <PageTableEditor
+            metadata={metadataWith(tables)}
+            page={0}
+            onChange={setTables}
+            selectedTableId={'A'}
+            onSelectTable={jest.fn()}
+            onSave={jest.fn().mockResolvedValue(true)}
+          />
+        );
+      }
+      const view = render(<Host />);
+      await screen.findByTestId('staged-editor');
+      return view;
+    };
+
+    const addCreated = async () => {
+      await act(async () => {
+        lastStagedProps().onEditTables([TABLE_A, TABLE_B, created()]);
+      });
+      await waitFor(() =>
+        expect(
+          lastStagedProps().metadataTables.map((t) => t.tableId)
+        ).toContain('NEW')
+      );
+    };
+
+    test('a created table is re-detected when the pass is left', async () => {
+      findGridLines.mockResolvedValue({ tables: [] });
+      await renderHosted();
+      await addCreated();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-tables'));
+      });
+
+      expect(findGridLines).toHaveBeenCalled();
+      expect(hintIds()).toContain('New');
+    });
+
+    test('a created table is re-detected when the page is left', async () => {
+      findGridLines.mockResolvedValue({ tables: [] });
+      await renderHosted();
+      await addCreated();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-next'));
+      });
+
+      expect(hintIds()).toContain('New');
+    });
+
+    test('a page with no created and no moved table owes no detection', async () => {
+      findGridLines.mockResolvedValue({ tables: [] });
+      await renderHosted();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-tables'));
+      });
+
+      expect(findGridLines).not.toHaveBeenCalled();
     });
   });
 

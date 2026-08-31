@@ -150,7 +150,6 @@ export default function LayersPanel({
         tool={tool}
         specialTool={specialTool}
         isCreatedUnconfirmed={isCreatedUnconfirmed}
-        hasSelectedTable={Boolean(selectedTable)}
         {...optionsCallbacks}
       />
 

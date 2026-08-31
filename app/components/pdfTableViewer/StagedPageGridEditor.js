@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box } from '@mui/material';
 import toast from 'react-hot-toast';
 import {
@@ -13,6 +13,7 @@ import {
   layerColumnsColour,
   layerGrey,
   layerRowsColour,
+  linkedEmphasisColour,
   layerSpecialCellsColour,
   sectionTitleMarkerColour,
   sectionTitleMarkerDash,
@@ -28,15 +29,21 @@ import {
   rgbToHex,
   rgbaToPixels,
 } from 'components/pdfTableViewer/colourUtils';
+import TableNameSizeLabel from 'components/pdfTableViewer/TableNameSizeLabel';
+import TableLinkLabel from 'components/pdfTableViewer/TableLinkLabel';
 import {
+  LINK_LABEL_END_LINKING,
   clampBoundaryTarget,
   cleanupAxis,
   cumulative,
   findTableById,
   identityMap,
   makeDefaultCell,
+  linkLabelText,
+  linkedTablesWithParents,
   mergeCells,
   mergeMap,
+  mergeRolesByTableId,
   moveDivider,
   overlaps,
   reconcileAxisEdit,
@@ -64,6 +71,9 @@ const CLICK_DRAG_THRESHOLD_PX = 4;
 // pointer events. The visible <rect> border never carries it, so tests can count the
 // two independently.
 const HIT_LINE_TESTID = 'hit-line';
+
+// data-testid on every table's visible outer border rect.
+const BORDER_RECT_TESTID = 'table-boundary';
 
 // data-testids for the Rows / Columns mode grid lines. Each internal divider draws a
 // visible coloured line (…-line), a transparent wide-stroke hit line that receives the
@@ -199,7 +209,10 @@ export function StagedPageGridEditor({
   dim = false,
   onEditTables,
   onCreatedTable,
-  pdfId, // eslint-disable-line no-unused-vars -- reserved for Calculate wiring (Task 13)
+  // The table rooting an open linking session, or null. Owned by the host, because a session
+  // spans this panel and the page thumbnails.
+  linkingRootId = null,
+  onToggleLinking = () => {},
   onRequestCreate,
   onRequestDelete,
   onSelectedLineChange,
@@ -237,7 +250,7 @@ export function StagedPageGridEditor({
 
   // The selected internal grid line in Rows / Columns mode: { orientation: 'row' | 'column',
   // index } (index is the 1-based divider index k) or null. Reported up via
-  // onSelectedLineChange so the Options block (Task 13) can enable/disable its buttons.
+  // onSelectedLineChange so the Options block can enable/disable its buttons.
   const [selectedLine, setSelectedLine] = useState(null);
 
   // The Rows / Columns tools' new-line gesture: a press in empty space draws a line that
@@ -270,6 +283,17 @@ export function StagedPageGridEditor({
     [metadataTables, page]
   );
 
+  // Each table's part in a linked group, and each joined table's root name. Computed from the
+  // whole document rather than from `samePage`: a joined table's root may sit on another page.
+  const linkRoles = useMemo(
+    () => mergeRolesByTableId(metadataTables),
+    [metadataTables]
+  );
+  const linkParents = useMemo(
+    () => linkedTablesWithParents(metadataTables),
+    [metadataTables]
+  );
+
   // The selected table: the one whose id matches, else the first same-page non-deleted table.
   const selected = useMemo(
     () =>
@@ -288,11 +312,20 @@ export function StagedPageGridEditor({
   const headerToolArmed = gridMode && tool === 'special' && specialTool === 'header';
   const showHeader = showSpecial || headerToolArmed;
   const showOtherSpecial = showSpecial && !headerToolArmed;
+  // Any tool on the Special menu: Header, Title, Hide Row, Section and the Colouring
+  // group. Each acts on a press somewhere in the table rather than on a grid line.
+  const specialToolArmed = gridMode && tool === 'special' && specialTool != null;
 
   // Grid lines are draggable throughout the contents pass. An armed Rows or Columns tool
   // does not take the drag away — it decides what a press that does NOT move means, which
   // handleDragEnd settles on release.
-  const linesDraggable = gridMode;
+  //
+  // An armed Special tool DOES take it away. Those tools want a press anywhere in the
+  // table, and a press that happened to land within the hit line's 8px stroke would move
+  // the divider instead of doing what the tool is for — picking a row to colour, dropping
+  // a section title, dragging out a title rectangle. Withholding the hit line leaves the
+  // lines drawn but inert, so the tool gets every press inside the table.
+  const linesDraggable = gridMode && !specialToolArmed;
 
   // The axis a tool is armed for, or null: 'row' for the Rows tool, 'column' for Columns.
   const toolFor = (orientation) =>
@@ -439,6 +472,40 @@ export function StagedPageGridEditor({
       if (onColouredAreasChange) onColouredAreasChange(next);
       return;
     }
+    // Title-rectangle side resize (Special Cells, Title tool): move exactly one edge of the
+    // selected table's title rectangle, keeping the opposite edge fixed. Clamped to the page,
+    // NOT to the table — a title normally sits outside its table's bounds.
+    if (
+      kind === 'title-left' ||
+      kind === 'title-right' ||
+      kind === 'title-top' ||
+      kind === 'title-bottom'
+    ) {
+      const tt = findTableById(metadataTables, tableId);
+      if (!tt?.title?.bounds) return;
+      const b = { ...tt.title.bounds };
+      if (kind === 'title-left') {
+        const right = b.left + b.width;
+        const nl = Math.max(0, Math.min(frac.fx, right));
+        b.left = nl;
+        b.width = right - nl;
+      } else if (kind === 'title-right') {
+        const nr = Math.min(1, Math.max(frac.fx, b.left));
+        b.width = nr - b.left;
+      } else if (kind === 'title-top') {
+        const bottom = b.top + b.height;
+        const nt = Math.max(0, Math.min(frac.fy, bottom));
+        b.top = nt;
+        b.height = bottom - nt;
+      } else {
+        const nb = Math.min(1, Math.max(frac.fy, b.top));
+        b.height = nb - b.top;
+      }
+      const newTable = { ...tt, title: { ...tt.title, bounds: b } };
+      drag.last = newTable;
+      commitTableEdit(tableId, newTable);
+      return;
+    }
     // Section-title data-area side resize (Special Cells): move exactly one edge of the
     // selected section-title row's data rectangle, keeping the opposite edge fixed.
     if (
@@ -536,6 +603,20 @@ export function StagedPageGridEditor({
         drag.kind === 'carea-right' ||
         drag.kind === 'carea-top' ||
         drag.kind === 'carea-bottom')
+    ) {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', handleDragMove);
+      window.removeEventListener('mouseup', handleDragEnd);
+      return;
+    }
+    // Title-rectangle side resize (Special Cells, Title tool): interim edits committed
+    // during the move are the final state (bounds only), so just tear down the listeners.
+    if (
+      drag &&
+      (drag.kind === 'title-left' ||
+        drag.kind === 'title-right' ||
+        drag.kind === 'title-top' ||
+        drag.kind === 'title-bottom')
     ) {
       dragRef.current = null;
       window.removeEventListener('mousemove', handleDragMove);
@@ -722,6 +803,23 @@ export function StagedPageGridEditor({
     window.addEventListener('mouseup', handleDragEnd);
   };
 
+  // Begin a title-rectangle side resize (Special Cells, Title tool). `kind` is one of
+  // 'title-left' | 'title-right' | 'title-top' | 'title-bottom'.
+  const handleTitleSideHit = (kind, e) => {
+    if (!onEditTables || !selected) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragRef.current = {
+      kind,
+      tableId: selected.tableId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      moved: false,
+    };
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+  };
+
   // Begin a section-title data-area side resize (Special Cells). `kind` is one of
   // 'sarea-left' | 'sarea-right' | 'sarea-top' | 'sarea-bottom'; `sectionRow` is the
   // owning section-title's `tableRow`.
@@ -783,7 +881,13 @@ export function StagedPageGridEditor({
       pixelWidth,
       pixelHeight
     );
-    if (!built) return;
+    // buildManualTable refuses a rectangle that runs off the page or overlaps a live
+    // same-page table. Say so: a successful create is visible at once, so a silent refusal
+    // would be the only way to draw a rectangle and see nothing happen.
+    if (!built) {
+      toast('Not enough room to create a table there');
+      return;
+    }
     onEditTables(built.list);
     if (onSelectTable) onSelectTable(built.table.tableId);
     if (onCreatedTable) onCreatedTable(built.table.tableId);
@@ -852,6 +956,16 @@ export function StagedPageGridEditor({
     // written until Submit.
     if (c.forColour) {
       reportPending({ kind: 'area', rows: [], columns: [], rect: bounds }, bounds);
+      return;
+    }
+    // The Title tool's drag is the table's title rectangle. Deliberately NOT clamped to the
+    // table: a title normally sits above it. The text and confidence are filled in by the
+    // next calculate-cells call, so they are seeded empty.
+    if (c.forTitle) {
+      commitTableEdit(selected.tableId, {
+        ...selected,
+        title: { bounds, text: '', confidence: 0 },
+      });
       return;
     }
     // The Section Title Row tool's drag names the row nearest the drawn area's vertical
@@ -945,10 +1059,15 @@ export function StagedPageGridEditor({
     tool === 'special' &&
     colourSpecialToolKeys().includes(specialTool);
   // The gestures that rubber-band a rectangle rather than acting on a click.
+  // The Title tool is armed: its rectangle offers its four draggable sides.
+  const titleToolArmed = gridMode && tool === 'special' && specialTool === 'title';
+
   const armedForDrag =
     gridMode &&
     tool === 'special' &&
-    (specialTool === 'sectionTitle' || specialTool === 'colouredArea');
+    (specialTool === 'sectionTitle' ||
+      specialTool === 'colouredArea' ||
+      specialTool === 'title');
 
   // Report a changed pending selection, seeding the draft colours from the page pixels
   // under it the first time it becomes non-empty — the swatches then open on a guess
@@ -1055,6 +1174,7 @@ export function StagedPageGridEditor({
         startClientX: e.clientX,
         startClientY: e.clientY,
         forColour: specialTool === 'colouredArea',
+        forTitle: specialTool === 'title',
       };
       setSectionAreaRect({ left: frac.fx, top: frac.fy, width: 0, height: 0 });
       window.addEventListener('mousemove', handleSectionAreaMove);
@@ -1246,7 +1366,7 @@ export function StagedPageGridEditor({
   };
 
 
-  // ---- Imperative handles handed up to the parent (Options block, Task 13) ------------
+  // ---- Imperative handles handed up to the parent (Options block) ---------------------
 
   const startCreate = useCallback(() => setCreating(true), []);
   const startDelete = useCallback(
@@ -1357,12 +1477,31 @@ export function StagedPageGridEditor({
     [dims, renderedSize, pixelWidth, pixelHeight]
   );
 
-  // The selected table's outer border in viewbox px, plus — in the boundary pass alone —
-  // its four draggable edge hit lines. gridMode freezes the boundary, so it draws the rect
-  // and nothing to grab.
-  const renderBorder = () => {
-    if (!selected) return null;
-    if (gridMode) return staticBorderRect();
+  // One table's outer border rect in viewbox px. The selected table takes the border colour;
+  // every other takes the de-emphasised grey. Both colours are var(--…) values, which jsdom
+  // drops from an inline style, so which is which is also carried as a data attribute.
+  const borderRect = (table, isSelected) => (
+    <rect
+      key={`border-${table.tableId}`}
+      data-testid={BORDER_RECT_TESTID}
+      data-tableid={table.tableId}
+      data-selected={isSelected ? 'true' : 'false'}
+      x={table.bounds.left * pixelWidth}
+      y={table.bounds.top * pixelHeight}
+      width={table.bounds.width * pixelWidth}
+      height={table.bounds.height * pixelHeight}
+      fill={'none'}
+      style={{ stroke: isSelected ? layerBorderColour() : layerGrey() }}
+      strokeWidth={1}
+      vectorEffect={'non-scaling-stroke'}
+    />
+  );
+
+  // The selected table's four draggable edge hit lines. Only the boundary pass has them —
+  // gridMode freezes the boundary — and only the selected table: an unselected table is
+  // drawn to be seen and clicked, never dragged.
+  const selectedEdges = () => {
+    if (!selected || gridMode) return null;
     const x = selected.bounds.left * pixelWidth;
     const y = selected.bounds.top * pixelHeight;
     const w = selected.bounds.width * pixelWidth;
@@ -1372,6 +1511,7 @@ export function StagedPageGridEditor({
       strokeWidth: hitLineWidthPx(),
       vectorEffect: 'non-scaling-stroke',
       'data-testid': HIT_LINE_TESTID,
+      'data-tableid': selected.tableId,
       style: { pointerEvents: 'stroke' },
     };
     const edge = (id, x1, y1, x2, y2, kind, cursor) => (
@@ -1389,42 +1529,23 @@ export function StagedPageGridEditor({
       />
     );
     return (
-      <g>
-        <rect
-          x={x}
-          y={y}
-          width={w}
-          height={h}
-          fill={'none'}
-          style={{ stroke: layerBorderColour() }}
-          strokeWidth={1}
-          vectorEffect={'non-scaling-stroke'}
-        />
+      <>
         {edge('b-left', x, y, x, y + h, 'boundary-left', 'ew-resize')}
         {edge('b-right', x + w, y, x + w, y + h, 'boundary-right', 'ew-resize')}
         {edge('b-top', x, y, x + w, y, 'boundary-top', 'ns-resize')}
         {edge('b-bottom', x, y + h, x + w, y + h, 'boundary-bottom', 'ns-resize')}
-      </g>
+      </>
     );
   };
 
-  // The selected table's outer border rect, drawn NOT draggable — used by gridMode, which
-  // shows the boundary but forbids resizing it.
-  const staticBorderRect = () => {
-    if (!selected) return null;
-    return (
-      <rect
-        x={selected.bounds.left * pixelWidth}
-        y={selected.bounds.top * pixelHeight}
-        width={selected.bounds.width * pixelWidth}
-        height={selected.bounds.height * pixelHeight}
-        fill={'none'}
-        style={{ stroke: layerBorderColour() }}
-        strokeWidth={1}
-        vectorEffect={'non-scaling-stroke'}
-      />
-    );
-  };
+  // Every table on the page, so a page's other tables — and a table just created — are
+  // visible while one of them is being edited, rather than the selected one alone.
+  const renderBorder = () => (
+    <g>
+      {samePage.map((t) => borderRect(t, t.tableId === selected?.tableId))}
+      {selectedEdges()}
+    </g>
+  );
 
   // The selected table's internal horizontal grid lines (row dividers), drawn in
   // layerRowsColour() when the Rows layer is on and layerGrey() when it is off. When
@@ -1608,8 +1729,8 @@ export function StagedPageGridEditor({
   };
 
   // The black dotted header rectangle (Special Cells mode): drawn HEADER_MARGIN_PX screen
-  // px outside the first `headerCount` rows of the selected table, with the word "Header" in
-  // its top-right corner.
+  // px outside the first `headerCount` rows of the selected table, with the word "Header"
+  // centred above it.
   const renderHeaderRect = () => {
     if (!selected || !(selected.headerCount > 0)) return null;
     const rows = (selected.rowHeights ?? []).map((v) => v.value);
@@ -1640,10 +1761,10 @@ export function StagedPageGridEditor({
           vectorEffect={'non-scaling-stroke'}
         />
         <text
-          x={x + w}
+          x={x + w / 2}
           y={y}
           dy={'-2'}
-          textAnchor={'end'}
+          textAnchor={'middle'}
           fontFamily={'sans-serif'}
           fontSize={12}
           fill={'black'}
@@ -1806,11 +1927,67 @@ export function StagedPageGridEditor({
   // rows and the coloured areas. The header rectangle is also drawn while the Header tool
   // is armed, whatever the flag says, and that tool suppresses the other two so the row
   // being chosen is the only thing emphasised.
+  // The selected table's title rectangle, dotted in the Special Areas colour. While the
+  // Title tool is armed it also carries four transparent side hit lines, so the rectangle
+  // can be resized by dragging an edge exactly as a section title's data area can.
+  const renderTitleRect = () => {
+    const bounds = selected?.title?.bounds;
+    if (!bounds) return null;
+    const x = bounds.left * pixelWidth;
+    const y = bounds.top * pixelHeight;
+    const w = bounds.width * pixelWidth;
+    const h = bounds.height * pixelHeight;
+    const hitCommon = {
+      stroke: 'transparent',
+      strokeWidth: hitLineWidthPx(),
+      vectorEffect: 'non-scaling-stroke',
+      'data-testid': TITLE_HIT_TESTID,
+      style: { pointerEvents: 'stroke' },
+    };
+    const side = (id, x1, y1, x2, y2, kind, cursor) => (
+      <line
+        key={id}
+        x1={x1}
+        y1={y1}
+        x2={x2}
+        y2={y2}
+        {...hitCommon}
+        cursor={cursor}
+        onMouseDown={(e) => handleTitleSideHit(kind, e)}
+      />
+    );
+    return (
+      <g>
+        <rect
+          data-testid={TITLE_RECT_TESTID}
+          x={x}
+          y={y}
+          width={w}
+          height={h}
+          fill={'none'}
+          style={{ stroke: layerSpecialCellsColour() }}
+          strokeWidth={1}
+          strokeDasharray={'4 3'}
+          vectorEffect={'non-scaling-stroke'}
+        />
+        {titleToolArmed
+          ? [
+              side('title-left', x, y, x, y + h, 'title-left', 'ew-resize'),
+              side('title-right', x + w, y, x + w, y + h, 'title-right', 'ew-resize'),
+              side('title-top', x, y, x + w, y, 'title-top', 'ns-resize'),
+              side('title-bottom', x, y + h, x + w, y + h, 'title-bottom', 'ns-resize'),
+            ]
+          : null}
+      </g>
+    );
+  };
+
   const renderSpecial = () => {
     if (!selected) return null;
     return (
       <g>
         {showHeader ? renderHeaderRect() : null}
+        {showSpecial ? renderTitleRect() : null}
         {showOtherSpecial ? renderSectionTitles() : null}
       </g>
     );
@@ -2054,47 +2231,61 @@ export function StagedPageGridEditor({
           {renderSectionAreaPreview()}
         </svg>
       )}
-      {/* Selected-table label: name + "cols × rows", lifted above the selected table's
-          top-left corner. An absolutely-positioned HTML sibling (the SVG's
-          preserveAspectRatio="none" would distort text). Independent of mouse movement. */}
-      {selected && overlayScale && (
-        <div
-          data-testid={'selected-label'}
-          style={{
-            position: 'absolute',
-            left: selected.bounds.left * pixelWidth * overlayScale.sx,
-            top: Math.max(
-              0,
-              selected.bounds.top * pixelHeight * overlayScale.sy - (12 + 2 * 2)
-            ),
-            backgroundColor: layerBorderColour(),
-            color: 'white',
-            fontFamily: 'sans-serif',
-            fontSize: 12,
-            lineHeight: '12px',
-            padding: 2,
-            whiteSpace: 'nowrap',
-            pointerEvents: 'none',
-            display: 'flex',
-            alignItems: 'stretch',
-          }}
-        >
-          <span data-testid={'selected-label-name'}>{selected.name}</span>
-          <span
-            style={{
-              width: 1,
-              alignSelf: 'stretch',
-              backgroundColor: 'white',
-              margin: '0 6px',
-            }}
-          />
-          <span data-testid={'selected-label-size'}>
-            {`${(selected.columnWidths ?? []).length} × ${
-              (selected.rowHeights ?? []).length
-            }`}
-          </span>
-        </div>
-      )}
+      {/* Every table's pair of labels: name + "cols × rows" above its top-left corner, and
+          its Link label above its top-right. Absolutely-positioned HTML siblings (the SVG's
+          preserveAspectRatio="none" would distort text). Independent of mouse movement.
+
+          The selected table's labels take the border colour and the rest the de-emphasised
+          grey, matching the boundary each sits above — except a Link label in the End
+          Linking state, which takes the emphasis colour whichever table it belongs to. */}
+      {overlayScale &&
+        samePage.map((t) => {
+          const isSelected = t.tableId === selected?.tableId;
+          const top = Math.max(
+            0,
+            t.bounds.top * pixelHeight * overlayScale.sy - (12 + 2 * 2)
+          );
+          const left = t.bounds.left * pixelWidth * overlayScale.sx;
+          const right =
+            (t.bounds.left + t.bounds.width) * pixelWidth * overlayScale.sx;
+          const { state, text } = linkLabelText(
+            t,
+            linkRoles,
+            linkParents,
+            linkingRootId
+          );
+          const ending = state === LINK_LABEL_END_LINKING;
+          const colourName = ending ? 'emphasis' : isSelected ? 'border' : 'grey';
+          const colour = ending
+            ? linkedEmphasisColour()
+            : isSelected
+              ? layerBorderColour()
+              : layerGrey();
+          return (
+            <Fragment key={`labels-${t.tableId}`}>
+              <TableNameSizeLabel
+                table={t}
+                left={left}
+                top={top}
+                colour={isSelected ? layerBorderColour() : layerGrey()}
+                colourName={isSelected ? 'border' : 'grey'}
+              />
+              <TableLinkLabel
+                table={t}
+                left={right}
+                top={top}
+                colour={colour}
+                colourName={colourName}
+                state={state}
+                text={text}
+                interactive={!gridMode}
+                onClick={() =>
+                  onToggleLinking(ending ? null : t.tableId)
+                }
+              />
+            </Fragment>
+          );
+        })}
     </Box>
   );
 }

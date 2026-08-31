@@ -9,7 +9,8 @@ import {
 import userEvent from '@testing-library/user-event';
 import ReviewTablePanel from 'components/pdfTableViewer/ReviewTablePanel';
 import { dialogPlacement } from 'components/pdfTableViewer/reviewEditUtils';
-import { extractTable, getCellImages, tableToExcel } from 'services/images';
+import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
+import { extractTable, getCellImages } from 'services/images';
 import toast from 'react-hot-toast';
 // CellEditDialog and reviewEditUtils are REAL collaborators (the dialog is rendered by
 // the panel, and both reach for the helpers): the point of the editing tests is that the
@@ -71,7 +72,8 @@ jest.mock('config', () => ({
   cancelColour: jest.fn(() => 'rgb(9, 0, 0)'),
   confirmColour: jest.fn(() => 'rgb(0, 9, 0)'),
   reviewCellEditDialogWidthPx: jest.fn(() => 220),
-  reviewCellEditRowCount: jest.fn(() => 4),
+  reviewCellEditRowCount: jest.fn(() => 1),
+  reviewCellEditorMinWidthPx: jest.fn(() => 120),
   maxCellEditorImageHeight: jest.fn(() => 66),
   reviewPoorCellSelectWidthPx: jest.fn(() => 111),
   reviewGutterWidthPx: jest.fn(() => 33),
@@ -254,14 +256,26 @@ const renderPanel = (props = {}) =>
       tables={metadataTables()}
       onEditTables={jest.fn()}
       onExit={jest.fn()}
+      onSave={jest.fn().mockResolvedValue(true)}
       {...props}
     />
   );
 
+// What one rendered cell reads as. A cell being corrected holds a field rather than
+// text, so its value is read off the field: the cell still stands for the value it
+// shows, whichever of the two is showing it.
+const cellText = (el) => {
+  const field = el.querySelector('[data-testid="review-cell-editor"]');
+  return field ? field.value : el.textContent;
+};
+
+// Every rendered cell's text, in reading order.
+const cellTexts = () => screen.getAllByTestId('review-cell').map(cellText);
+
 // The cells as rendered, keyed by their text — the fixtures use distinct values.
 const cellsByText = () =>
   Object.fromEntries(
-    screen.getAllByTestId('review-cell').map((el) => [el.textContent, el])
+    screen.getAllByTestId('review-cell').map((el) => [cellText(el), el])
   );
 
 const openEditor = async (text) => {
@@ -269,8 +283,10 @@ const openEditor = async (text) => {
   return screen.getByTestId('cell-edit-dialog');
 };
 
+// The correction is typed into the CELL, which is the only field on the screen while a
+// cell is being corrected — the dialog beside it holds the buttons and the confidence.
 const typeCorrection = async (text) => {
-  const field = screen.getByTestId('cell-edit-text');
+  const field = screen.getByTestId('review-cell-editor');
   await userEvent.clear(field);
   await userEvent.type(field, text);
 };
@@ -305,7 +321,7 @@ describe('ReviewTablePanel', () => {
   });
 
   it('renders every cell of the extracted table in row/column order', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     renderPanel();
 
@@ -313,14 +329,14 @@ describe('ReviewTablePanel', () => {
       expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
     );
     expect(
-      screen.getAllByTestId('review-cell').map((el) => el.textContent)
+      cellTexts()
     ).toEqual(['Claim', 'Amount', 'ABC Ltd', '1,234.00']);
     expect(extractTable).toHaveBeenCalledWith('pdf-1', 'root');
     expect(screen.queryByText('Extracting…')).not.toBeInTheDocument();
   });
 
   it('right-aligns a numeric cell and left-aligns a non-numeric one', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     renderPanel();
 
@@ -333,7 +349,7 @@ describe('ReviewTablePanel', () => {
   });
 
   it('caps the column width and top-aligns every cell', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     renderPanel();
 
@@ -359,24 +375,26 @@ describe('ReviewTablePanel', () => {
     const longText = 'x'.repeat(reviewWideCellMinCharacters() + 1);
     const atThreshold = 'y'.repeat(reviewWideCellMinCharacters());
     extractTable.mockResolvedValue({
-      table: {
-        name: 'root',
-        headerCount: 0,
-        cells: [
-          [cell('root', 0, 0, longText, 99), cell('root', 0, 1, atThreshold, 99)],
-          [
-            cell('root', 1, 0, 'short', 99),
-            // Trailing padding must not tip a short value over the threshold.
-            cell(
-              'root',
-              1,
-              1,
-              `pad${' '.repeat(reviewWideCellMinCharacters())}`,
-              99
-            ),
+      tables: [
+        {
+          name: 'root',
+          headerCount: 0,
+          cells: [
+            [cell('root', 0, 0, longText, 99), cell('root', 0, 1, atThreshold, 99)],
+            [
+              cell('root', 1, 0, 'short', 99),
+              // Trailing padding must not tip a short value over the threshold.
+              cell(
+                'root',
+                1,
+                1,
+                `pad${' '.repeat(reviewWideCellMinCharacters())}`,
+                99
+              ),
+            ],
           ],
-        ],
-      },
+        }
+      ],
     });
 
     renderPanel();
@@ -397,7 +415,7 @@ describe('ReviewTablePanel', () => {
   // Confidence is shown by a wash and a marker, not by the border: there is now one
   // threshold, highConfidence(), and one appearance for everything under it.
   it('gives every cell the same border whatever its confidence', async () => {
-    extractTable.mockResolvedValue({ table: confidenceSpread });
+    extractTable.mockResolvedValue({ tables: [confidenceSpread] });
 
     renderPanel();
 
@@ -411,7 +429,7 @@ describe('ReviewTablePanel', () => {
   });
 
   it('washes a below-high cell, and only a below-high cell', async () => {
-    extractTable.mockResolvedValue({ table: confidenceSpread });
+    extractTable.mockResolvedValue({ tables: [confidenceSpread] });
 
     renderPanel();
 
@@ -433,7 +451,7 @@ describe('ReviewTablePanel', () => {
   });
 
   it('marks a below-high cell down its left edge, inside the cell', async () => {
-    extractTable.mockResolvedValue({ table: confidenceSpread });
+    extractTable.mockResolvedValue({ tables: [confidenceSpread] });
 
     renderPanel();
 
@@ -455,14 +473,16 @@ describe('ReviewTablePanel', () => {
   // headerCount replaces the per-cell header flag: the row index decides the tag.
   it('renders the header rows as th and the rest as td, and a sourceless position as an empty cell', async () => {
     extractTable.mockResolvedValue({
-      table: {
-        name: 'root',
-        headerCount: 1,
-        cells: [
-          [cell('root', 0, 0, 'Head', 99), cell('root', 0, 1, 'Head 2', 99)],
-          [cell('root', 1, 0, 'Body', 99), sourceless('')],
-        ],
-      },
+      tables: [
+        {
+          name: 'root',
+          headerCount: 1,
+          cells: [
+            [cell('root', 0, 0, 'Head', 99), cell('root', 0, 1, 'Head 2', 99)],
+            [cell('root', 1, 0, 'Body', 99), sourceless('')],
+          ],
+        }
+      ],
     });
 
     renderPanel();
@@ -493,8 +513,8 @@ describe('ReviewTablePanel', () => {
     expect(screen.queryByText('Extracting…')).not.toBeInTheDocument();
   });
 
-  it('calls onExit when Exit is clicked', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+  it('calls onExit when Exit is clicked, once the save it runs first has landed', async () => {
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
     const onExit = jest.fn();
 
     renderPanel({ onExit });
@@ -503,11 +523,11 @@ describe('ReviewTablePanel', () => {
       expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
     );
     await userEvent.click(screen.getByTestId('review-exit'));
-    expect(onExit).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
   });
 
   it('fetches once per pdfId/tableId pair', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     const { rerender } = renderPanel();
     await waitFor(() => expect(extractTable).toHaveBeenCalledTimes(1));
@@ -547,7 +567,7 @@ describe('ReviewTablePanel', () => {
 
     // eslint-disable-next-line
     await act(async () => {
-      resolveExtract({ table: simpleTable });
+      resolveExtract({ tables: [simpleTable] });
     });
 
     expect(errorSpy).not.toHaveBeenCalled();
@@ -584,7 +604,7 @@ describe('ReviewTablePanel', () => {
   // first request rather than skip fetching, or the panel would sit on the spinner forever
   // (the first run's result is discarded by its own cleanup).
   it('dispatches ONE extraction across a StrictMode double mount, and still renders it', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     render(
       <StrictMode>
@@ -602,7 +622,7 @@ describe('ReviewTablePanel', () => {
   // A different table is a different extraction: the de-duplication is per (pdfId, tableId),
   // never a blanket "only ever fetch once".
   it('re-dispatches when the addressed table changes', async () => {
-    extractTable.mockResolvedValue({ table: simpleTable });
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     const { rerender } = renderPanel();
     await waitFor(() => expect(extractTable).toHaveBeenCalledTimes(1));
@@ -635,7 +655,7 @@ describe('ReviewTablePanel', () => {
     const bar = () => screen.getByTestId('review-confidence-count');
 
     it('counts the cells below the high threshold, ignoring sourceless positions', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -647,17 +667,19 @@ describe('ReviewTablePanel', () => {
 
     it('says "1 cell" when exactly one value is flagged', async () => {
       extractTable.mockResolvedValue({
-        table: {
-          ...mixedTable,
-          cells: [
-            mixedTable.cells[0],
-            [
-              cell('root', 1, 0, 'ABC Ltd', 60),
-              cell('root', 1, 1, '1,234.00', highConfidence()),
+        tables: [
+          {
+            ...mixedTable,
+            cells: [
+              mixedTable.cells[0],
+              [
+                cell('root', 1, 0, 'ABC Ltd', 60),
+                cell('root', 1, 1, '1,234.00', highConfidence()),
+              ],
+              mixedTable.cells[2],
             ],
-            mixedTable.cells[2],
-          ],
-        },
+          }
+        ],
       });
 
       renderPanel();
@@ -671,7 +693,7 @@ describe('ReviewTablePanel', () => {
     // Picking a coordinate is how a user reaches a poor cell in a table too big to
     // scan: the list names every one, and choosing it brings that cell into view.
     it('lists every poor cell by spreadsheet coordinate, top left being A1', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -687,7 +709,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('labels the list, and sits it at the far end of the bar from the count', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -709,7 +731,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('scrolls the chosen cell into view', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -727,7 +749,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('offers nothing to go to when every cell is confident', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
 
       renderPanel();
 
@@ -738,7 +760,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('drops a cell from the list once it has been corrected', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -773,7 +795,7 @@ describe('ReviewTablePanel', () => {
       };
 
       const shown = async (table = threePoor) => {
-        extractTable.mockResolvedValue({ table });
+        extractTable.mockResolvedValue({ tables: [table] });
         renderPanel();
         const expected = table.cells.flat().length;
         await waitFor(() =>
@@ -864,7 +886,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('is not inside the scrolling region', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -878,7 +900,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('falls as cells are corrected, because a correction is confident', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -922,7 +944,7 @@ describe('ReviewTablePanel', () => {
       cellsByText()[text].querySelector('[data-testid="review-cell-selection"]');
 
     const rendered = async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
       renderPanel();
       await waitFor(() =>
         expect(screen.queryAllByTestId('review-cell')).toHaveLength(6)
@@ -1015,7 +1037,7 @@ describe('ReviewTablePanel', () => {
     });
 
     const shown = async (table, props = {}) => {
-      extractTable.mockResolvedValue({ table });
+      extractTable.mockResolvedValue({ tables: [table] });
       renderPanel(props);
       await waitFor(() =>
         expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
@@ -1153,7 +1175,9 @@ describe('ReviewTablePanel', () => {
       await userEvent.click(title());
 
       expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
-      expect(screen.getByTestId('cell-edit-text')).toHaveValue('Loss run 2024');
+      expect(screen.getByTestId('review-cell-editor')).toHaveValue(
+        'Loss run 2024'
+      );
       expect(readout()).toHaveTextContent('Selected title');
       await waitFor(() =>
         expect(getCellImages).toHaveBeenCalledWith(
@@ -1165,11 +1189,12 @@ describe('ReviewTablePanel', () => {
       );
     });
 
-    // The title runs almost the full width of the editor, so the dialog fits neither above
-    // it nor to either side and falls back to below, where the click decides the side. The
-    // panel therefore has to hand the pointer on. jsdom measures everything as 0, so the
-    // title's rectangle and the dialog's height are both stubbed to reach that branch.
-    it('places the edit dialog below the title, on the side the click landed', async () => {
+    // The dialog goes BESIDE what it is editing, bottom edges level, because the thing
+    // being edited now holds the field. The title runs almost the full width of the
+    // editor, so there is room on neither side and it pins to the near edge instead of
+    // opening off the screen. jsdom measures everything as 0, so the title's rectangle
+    // and the dialog's height are both stubbed to make the placement observable.
+    it('places the edit dialog against the title, pinned to the near edge when neither side fits', async () => {
       const heightSpy = jest
         .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
         .mockReturnValue(120);
@@ -1184,17 +1209,15 @@ describe('ReviewTablePanel', () => {
           width: window.innerWidth - 10,
           height: 30,
         };
-        const pointer = { x: 400, y: 55 };
         title().getBoundingClientRect = () => wide;
-        fireEvent.click(title(), { clientX: pointer.x, clientY: pointer.y });
+        fireEvent.click(title());
 
         const expected = dialogPlacement(
           wide,
           { width: reviewCellEditDialogWidthPx(), height: 120 },
-          { width: window.innerWidth, height: window.innerHeight },
-          pointer
+          { width: window.innerWidth, height: window.innerHeight }
         );
-        expect(expected.placement).toBe('below');
+        expect(expected.left).toBe(0);
         const dialog = screen.getByTestId('cell-edit-dialog');
         expect(dialog.style.left).toBe(`${expected.left}px`);
         expect(dialog.style.top).toBe(`${expected.top}px`);
@@ -1224,7 +1247,7 @@ describe('ReviewTablePanel', () => {
       expect(nextTables[0].title.bounds).toEqual(titleBounds);
       // The grid is untouched by a title edit.
       expect(
-        screen.getAllByTestId('review-cell').map((el) => el.textContent)
+        cellTexts()
       ).toEqual(['Claim', 'Amount', 'ABC Ltd', '1,234.00']);
       // A correction is confident, so the title drops out of the flagged list.
       expect(bar()).toHaveTextContent('2 entries flagged for review');
@@ -1245,14 +1268,16 @@ describe('ReviewTablePanel', () => {
       await userEvent.click(screen.getByTestId('cell-edit-confirm-next'));
 
       expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
-      expect(screen.getByTestId('cell-edit-text')).toHaveValue('Loss run 2024');
+      expect(screen.getByTestId('review-cell-editor')).toHaveValue(
+        'Loss run 2024'
+      );
       expect(readout()).toHaveTextContent('Selected title');
 
       await typeCorrection('Loss run 2025');
       await userEvent.click(screen.getByTestId('cell-edit-confirm-next'));
 
       expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
-      expect(screen.getByTestId('cell-edit-text')).toHaveValue('ABC Ltd');
+      expect(screen.getByTestId('review-cell-editor')).toHaveValue('ABC Ltd');
       expect(readout()).toHaveTextContent('Selected cell A2');
       await waitFor(() => expect(title()).toHaveTextContent('Loss run 2025'));
     });
@@ -1274,217 +1299,158 @@ describe('ReviewTablePanel', () => {
 
   // Export is the end of the road: the document is saved, turned into a spreadsheet, and
   // the user is handed the file and sent back to the list.
-  describe('exporting to Excel', () => {
-    // The workbook itself, not a link to it: /api/to-excel collects it from its presigned
-    // url server-side, so what the panel receives is bytes it can save from memory.
-    const workbook = new Blob(['PK the workbook']);
+  describe('leaving the panel', () => {
+    it('saves before it leaves', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const onSave = jest.fn().mockResolvedValue(true);
+      const onExit = jest.fn();
+      renderPanel({ onSave, onExit });
+      await screen.findAllByTestId('review-cell');
 
-    // What was handed to the browser: one entry per anchor click, with the object url it
-    // pointed at and the name it asked to be saved under. jsdom neither downloads nor
-    // navigates, so the click is stubbed on the prototype — the anchor is created and
-    // removed inside the export and the test never otherwise sees it. `blobbed` is what
-    // was turned into an object url, which is how "the workbook it was given" is checked.
-    let handedOver = [];
-    let blobbed = [];
+      await userEvent.click(screen.getByTestId('review-exit'));
 
-    beforeEach(() => {
-      handedOver = [];
-      blobbed = [];
-      global.URL.createObjectURL = jest.fn((blob) => {
-        blobbed.push(blob);
-        return 'blob:workbook';
-      });
-      global.URL.revokeObjectURL = jest.fn();
-      jest
-        .spyOn(HTMLAnchorElement.prototype, 'click')
-        .mockImplementation(function record() {
-          handedOver.push({ href: this.href, download: this.download });
-        });
+      expect(onSave).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
     });
 
-    afterEach(() => {
-      HTMLAnchorElement.prototype.click.mockRestore();
-    });
-
-    const shown = async (props = {}) => {
-      extractTable.mockResolvedValue({ table: simpleTable });
-      const view = renderPanel(props);
-      await waitFor(() =>
-        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
-      );
-      return view;
-    };
-
-    it('offers Export before Exit', async () => {
-      await shown({ onSave: jest.fn() });
-
-      const order = [...document.body.querySelectorAll('[data-testid]')]
-        .map((el) => el.dataset.testid)
-        .filter((id) => id === 'review-export' || id === 'review-exit');
-      expect(order).toEqual(['review-export', 'review-exit']);
-    });
-
-    // The export is built from what the server holds, so the save has to reach the server
-    // first. A save that did not raises its own toast and leaves the document dirty —
-    // there is nothing to add and nothing to export.
-    it('saves first, and exports nothing when the save did not land', async () => {
+    it('stays put when the save fails', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
       const onSave = jest.fn().mockResolvedValue(false);
-      const onAllFiles = jest.fn();
+      const onExit = jest.fn();
+      renderPanel({ onSave, onExit });
+      await screen.findAllByTestId('review-cell');
 
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
-
-      await userEvent.click(screen.getByTestId('review-export'));
-
-      expect(onSave).toHaveBeenCalledTimes(1);
-      expect(tableToExcel).not.toHaveBeenCalled();
-      expect(onAllFiles).not.toHaveBeenCalled();
-      expect(toast.error).not.toHaveBeenCalled();
-      expect(screen.getByTestId('review-export')).toBeEnabled();
-      // The lock is dropped again, so this can be tried again without leaving the panel.
-      expect(screen.queryByTestId('review-exporting')).toBeNull();
-    });
-
-    // The lock goes up BEFORE the save, not after it: a save takes long enough for a second
-    // click to land inside it, and two exports would build the workbook twice and hand it
-    // over twice.
-    it('locks on the first click, so a click during the save starts nothing further', async () => {
-      let landSave;
-      const onSave = jest
-        .fn()
-        .mockImplementation(() => new Promise((resolve) => (landSave = resolve)));
-      const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(workbook);
-
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
-
-      await userEvent.click(screen.getByTestId('review-export'));
-      // Locked while the save is still in flight, so the panel cannot be exported again.
-      expect(screen.getByTestId('review-exporting')).toBeInTheDocument();
-
-      await userEvent.click(screen.getByTestId('review-export'));
+      await userEvent.click(screen.getByTestId('review-exit'));
 
       expect(onSave).toHaveBeenCalledTimes(1);
-
-      await act(async () => {
-        landSave(true);
-      });
-
-      await waitFor(() => expect(handedOver).toHaveLength(1));
-      expect(tableToExcel).toHaveBeenCalledTimes(1);
+      expect(onExit).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(screen.getByTestId('review-exit')).toBeEnabled()
+      );
     });
 
-    it('sends the amalgamated table with the document it came from', async () => {
-      const onSave = jest.fn().mockResolvedValue(true);
-      const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(workbook);
-
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
-
-      await userEvent.click(screen.getByTestId('review-export'));
-
-      await waitFor(() => expect(handedOver).toHaveLength(1));
-      expect(tableToExcel).toHaveBeenCalledWith({
-        ...simpleTable,
-        pdfId: 'pdf-1',
-        rootTableId: 'root',
-        originalFilename: 'losses.pdf',
-      });
-      expect(toast.error).not.toHaveBeenCalled();
-    });
-
-    // The workbook arrives as bytes, so it is saved from memory under a name of the page's
-    // own choosing — taken from the uploaded document's. Nothing is navigated to, which is
-    // the point: the old hand-over was a cross-origin navigation the page could not await,
-    // and the browser served it by cancelling whatever else the page had in flight.
-    it('saves the workbook it was handed under the uploaded document name', async () => {
-      const onSave = jest.fn().mockResolvedValue(true);
-      const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(workbook);
-
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
-
-      await userEvent.click(screen.getByTestId('review-export'));
-
-      await waitFor(() => expect(handedOver).toHaveLength(1));
-      expect(blobbed).toEqual([workbook]);
-      expect(handedOver[0]).toEqual({
-        href: 'blob:workbook',
-        download: `losses${excelFileSuffix()}`,
-      });
-    });
-
-    // There is no gap to wait out any more: the save completes before the export returns,
-    // so the return to the list follows it directly and leaves nothing in the document.
-    it('returns to the list as soon as the file is saved, leaving no anchor behind', async () => {
-      const onSave = jest.fn().mockResolvedValue(true);
-      const onAllFiles = jest.fn();
-      tableToExcel.mockResolvedValue(workbook);
-
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
-
-      await userEvent.click(screen.getByTestId('review-export'));
-
-      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
-      expect(document.querySelectorAll('a')).toHaveLength(0);
-      expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:workbook');
-    });
-
-    it('locks the panel behind a spinner while the export is in flight', async () => {
-      const onSave = jest.fn().mockResolvedValue(true);
-      const onAllFiles = jest.fn();
-      let resolveExport;
-      tableToExcel.mockReturnValue(
-        new Promise((resolve) => {
-          resolveExport = resolve;
+    it('locks the panel while the save is in flight, so a second click starts no second save', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      let finishSave;
+      const onSave = jest.fn(
+        () => new Promise((resolve) => {
+          finishSave = resolve;
         })
       );
+      const onExit = jest.fn();
+      renderPanel({ onSave, onExit });
+      await screen.findAllByTestId('review-cell');
 
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
+      await userEvent.click(screen.getByTestId('review-exit'));
+      expect(await screen.findByTestId('review-exiting')).toBeInTheDocument();
 
-      await userEvent.click(screen.getByTestId('review-export'));
-
-      const overlay = await screen.findByTestId('review-exporting');
-      expect(overlay).toContainElement(screen.getByRole('progressbar'));
-      // It covers the panel, so nothing under it can be reached mid-export.
-      expect(overlay).toHaveStyle({
-        position: 'absolute',
-        top: '0px',
-        right: '0px',
-        bottom: '0px',
-        left: '0px',
-      });
-      expect(onAllFiles).not.toHaveBeenCalled();
-
+      // The resolution lands React state (the exit lock clearing), so it is act-wrapped.
       // eslint-disable-next-line
       await act(async () => {
-        resolveExport(workbook);
+        finishSave(true);
       });
 
-      // The lock is never dropped on this path: the panel is taken away with the spinner
-      // still up, so the export never flickers back to an editable table on its way out.
-      expect(screen.getByTestId('review-exporting')).toBeInTheDocument();
-      expect(onAllFiles).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onExit).toHaveBeenCalledTimes(1));
+      expect(onSave).toHaveBeenCalledTimes(1);
     });
 
-    it('reports a failed export, stays on the panel and clears the spinner', async () => {
-      const onSave = jest.fn().mockResolvedValue(true);
-      const onAllFiles = jest.fn();
-      tableToExcel.mockRejectedValue(new Error('excel exploded'));
+    it('offers no Export button — the export lives on the Document Overview', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      renderPanel();
+      await screen.findAllByTestId('review-cell');
 
-      await shown({ onSave, onAllFiles, originalFilename: 'losses.pdf' });
+      expect(screen.queryByTestId('review-export')).toBeNull();
+    });
+  });
 
-      await userEvent.click(screen.getByTestId('review-export'));
+  describe('the section tabs', () => {
+    const northAndSouth = [
+      {
+        name: 'North',
+        title: null,
+        headerCount: 1,
+        cells: [
+          [cell('root', 0, 0, 'Claim', 99)],
+          [cell('root', 1, 0, 'North claim', 99)],
+        ],
+      },
+      {
+        name: 'South',
+        title: null,
+        headerCount: 1,
+        cells: [
+          [cell('root', 0, 0, 'Claim', 99)],
+          [cell('root', 2, 0, 'South claim', 99)],
+        ],
+      },
+    ];
+
+    it('renders one tab per table and shows the first', async () => {
+      extractTable.mockResolvedValue({ tables: northAndSouth });
+      renderPanel();
+      await screen.findAllByTestId('review-cell');
+
+      expect(
+        screen.getAllByTestId('review-tab').map((tab) => tab.textContent)
+      ).toEqual(['North', 'South']);
+      expect(Object.keys(cellsByText())).toContain('North claim');
+      expect(Object.keys(cellsByText())).not.toContain('South claim');
+    });
+
+    it('shows the chosen tab, and drops the marked cell with it', async () => {
+      extractTable.mockResolvedValue({ tables: northAndSouth });
+      renderPanel();
+      await screen.findAllByTestId('review-cell');
+      await userEvent.click(cellsByText()['North claim']);
+      expect(screen.getByTestId('review-selected-cell')).toBeInTheDocument();
+
+      await userEvent.click(screen.getAllByTestId('review-tab')[1]);
+
+      expect(Object.keys(cellsByText())).toContain('South claim');
+      expect(screen.queryByTestId('review-selected-cell')).toBeNull();
+      expect(screen.queryByTestId('cell-edit-dialog')).toBeNull();
+    });
+
+    it('renders no tab strip for a single table', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      renderPanel();
+      await screen.findAllByTestId('review-cell');
+
+      expect(screen.queryByTestId('review-tabs')).toBeNull();
+    });
+
+    it('corrects a value repeated across tabs on every tab at once', async () => {
+      // The same source cell stands in both grids, as a carried section-title value does.
+      const shared = cell('root', 1, 0, 'ABC Ltd', 60);
+      extractTable.mockResolvedValue({
+        tables: [
+          {
+            name: 'North',
+            title: null,
+            headerCount: 1,
+            cells: [[cell('root', 0, 0, 'Claim', 99)], [shared]],
+          },
+          {
+            name: 'South',
+            title: null,
+            headerCount: 1,
+            cells: [[cell('root', 0, 0, 'Claim', 99)], [shared]],
+          },
+        ],
+      });
+      renderPanel({ onEditTables: jest.fn() });
+      await screen.findAllByTestId('review-cell');
+
+      await openEditor('ABC Ltd');
+      await typeCorrection('XYZ Ltd');
+      await userEvent.click(screen.getByTestId('cell-edit-confirm'));
 
       await waitFor(() =>
-        expect(toast.error).toHaveBeenCalledWith('excel exploded')
+        expect(Object.keys(cellsByText())).toContain('XYZ Ltd')
       );
-      expect(onAllFiles).not.toHaveBeenCalled();
-      expect(handedOver).toEqual([]);
-      expect(
-        screen.queryByTestId('review-exporting')
-      ).not.toBeInTheDocument();
-      expect(screen.getAllByTestId('review-cell')).toHaveLength(4);
-      expect(screen.getByTestId('review-export')).toBeEnabled();
+      await userEvent.click(screen.getAllByTestId('review-tab')[1]);
+      expect(Object.keys(cellsByText())).toContain('XYZ Ltd');
+      expect(Object.keys(cellsByText())).not.toContain('ABC Ltd');
     });
   });
 
@@ -1509,7 +1475,7 @@ describe('ReviewTablePanel', () => {
       screen.getAllByTestId('review-row-head').map((el) => el.textContent);
 
     it('names the columns A, B, … and numbers the rows from 1', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -1523,7 +1489,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('sticks the letters to the top and the numbers to the left, corner to both', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -1551,7 +1517,7 @@ describe('ReviewTablePanel', () => {
     // instead of flush against it. jsdom does no layout, so the padding itself is what
     // is asserted; it is the whole cause.
     it('is not held off the top and left edges by the scroller', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -1572,7 +1538,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('keeps a jumped-to cell clear of the rulers covering it', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -1586,7 +1552,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('does not open the editor when a ruler is clicked', async () => {
-      extractTable.mockResolvedValue({ table: mixedTable });
+      extractTable.mockResolvedValue({ tables: [mixedTable] });
 
       renderPanel();
 
@@ -1602,11 +1568,223 @@ describe('ReviewTablePanel', () => {
   });
 
   describe('cell editing', () => {
+    // The correction is typed where the value is read: clicking a cell turns THAT cell
+    // into a field, and the dialog beside it carries only the crop, the buttons and the
+    // confidence. Two fields for one value would leave the tick reading the wrong one.
+    it('puts the field in the clicked cell, and nowhere else', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      expect(screen.queryByTestId('review-cell-editor')).not.toBeInTheDocument();
+
+      const cell = cellsByText()['ABC Ltd'];
+      await userEvent.click(cell);
+
+      const fields = screen.getAllByTestId('review-cell-editor');
+      expect(fields).toHaveLength(1);
+      expect(fields[0]).toHaveValue('ABC Ltd');
+      expect(cell).toContainElement(fields[0]);
+      // And the dialog holds none of its own.
+      expect(screen.queryByTestId('cell-edit-text')).not.toBeInTheDocument();
+    });
+
+    it('moves the field to the next cell clicked, leaving the first showing its text', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await userEvent.click(cellsByText()['ABC Ltd']);
+      await userEvent.click(cellsByText()['1,234.00']);
+
+      const fields = screen.getAllByTestId('review-cell-editor');
+      expect(fields).toHaveLength(1);
+      expect(fields[0]).toHaveValue('1,234.00');
+      expect(cellsByText()['1,234.00']).toContainElement(fields[0]);
+    });
+
+    // The field is inside the cell, so typing in it lands a click on the cell as well.
+    // Treating that as a fresh click would restart the edit and throw the typing away.
+    it('keeps what has been typed when the field itself is clicked', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await openEditor('ABC Ltd');
+      await typeCorrection('XYZ Ltd');
+
+      await userEvent.click(screen.getByTestId('review-cell-editor'));
+
+      expect(screen.getByTestId('review-cell-editor')).toHaveValue('XYZ Ltd');
+    });
+
+    // Typing is not committing: the grid and the metadata move only on the tick.
+    it('changes neither the grid nor the metadata until the correction is confirmed', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const onEditTables = jest.fn();
+
+      renderPanel({ onEditTables });
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await openEditor('ABC Ltd');
+      await typeCorrection('XYZ Ltd');
+
+      expect(onEditTables).not.toHaveBeenCalled();
+      const source = metadataTables()[0].cells.find(
+        (c) => c.row === 1 && c.column === 0
+      );
+      expect(source.text).toBe('ABC Ltd');
+    });
+
+    it('takes the field away on cancel, leaving the cell showing its text again', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await openEditor('ABC Ltd');
+      await typeCorrection('XYZ Ltd');
+      await userEvent.click(screen.getByTestId('cell-edit-cancel'));
+
+      expect(screen.queryByTestId('review-cell-editor')).not.toBeInTheDocument();
+      expect(cellsByText()['ABC Ltd']).toHaveTextContent('ABC Ltd');
+    });
+
+    // The confidence is the reason the cell is worth looking at, so the dialog states
+    // the confidence of the cell it was opened on.
+    it("states the clicked cell's confidence", async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await openEditor('ABC Ltd');
+
+      expect(screen.getByTestId('cell-edit-confidence')).toHaveTextContent(
+        confidenceLabel(97)
+      );
+
+      await userEvent.click(cellsByText().Claim);
+      expect(screen.getByTestId('cell-edit-confidence')).toHaveTextContent(
+        confidenceLabel(99)
+      );
+    });
+
+    // Putting a field into the cell CHANGES the cell: a narrow column widens to the
+    // field's floor and the table's automatic layout moves the rest of the row around
+    // it. A dialog placed on the rectangle measured at the click therefore sat over the
+    // very cell it is meant to sit beside, so the rectangle is re-measured once the
+    // field is there. jsdom lays nothing out, so the move is stubbed: the cell reports
+    // one rectangle until it holds a field and another afterwards.
+    it('re-places the dialog against where the cell ends up once it holds the field', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const atClick = {
+        left: 400,
+        top: 300,
+        right: 460,
+        bottom: 320,
+        width: 60,
+        height: 20,
+      };
+      // Wider, and reaching further left, exactly as a widened column does.
+      const withField = {
+        left: 340,
+        top: 300,
+        right: 460,
+        bottom: 326,
+        width: 120,
+        height: 26,
+      };
+      const heightSpy = jest
+        .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+        .mockReturnValue(120);
+      const rectSpy = jest
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function measured() {
+          return this.querySelector('[data-testid="review-cell-editor"]')
+            ? withField
+            : atClick;
+        });
+      try {
+        renderPanel();
+
+        await waitFor(() =>
+          expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+        );
+        await openEditor('ABC Ltd');
+
+        const dialog = screen.getByTestId('cell-edit-dialog');
+        // Against where the cell IS, not where it was: the click-time rectangle would
+        // have put its right edge 60px inside the cell.
+        expect(dialog.style.left).toBe(
+          `${withField.left - reviewCellEditDialogWidthPx()}px`
+        );
+        expect(dialog.style.top).toBe(`${withField.bottom - 120}px`);
+        await waitFor(() => expect(getCellImages).toHaveBeenCalled());
+      } finally {
+        rectSpy.mockRestore();
+        heightSpy.mockRestore();
+      }
+    });
+
+    // The dialog must not cover the cell it is editing, because that cell now holds the
+    // field. It is bottom-aligned beside it: to the left while there is room there.
+    it('places the dialog beside the clicked cell, bottom edges level', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const rect = {
+        left: 400,
+        top: 300,
+        right: 460,
+        bottom: 320,
+        width: 60,
+        height: 20,
+      };
+      const heightSpy = jest
+        .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
+        .mockReturnValue(120);
+      const rectSpy = jest
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockReturnValue(rect);
+      try {
+        renderPanel();
+
+        await waitFor(() =>
+          expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+        );
+        await openEditor('ABC Ltd');
+
+        const dialog = screen.getByTestId('cell-edit-dialog');
+        expect(dialog.style.left).toBe(
+          `${rect.left - reviewCellEditDialogWidthPx()}px`
+        );
+        expect(dialog.style.top).toBe(`${rect.bottom - 120}px`);
+        await waitFor(() => expect(getCellImages).toHaveBeenCalled());
+      } finally {
+        rectSpy.mockRestore();
+        heightSpy.mockRestore();
+      }
+    });
+
     // The crop is requested at the width of the cell being edited, so it arrives at the
     // scale the user is already reading the table at rather than at a fixed size that
     // magnifies a narrow column and shrinks a wide one.
     it('opens the dialog on a cell click and asks for that cell’s crop at that cell’s width', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
       const tables = metadataTables();
       // jsdom lays nothing out, so every rect is zero; a stub gives the clicked cell a
       // width distinguishable from anything else in play.
@@ -1654,7 +1832,7 @@ describe('ReviewTablePanel', () => {
     // Header cells are editable too: the extraction misreads a column heading as
     // readily as a value.
     it('opens the dialog for a header cell', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
 
       renderPanel();
 
@@ -1669,7 +1847,7 @@ describe('ReviewTablePanel', () => {
     // The cache and the requested-set live in the panel, not the short-lived dialog,
     // so re-opening the same cell shows what was already fetched.
     it('does not re-request a crop when the same cell is re-opened', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
 
       renderPanel();
 
@@ -1687,7 +1865,7 @@ describe('ReviewTablePanel', () => {
     });
 
     it('closes the dialog on cancel, changing neither the grid nor the metadata', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
       const onEditTables = jest.fn();
 
       renderPanel({ onEditTables });
@@ -1701,13 +1879,13 @@ describe('ReviewTablePanel', () => {
 
       expect(screen.queryByTestId('cell-edit-dialog')).not.toBeInTheDocument();
       expect(
-        screen.getAllByTestId('review-cell').map((el) => el.textContent)
+        cellTexts()
       ).toEqual(['Claim', 'Amount', 'ABC Ltd', '1,234.00']);
       expect(onEditTables).not.toHaveBeenCalled();
     });
 
     it('writes a confirmed correction into the grid and the metadata at the edited confidence', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
       const onEditTables = jest.fn();
 
       renderPanel({ onEditTables });
@@ -1722,7 +1900,7 @@ describe('ReviewTablePanel', () => {
       expect(screen.queryByTestId('cell-edit-dialog')).not.toBeInTheDocument();
       await waitFor(() =>
         expect(
-          screen.getAllByTestId('review-cell').map((el) => el.textContent)
+          cellTexts()
         ).toEqual(['Claim', 'Amount', 'XYZ Ltd', '1,234.00'])
       );
       expect(onEditTables).toHaveBeenCalledTimes(1);
@@ -1742,7 +1920,7 @@ describe('ReviewTablePanel', () => {
     // A section title's value legitimately appears in every row it covers, so all of
     // those positions have to move together.
     it('updates every position sharing a section title, and the right sectionTitles entry', async () => {
-      extractTable.mockResolvedValue({ table: sectionTitleTable });
+      extractTable.mockResolvedValue({ tables: [sectionTitleTable] });
       const onEditTables = jest.fn();
 
       renderPanel({ onEditTables });
@@ -1756,7 +1934,7 @@ describe('ReviewTablePanel', () => {
 
       await waitFor(() =>
         expect(
-          screen.getAllByTestId('review-cell').map((el) => el.textContent)
+          cellTexts()
         ).toEqual([
           'Claim',
           'Policy',
@@ -1782,7 +1960,7 @@ describe('ReviewTablePanel', () => {
     // dialog opens but refuses the correction rather than accepting one that would
     // vanish at the next extraction.
     it('opens a sourceless cell with confirm disabled, and clicking it changes nothing', async () => {
-      extractTable.mockResolvedValue({ table: sectionTitleTable });
+      extractTable.mockResolvedValue({ tables: [sectionTitleTable] });
       const onEditTables = jest.fn();
 
       renderPanel({ onEditTables });
@@ -1799,7 +1977,7 @@ describe('ReviewTablePanel', () => {
       expect(onEditTables).not.toHaveBeenCalled();
       expect(getCellImages).not.toHaveBeenCalled();
       expect(
-        screen.getAllByTestId('review-cell').map((el) => el.textContent)
+        cellTexts()
       ).toEqual([
         'Claim',
         'Policy',
@@ -1813,7 +1991,7 @@ describe('ReviewTablePanel', () => {
     // A table deleted since the extraction leaves the reference dangling; a correction
     // that cannot be persisted must not be shown as if it had been.
     it('refuses a correction whose source table is gone, and says so', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
       const onEditTables = jest.fn();
 
       renderPanel({ tables: [], onEditTables });
@@ -1829,14 +2007,14 @@ describe('ReviewTablePanel', () => {
       expect(onEditTables).not.toHaveBeenCalled();
       expect(toast.error).toHaveBeenCalledTimes(1);
       expect(
-        screen.getAllByTestId('review-cell').map((el) => el.textContent)
+        cellTexts()
       ).toEqual(['Claim', 'Amount', 'ABC Ltd', '1,234.00']);
     });
 
     // The crop is a convenience, not a precondition: losing it must not cost the user
     // the edit.
     it('reports a failed crop fetch and still accepts the correction', async () => {
-      extractTable.mockResolvedValue({ table: simpleTable });
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
       getCellImages.mockRejectedValue(new Error('crop exploded'));
       const onEditTables = jest.fn();
 
@@ -1856,7 +2034,7 @@ describe('ReviewTablePanel', () => {
 
       await waitFor(() =>
         expect(
-          screen.getAllByTestId('review-cell').map((el) => el.textContent)
+          cellTexts()
         ).toEqual(['Claim', 'Amount', 'XYZ Ltd', '1,234.00'])
       );
       expect(onEditTables).toHaveBeenCalledTimes(1);
@@ -1877,7 +2055,7 @@ describe('ReviewTablePanel', () => {
       };
 
       it('saves, then re-opens on the next low confidence cell', async () => {
-        extractTable.mockResolvedValue({ table: twoPoor });
+        extractTable.mockResolvedValue({ tables: [twoPoor] });
         const tables = metadataTables();
         const onEditTables = jest.fn();
 
@@ -1892,21 +2070,21 @@ describe('ReviewTablePanel', () => {
         // Saved: grid and metadata both carry the correction.
         await waitFor(() =>
           expect(
-            screen.getAllByTestId('review-cell').map((el) => el.textContent)
+            cellTexts()
           ).toEqual(['Claim', 'Amount', 'XYZ Ltd', '1,234.00'])
         );
         expect(onEditTables).toHaveBeenCalledTimes(1);
 
         // And moved on: the dialog is still open, now on B2, pre-filled from it.
         expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
-        expect(screen.getByTestId('cell-edit-text')).toHaveValue('1,234.00');
+        expect(screen.getByTestId('review-cell-editor')).toHaveValue('1,234.00');
         expect(screen.getByTestId('review-selected-cell')).toHaveTextContent(
           'Selected cell B2'
         );
       });
 
       it('closes on the last low confidence cell, having saved it', async () => {
-        extractTable.mockResolvedValue({ table: twoPoor });
+        extractTable.mockResolvedValue({ tables: [twoPoor] });
         const onEditTables = jest.fn();
 
         renderPanel({ onEditTables });
@@ -1921,13 +2099,13 @@ describe('ReviewTablePanel', () => {
         expect(onEditTables).toHaveBeenCalledTimes(1);
         await waitFor(() =>
           expect(
-            screen.getAllByTestId('review-cell').map((el) => el.textContent)
+            cellTexts()
           ).toEqual(['Claim', 'Amount', 'ABC Ltd', '9.99'])
         );
       });
 
       it('does not step on when the correction could not be written', async () => {
-        extractTable.mockResolvedValue({ table: twoPoor });
+        extractTable.mockResolvedValue({ tables: [twoPoor] });
         const onEditTables = jest.fn();
 
         // No metadata to write back to, so the save fails before anything moves.
@@ -1943,7 +2121,7 @@ describe('ReviewTablePanel', () => {
         expect(onEditTables).not.toHaveBeenCalled();
         expect(screen.queryByTestId('cell-edit-dialog')).not.toBeInTheDocument();
         expect(
-          screen.getAllByTestId('review-cell').map((el) => el.textContent)
+          cellTexts()
         ).toEqual(['Claim', 'Amount', 'ABC Ltd', '1,234.00']);
       });
     });

@@ -592,11 +592,10 @@ describe('images service', () => {
   describe('extractTable', () => {
     it('GETs /api/extract/<pdfId>/<tableId> with access code header and returns parsed JSON', async () => {
       const body = {
-        table: {
-          columns: 9,
-          rows: 7,
-          cells: [{ row: 0, column: 0, text: 'A', confidence: 99 }],
-        },
+        tables: [
+          { name: 'North', headerCount: 1, cells: [{ row: 0, column: 0, text: 'A', confidence: 99 }] },
+          { name: 'South', headerCount: 1, cells: [{ row: 0, column: 0, text: 'B', confidence: 98 }] },
+        ],
       };
       mockOk(body);
 
@@ -611,7 +610,7 @@ describe('images service', () => {
     });
 
     it('encodes the pdfId and tableId in the URL', async () => {
-      mockOk({ table: {} });
+      mockOk({ tables: [] });
 
       await extractTable('pdf 1/2', 't 3/4');
 
@@ -621,7 +620,7 @@ describe('images service', () => {
 
     it('omits X-Access-Code when localStorage is empty', async () => {
       localStorage.clear();
-      mockOk({ table: {} });
+      mockOk({ tables: [] });
 
       await extractTable('pdf-123', 't-1');
 
@@ -641,22 +640,11 @@ describe('images service', () => {
   });
 
   describe('tableToExcel', () => {
+    // Identifiers only: the back end rebuilds every table from the stored metadata.
     const body = {
       pdfId: 'pdf-123',
-      rootTableId: 't-1',
-      originalFilename: 'losses.pdf',
-      name: 'Table 1',
-      title: {
-        tableId: 't-1',
-        text: 'Losses',
-        confidence: 88,
-        bounds: { left: 0.1, top: 0.15, width: 0.5, height: 0.04 },
-      },
-      headerCount: 1,
-      cells: [
-        [{ tableId: 't-1', row: 0, column: 0, text: 'Claim', confidence: 92 }],
-        [{ tableId: 't-1', row: 1, column: 0, text: '1,000', confidence: 71 }],
-      ],
+      rootTableIds: ['t-1', 't-2'],
+      filename: 'losses.xlsx',
     };
 
     // The route collects the workbook from its presigned url server-side, so the response

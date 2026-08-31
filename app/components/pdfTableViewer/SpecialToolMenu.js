@@ -19,6 +19,7 @@ import {
 // would be both clickable and counted as a tool.
 const SPECIAL_TOOL_DEFS = [
   { key: 'header', label: 'Header' },
+  { key: 'title', label: 'Title' },
   { key: 'hideRow', label: 'Hide Row' },
   { key: 'sectionTitle', label: 'Section' },
   { key: 'colouredRows', label: 'Rows', headingBefore: 'Colouring' },

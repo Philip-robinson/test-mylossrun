@@ -10,11 +10,11 @@ import {
   nonHeaderRows,
   cellText,
   headersMatch,
-  candidates,
   hasSavedGrid,
   isAmalgamated,
   reconstructGrid,
   autoPopulateGrid,
+  allLinkedPlaced,
   buildInitialState,
   buildSaveTables,
   padForDisplay,
@@ -25,8 +25,11 @@ import {
   orderedSpineInsertIndex,
   insertSpineRow,
   dropCandidates,
+  dropPlacementReason,
+  dropRejectionReason,
 } from 'components/pdfTableViewer/gridUtilities';
 import { getTableImages } from 'services/images';
+import toast from 'react-hot-toast';
 import {
   confirmedTableStage,
   linkTableCellWidth,
@@ -46,6 +49,7 @@ jest.mock('config', () => {
 jest.mock('react-hot-toast', () => {
   const toast = jest.fn();
   toast.error = jest.fn();
+  toast.success = jest.fn();
   return { __esModule: true, default: toast };
 });
 
@@ -247,22 +251,6 @@ describe('headersMatch', () => {
     const a = mkTable({ tableId: 'a', cols: 3, headerCount: 0 });
     const b = mkTable({ tableId: 'b', cols: 3, headerCount: 0 });
     expect(headersMatch(a, b)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// candidates
-// ---------------------------------------------------------------------------
-
-describe('candidates', () => {
-  it('excludes deleted, root itself and tables not after root; sorted', () => {
-    const root = mkTable({ tableId: 'root', pdfPage: 1, tableInPage: 0 });
-    const before = mkTable({ tableId: 'before', pdfPage: 0 });
-    const del = mkTable({ tableId: 'del', pdfPage: 2, deleted: true });
-    const after1 = mkTable({ tableId: 'after1', pdfPage: 3, tableInPage: 0 });
-    const after2 = mkTable({ tableId: 'after2', pdfPage: 2, tableInPage: 1 });
-    const tables = [after1, root, before, del, after2];
-    expect(candidates(root, tables).map((t) => t.tableId)).toEqual(['after2', 'after1']);
   });
 });
 
@@ -552,31 +540,97 @@ describe('autoPopulateGrid', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildInitialState', () => {
-  it('reconstructs when a saved grid exists and excludes placed ids from select', () => {
+  it('reconstructs a saved grid and offers only the unplaced members of next', () => {
     const tableB = mkTable({ tableId: 'b', pdfPage: 1 });
-    const other = mkTable({ tableId: 'o', pdfPage: 2 });
+    const tableC = mkTable({ tableId: 'c', pdfPage: 2 });
     const root = mkTable({
       tableId: 'root',
       pdfPage: 0,
-      next: { b: tableB },
+      next: { b: tableB, c: tableC },
       grid: [['root', 'b']],
     });
-    const tables = [root, tableB, other];
-    const { grid, select } = buildInitialState(root, tables);
+    const { grid, select } = buildInitialState(root);
     expect(grid[0][0]).toBe(root);
     expect(grid[0][1]).toBe(tableB);
-    // 'b' is placed in the grid, so select holds only 'o'
-    expect(select.map((t) => t.tableId)).toEqual(['o']);
+    // 'b' is placed, so only the other member of next is offered.
+    expect(select.map((t) => t.tableId)).toEqual(['c']);
   });
 
-  it('auto-populates when there is no saved grid', () => {
-    const root = mkTable({ tableId: 'root', pdfPage: 0, headerCount: 0, cols: 2, rows: 3 });
-    const a = mkTable({ tableId: 'a', pdfPage: 1, headerCount: 0, cols: 2, rows: 5 }); // spine
+  it('auto-populates the members of next when there is no saved grid', () => {
+    const a = mkTable({ tableId: 'a', pdfPage: 1, headerCount: 0, cols: 2, rows: 5 });
     const leftover = mkTable({ tableId: 'x', pdfPage: 2, headerCount: 0, cols: 9, rows: 9 });
-    const tables = [root, a, leftover];
-    const { grid, select } = buildInitialState(root, tables);
-    expect(grid.map((row) => row.map((c) => (c ? c.tableId : null)))).toEqual([['root'], ['a']]);
+    const root = mkTable({
+      tableId: 'root',
+      pdfPage: 0,
+      headerCount: 0,
+      cols: 2,
+      rows: 3,
+      next: { a, x: leftover },
+    });
+    const { grid, select } = buildInitialState(root);
+    expect(grid.map((row) => row.map((c) => (c ? c.tableId : null)))).toEqual([
+      ['root'],
+      ['a'],
+    ]);
     expect(select.map((t) => t.tableId)).toEqual(['x']);
+  });
+
+  // The pool is the root's own `next` map. A table sitting below the root in the document
+  // but never linked to it is not a candidate and must never be drawn in.
+  it('ignores tables that are not in next, however they sit in the document', () => {
+    const linked = mkTable({ tableId: 'a', pdfPage: 1, headerCount: 0, cols: 2, rows: 5 });
+    const stranger = mkTable({ tableId: 's', pdfPage: 3, headerCount: 0, cols: 9, rows: 9 });
+    const root = mkTable({
+      tableId: 'root',
+      pdfPage: 0,
+      headerCount: 0,
+      cols: 2,
+      rows: 3,
+      next: { a: linked },
+    });
+    const { grid, select } = buildInitialState(root, [root, linked, stranger]);
+    const ids = grid.flat().filter(Boolean).map((t) => t.tableId);
+    expect(ids).not.toContain('s');
+    expect(select.map((t) => t.tableId)).toEqual([]);
+  });
+
+  it('offers the members of next in document order', () => {
+    const late = mkTable({ tableId: 'late', pdfPage: 4, cols: 9, rows: 9 });
+    const early = mkTable({ tableId: 'early', pdfPage: 1, cols: 9, rows: 9 });
+    const root = mkTable({
+      tableId: 'root',
+      pdfPage: 0,
+      cols: 2,
+      next: { late, early },
+    });
+    const { select } = buildInitialState(root);
+    expect(select.map((t) => t.tableId)).toEqual(['early', 'late']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// allLinkedPlaced
+// ---------------------------------------------------------------------------
+
+describe('allLinkedPlaced', () => {
+  const a = mkTable({ tableId: 'a', pdfPage: 1 });
+  const b = mkTable({ tableId: 'b', pdfPage: 2 });
+  const root = mkTable({ tableId: 'root', pdfPage: 0, next: { a, b } });
+
+  it('is false while a member of next is still unplaced', () => {
+    expect(allLinkedPlaced(root, [[root, a]])).toBe(false);
+  });
+
+  it('is true once every member of next is in the grid', () => {
+    expect(allLinkedPlaced(root, [[root, a], [b, null]])).toBe(true);
+  });
+
+  it('is true for a root with no links at all', () => {
+    expect(allLinkedPlaced(mkTable({ tableId: 'solo' }), [[root]])).toBe(true);
+  });
+
+  it('tolerates a missing grid', () => {
+    expect(allLinkedPlaced(root, null)).toBe(false);
   });
 });
 
@@ -585,18 +639,19 @@ describe('buildInitialState', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildSaveTables', () => {
-  it('builds newGrid/newNext, drops nested tables and appends pruned-back tables', () => {
-    const oldNested = mkTable({ tableId: 'old', pdfPage: 5 });
+  // Membership of a group is decided by the linking flow, never here: this panel lays a grid
+  // out over the tables the root already holds in `next`, and writes `grid` alone.
+  it('writes the grid and leaves next exactly as it found it', () => {
+    const b = mkTable({ tableId: 'b', pdfPage: 1 });
+    const c = mkTable({ tableId: 'c', pdfPage: 2 });
     const root = mkTable({
       tableId: 'root',
       pdfPage: 0,
-      next: { old: oldNested },
+      next: { b, c },
       grid: [['root']],
     });
-    const b = mkTable({ tableId: 'b', pdfPage: 1 });
-    const c = mkTable({ tableId: 'c', pdfPage: 2 });
     const d = mkTable({ tableId: 'd', pdfPage: 3 });
-    const tables = [root, b, c, d];
+    const tables = [root, d];
     const grid = [
       [root, b],
       [c, null],
@@ -608,26 +663,41 @@ describe('buildSaveTables', () => {
       ['root', 'b'],
       ['c', ''],
     ]);
-    expect(Object.keys(newRoot.next).sort()).toEqual(['b', 'c']);
-    expect(newRoot.next.b).toBe(b);
-    expect(newRoot.next.c).toBe(c);
+    expect(newRoot.next).toBe(root.next);
 
     const ids = result.map((t) => t.tableId);
-    expect(ids).not.toContain('b'); // now nested
-    expect(ids).not.toContain('c'); // now nested
-    expect(ids).toContain('d'); // untouched
-    expect(ids).toContain('old'); // pruned back into the list
+    expect(ids).toEqual(['root', 'd']);
+  });
+
+  it('leaves next intact even when a member is dragged out of the grid', () => {
+    const b = mkTable({ tableId: 'b', pdfPage: 1 });
+    const root = mkTable({
+      tableId: 'root',
+      pdfPage: 0,
+      next: { b },
+      grid: [['root', 'b']],
+    });
+    const result = buildSaveTables(root, [[root, null]], [root]);
+    const newRoot = result.find((t) => t.tableId === 'root');
+    // The layout is gone; the membership is not.
+    expect(newRoot.grid).toBeNull();
+    expect(Object.keys(newRoot.next)).toEqual(['b']);
+    expect(result.map((t) => t.tableId)).toEqual(['root']);
   });
 
   it('removes a fully-empty row on save', () => {
-    const root = mkTable({ tableId: 'root', pdfPage: 0, grid: [['root']] });
     const b = mkTable({ tableId: 'b', pdfPage: 1 });
-    const tables = [root, b];
+    const root = mkTable({
+      tableId: 'root',
+      pdfPage: 0,
+      next: { b },
+      grid: [['root']],
+    });
     const grid = [
       [root, b],
       [null, null], // fully-empty row -> removed
     ];
-    const newRoot = buildSaveTables(root, grid, tables).find(
+    const newRoot = buildSaveTables(root, grid, [root]).find(
       (t) => t.tableId === 'root',
     );
     expect(newRoot.grid).toEqual([['root', 'b']]);
@@ -635,15 +705,19 @@ describe('buildSaveTables', () => {
   });
 
   it('removes a fully-empty column on save', () => {
-    const root = mkTable({ tableId: 'root', pdfPage: 0, grid: [['root']] });
     const b = mkTable({ tableId: 'b', pdfPage: 1 });
     const c = mkTable({ tableId: 'c', pdfPage: 2 });
-    const tables = [root, b, c];
+    const root = mkTable({
+      tableId: 'root',
+      pdfPage: 0,
+      next: { b, c },
+      grid: [['root']],
+    });
     const grid = [
       [root, null, c],
       [b, null, null], // middle column fully empty -> removed
     ];
-    const newRoot = buildSaveTables(root, grid, tables).find(
+    const newRoot = buildSaveTables(root, grid, [root]).find(
       (t) => t.tableId === 'root',
     );
     expect(newRoot.grid).toEqual([
@@ -738,6 +812,31 @@ describe('canDropSelectToGrid', () => {
     expect(canDropSelectToGrid(dragged, grid, 1, 1)).toBe(true);
   });
 
+  // Body rows are what must line up: a table that repeats the header, or drops it, still
+  // contributes the same rows of data, and a drop is a deliberate placement.
+  it('accepts a side-by-side drop when only the header counts differ', () => {
+    const noHeader = mkTable({ tableId: 'nh', cols: 2, rows: 3 }); // hdr 0, body 3
+    const oneHeader = mkTable({
+      tableId: 'oh',
+      cols: 3,
+      rows: 4,
+      headerCount: 1,
+    }); // hdr 1, body 3
+    expect(canDropSelectToGrid(oneHeader, [[noHeader, null]], 0, 1)).toBe(true);
+    expect(canDropSelectToGrid(noHeader, [[oneHeader, null]], 0, 1)).toBe(true);
+  });
+
+  it('accepts a first-column drop whatever sits to its right', () => {
+    const root = mkTable({ tableId: 'root', cols: 3, rows: 4 });
+    const right = mkTable({ tableId: 'right', cols: 5, rows: 9 }); // neither shape nor header matches
+    const grid = [
+      [root, mkTable({ tableId: 'topright', cols: 5, rows: 2 })],
+      [null, right],
+    ];
+    // The spine asks one thing of a table: Root's column count.
+    expect(canDropSelectToGrid(dragged, grid, 1, 0)).toBe(true);
+  });
+
   it('rejects when the target cell is non-empty', () => {
     const grid = [[left, mkTable({ tableId: 'occupied' })]];
     expect(canDropSelectToGrid(dragged, grid, 0, 1)).toBe(false);
@@ -749,7 +848,7 @@ describe('canDropSelectToGrid', () => {
     expect(canDropSelectToGrid(dragged, grid, 0, 0)).toBe(false);
   });
 
-  it('accepts a first-column drop when cols match Root and the row count matches the right neighbour', () => {
+  it('accepts a first-column drop when cols match Root and a table sits to the right', () => {
     const root = mkTable({ tableId: 'root', cols: 3, rows: 4 });
     const right = mkTable({ tableId: 'right', cols: 5, rows: 4, headerCount: 1 }); // nonHeaderRows 3
     const grid = [
@@ -775,17 +874,6 @@ describe('canDropSelectToGrid', () => {
       [root, null],
       [null, null],
     ];
-    expect(canDropSelectToGrid(dragged, grid, 1, 0)).toBe(false);
-  });
-
-  it('rejects a first-column drop when the row count conflicts with the right neighbour', () => {
-    const root = mkTable({ tableId: 'root', cols: 3, rows: 4 });
-    const right = mkTable({ tableId: 'right', cols: 5, rows: 9, headerCount: 1 }); // nonHeaderRows 8
-    const grid = [
-      [root, mkTable({ tableId: 'topright', cols: 5, rows: 2 })],
-      [null, right],
-    ];
-    // dragged nonHeaderRows 3 !== right nonHeaderRows 8
     expect(canDropSelectToGrid(dragged, grid, 1, 0)).toBe(false);
   });
 
@@ -994,6 +1082,169 @@ describe('dropCandidates', () => {
     ];
     expect(dropCandidates(w, grid)).toEqual([{ kind: 'cell', r: 0, c: 1 }]);
   });
+
+  // The column dropped on is part of the instruction: a table dropped on the spine is
+  // placed on the spine or not at all, never slid into a continuation column.
+  it('confines the list to the column dropped on, splice included', () => {
+    const b = mkTable({ tableId: 'b', pdfPage: 2, cols: 2, rows: 3 });
+    const grid = [
+      [root, null],
+      [a, null],
+      [c, null],
+      [null, null],
+    ];
+    // b has Root's columns AND Root's body-row count, so unconfined it could go either on
+    // the spine or beside Root.
+    expect(dropCandidates(b, grid)).toEqual([
+      { kind: 'newRow', r: 2 },
+      { kind: 'cell', r: 0, c: 1 },
+      { kind: 'cell', r: 3, c: 0 },
+    ]);
+    expect(dropCandidates(b, grid, 0)).toEqual([
+      { kind: 'newRow', r: 2 },
+      { kind: 'cell', r: 3, c: 0 },
+    ]);
+    expect(dropCandidates(b, grid, 1)).toEqual([{ kind: 'cell', r: 0, c: 1 }]);
+  });
+
+  it('offers nothing in a column that cannot take the table', () => {
+    const w = mkTable({ tableId: 'w', pdfPage: 2, cols: 3, rows: 3 });
+    const grid = [
+      [root, null],
+      [a, null],
+      [null, null],
+    ];
+    // w has 3 columns where Root has 2, so the spine is closed to it — and the drop is not
+    // quietly rerouted to (0,1), which would take it.
+    expect(dropCandidates(w, grid, 0)).toEqual([]);
+    expect(dropCandidates(w, grid, 1)).toEqual([{ kind: 'cell', r: 0, c: 1 }]);
+  });
+});
+
+describe('dropPlacementReason', () => {
+  const root = mkTable({ tableId: 'root', name: 'Root', pdfPage: 0, cols: 2, rows: 3 });
+  const a = mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 });
+  const c = mkTable({ tableId: 'c', name: 'Gamma', pdfPage: 3, cols: 2, rows: 5 });
+  const b = mkTable({ tableId: 'b', name: 'Beta', pdfPage: 2, cols: 2, rows: 4 });
+  const grid = [
+    [root, null],
+    [a, null],
+    [c, null],
+    [null, null],
+  ];
+
+  it('names the table a spliced row goes above and the order that put it there', () => {
+    expect(dropPlacementReason(b, grid, { kind: 'newRow', r: 2 })).toBe(
+      "Beta placed on a new row above Gamma: it has Root's 2 columns and comes before Gamma in the document.",
+    );
+  });
+
+  it('names the spine table a first-column placement follows', () => {
+    expect(dropPlacementReason(b, grid, { kind: 'cell', r: 3, c: 0 })).toBe(
+      "Beta placed below Gamma in the first column: it has Root's 2 columns.",
+    );
+  });
+
+  it('names the body rows a side-by-side placement matched', () => {
+    const w = mkTable({ tableId: 'w', name: 'Ex', pdfPage: 2, cols: 3, rows: 3 });
+    expect(dropPlacementReason(w, grid, { kind: 'cell', r: 0, c: 1 })).toBe(
+      'Ex placed to the right of Root: it has the same 3 body rows as Root.',
+    );
+  });
+
+  it('adds the column match with the table above for a placement below row 0', () => {
+    const above = mkTable({ tableId: 'up', name: 'Upper', pdfPage: 1, cols: 3, rows: 3 });
+    const beside = mkTable({ tableId: 'r2', name: 'Lower', pdfPage: 2, cols: 3, rows: 5 });
+    const withSecondColumn = [
+      [root, above],
+      [a, null],
+      [null, null],
+    ];
+    expect(
+      dropPlacementReason(beside, withSecondColumn, { kind: 'cell', r: 1, c: 1 }),
+    ).toBe(
+      'Lower placed to the right of Alpha: it has the same 5 body rows as Alpha and the 3 columns of Upper above it.',
+    );
+  });
+});
+
+describe('dropRejectionReason', () => {
+  const root = mkTable({ tableId: 'root', name: 'Root', pdfPage: 0, cols: 2, rows: 3 });
+  const a = mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 });
+  const grid = [
+    [root, null],
+    [a, null],
+    [null, null],
+  ];
+
+  it('measures a refused spine drop against Root', () => {
+    const x = mkTable({ tableId: 'x', name: 'Ex', pdfPage: 2, cols: 9, rows: 9 });
+    expect(dropRejectionReason(x, grid, 0)).toBe(
+      'it has 9 columns where Root has 2, so it cannot join the first column',
+    );
+  });
+
+  it('names the body rows a refused continuation drop failed to match', () => {
+    const y = mkTable({ tableId: 'y', name: 'Why', pdfPage: 2, cols: 4, rows: 9 });
+    // Column 1 is open only beside Root: the cell beside Alpha has nothing above it, so no
+    // table at all could go there and nothing about `y` explains it.
+    expect(dropRejectionReason(y, grid, 1)).toBe(
+      'it has 9 body rows where Root beside it has 3',
+    );
+  });
+
+  // A column gapped by dragging a table back out has more than one open cell, and they can
+  // refuse for different reasons — both are reported, so a second attempt is not a second
+  // refusal.
+  it('reports every reason a gapped column refused, once each', () => {
+    const b = mkTable({ tableId: 'b', name: 'Beta', pdfPage: 2, cols: 2, rows: 7 });
+    const d = mkTable({ tableId: 'd', name: 'Delta', pdfPage: 3, cols: 2, rows: 6 });
+    const up1 = mkTable({ tableId: 'u1', name: 'Upper', pdfPage: 1, cols: 3, rows: 3 });
+    const up2 = mkTable({ tableId: 'u2', name: 'Lower', pdfPage: 3, cols: 3, rows: 7 });
+    const y = mkTable({ tableId: 'y', name: 'Why', pdfPage: 4, cols: 3, rows: 9 });
+    expect(
+      dropRejectionReason(
+        y,
+        [
+          [root, up1],
+          [a, null],
+          [b, up2],
+          [d, null],
+          [null, null],
+        ],
+        1,
+      ),
+    ).toBe(
+      'it has 9 body rows where Alpha beside it has 5, and it has 9 body rows where Delta beside it has 6',
+    );
+  });
+
+  it('names the table above when a continuation column is already a column wide', () => {
+    const upper = mkTable({ tableId: 'up', name: 'Upper', pdfPage: 1, cols: 3, rows: 3 });
+    const y = mkTable({ tableId: 'y', name: 'Why', pdfPage: 2, cols: 4, rows: 5 });
+    expect(
+      dropRejectionReason(y, [
+        [root, upper],
+        [a, null],
+        [null, null],
+      ], 1),
+    ).toBe('it has 4 columns where Upper above it has 3');
+  });
+
+  it('says so when no cell in the column is open beside a placed table', () => {
+    const y = mkTable({ tableId: 'y', name: 'Why', pdfPage: 2, cols: 2, rows: 3 });
+    // Column 2 has nothing to its left anywhere, so no table could be dropped there.
+    expect(dropRejectionReason(y, grid, 2)).toBe(
+      'no cell in that column is open beside a placed table',
+    );
+  });
+
+  it('says so when the grid carries no Root to measure against', () => {
+    const z = mkTable({ tableId: 'z', name: 'Zed', pdfPage: 2, cols: 2, rows: 3 });
+    expect(dropRejectionReason(z, [[null]], 0)).toBe(
+      'the grid has no Root table to place it against',
+    );
+  });
 });
 
 describe('TableLinkageEditor component', () => {
@@ -1003,12 +1254,10 @@ describe('TableLinkageEditor component', () => {
     bounds: { left: 0.01 * i, top: 0.02, width: 0.03, height: 0.04 },
   });
 
-  // Fixture that auto-populates: root over a spine `a`, with `x` left in select.
+  // Fixture that auto-populates: root over a spine `a`, with `x` left in select. Both are
+  // members of the root's `next` map, which is the panel's only pool — the linking flow puts
+  // them there and this panel never adds to it or takes from it.
   const buildFixture = () => {
-    const root = withBounds(
-      mkTable({ tableId: 'root', name: 'Root', pdfPage: 0, cols: 2, rows: 3 }),
-      1,
-    );
     const a = withBounds(
       mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }),
       2,
@@ -1017,11 +1266,126 @@ describe('TableLinkageEditor component', () => {
       mkTable({ tableId: 'x', name: 'Ex', pdfPage: 2, cols: 9, rows: 9 }),
       3,
     );
-    return { root, a, x, tables: [root, a, x] };
+    const root = withBounds(
+      mkTable({
+        tableId: 'root',
+        name: 'Root',
+        pdfPage: 0,
+        cols: 2,
+        rows: 3,
+        next: { a, x },
+      }),
+      1,
+    );
+    return { root, a, x, tables: [root] };
   };
 
   beforeEach(() => {
     getTableImages.mockReset();
+  });
+
+  // A group is ready to extract only once every table in it has a place in the grid.
+  it('disables Ready while a member of next is still unplaced', async () => {
+    const { root, tables } = buildFixture();
+    getTableImages.mockResolvedValue({ images: {} });
+    render(
+      <TableLinkageEditor
+        pdfId={'pdf-1'}
+        rootTable={root}
+        tables={tables}
+        onCancel={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(getTableImages).toHaveBeenCalled());
+
+    // The fixture auto-places `a` on the spine and leaves `x` in Available.
+    expect(screen.getByTestId('select-column').querySelector('[data-tableid="x"]')).not.toBeNull();
+    expect(screen.getByTestId('link-ready')).toBeDisabled();
+    // Save is always available: a part-laid-out group is still worth keeping.
+    expect(screen.getByTestId('link-save')).toBeEnabled();
+  });
+
+  it('enables Ready once every member of next is placed', async () => {
+    const a = withBounds(
+      mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }),
+      2,
+    );
+    const root = withBounds(
+      mkTable({
+        tableId: 'root',
+        name: 'Root',
+        pdfPage: 0,
+        cols: 2,
+        rows: 3,
+        next: { a },
+      }),
+      1,
+    );
+    getTableImages.mockResolvedValue({ images: {} });
+    render(
+      <TableLinkageEditor
+        pdfId={'pdf-1'}
+        rootTable={root}
+        tables={[root]}
+        onCancel={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(getTableImages).toHaveBeenCalled());
+
+    expect(screen.getByTestId('select-column').querySelector('[data-tableid]')).toBeNull();
+    expect(screen.getByTestId('link-ready')).toBeEnabled();
+  });
+
+  it('enables Ready for a root with no links at all', async () => {
+    const root = withBounds(
+      mkTable({ tableId: 'root', name: 'Root', pdfPage: 0, cols: 2, rows: 3 }),
+      1,
+    );
+    getTableImages.mockResolvedValue({ images: {} });
+    render(
+      <TableLinkageEditor
+        pdfId={'pdf-1'}
+        rootTable={root}
+        tables={[root]}
+        onCancel={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('link-ready')).toBeEnabled());
+  });
+
+  it('disables Ready again once a placed table is dragged back out', async () => {
+    const a = withBounds(
+      mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }),
+      2,
+    );
+    const root = withBounds(
+      mkTable({
+        tableId: 'root',
+        name: 'Root',
+        pdfPage: 0,
+        cols: 2,
+        rows: 3,
+        next: { a },
+      }),
+      1,
+    );
+    getTableImages.mockResolvedValue({ images: {} });
+    render(
+      <TableLinkageEditor
+        pdfId={'pdf-1'}
+        rootTable={root}
+        tables={[root]}
+        onCancel={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId('link-ready')).toBeEnabled());
+
+    fireEvent.click(screen.getByTestId('link-unlink'));
+    expect(screen.getByTestId('link-ready')).toBeDisabled();
   });
 
   it('renders nothing when rootTable is undefined', () => {
@@ -1123,19 +1487,18 @@ describe('TableLinkageEditor component', () => {
     fireEvent.click(screen.getByTestId('link-save'));
     expect(onSave).toHaveBeenCalledTimes(1);
 
-    const { grid } = buildInitialState(root, tables);
+    const { grid } = buildInitialState(root);
     const expected = buildSaveTables(root, grid, tables);
     const actual = onSave.mock.calls[0][0];
 
-    // Root entry now carries grid/next; nested table `a` removed from the list; `x` kept.
+    // The root gains the laid-out grid; its `next` is carried through untouched, `x`
+    // included, even though `x` is not placed in the grid.
     const newRoot = actual.find((t) => t.tableId === 'root');
     expect(newRoot.grid).toEqual([['root'], ['a']]);
-    expect(Object.keys(newRoot.next)).toEqual(['a']);
+    expect(Object.keys(newRoot.next).sort()).toEqual(['a', 'x']);
     const ids = actual.map((t) => t.tableId).sort();
     expect(ids).toEqual(expected.map((t) => t.tableId).sort());
-    expect(ids).not.toContain('a');
-    expect(ids).toContain('x');
-    expect(ids).toContain('root');
+    expect(ids).toEqual(['root']);
   });
 
   it('renders inline as a panel, not as a dialog, with all three actions', async () => {
@@ -1165,11 +1528,16 @@ describe('TableLinkageEditor component', () => {
 
   it('Ready saves exactly what Save would, except the root is marked ready', async () => {
     const fixture = buildFixture();
-    // Give the root and the untouched leftover table pre-existing stages, so the
-    // test can show only the root's changes.
-    const root = { ...fixture.root, confirmationStage: 2 };
+    // Ready is gated on every member of next being placed, so this group holds only the
+    // table the auto-placement puts on the spine. `x` stays a plain top-level table with a
+    // stage of its own, to show that no other table's stage moves.
+    const root = {
+      ...fixture.root,
+      confirmationStage: 2,
+      next: { a: fixture.a },
+    };
     const x = { ...fixture.x, confirmationStage: 3 };
-    const tables = [root, fixture.a, x];
+    const tables = [root, x];
     getTableImages.mockResolvedValue({ images: {} });
     const onSave = jest.fn();
 
@@ -1187,7 +1555,7 @@ describe('TableLinkageEditor component', () => {
     fireEvent.click(screen.getByTestId('link-ready'));
     expect(onSave).toHaveBeenCalledTimes(1);
 
-    const { grid } = buildInitialState(root, tables);
+    const { grid } = buildInitialState(root);
     const expected = buildSaveTables(root, grid, tables).map((t) =>
       t.tableId === root.tableId
         ? { ...t, confirmationStage: readyTableStage() }
@@ -1301,15 +1669,17 @@ describe('TableLinkageEditor component', () => {
     );
     const a = withBounds(mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }), 2);
     const c = withBounds(mkTable({ tableId: 'c', name: 'Gamma', pdfPage: 3, cols: 2, rows: 5 }), 3);
-    root.next = { a, c };
     const b = withBounds(mkTable({ tableId: 'b', name: 'Beta', pdfPage: 2, cols: 2, rows: 4 }), 4);
+    // b is a member of the group already — the linking flow put it there — but the saved grid
+    // does not place it, so it is what the Available column offers.
+    root.next = { a, c, b };
     getTableImages.mockResolvedValue({ images: {} });
 
     render(
       <TableLinkageEditor
         pdfId="pdf-1"
         rootTable={root}
-        tables={[root, b]}
+        tables={[root]}
         onCancel={jest.fn()}
         onSave={jest.fn()}
       />,
@@ -1342,15 +1712,15 @@ describe('TableLinkageEditor component', () => {
       1,
     );
     const a = withBounds(mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }), 2);
-    root.next = { a };
     const b = withBounds(mkTable({ tableId: 'b', name: 'Beta', pdfPage: 2, cols: 2, rows: 4 }), 3);
+    root.next = { a, b };
     getTableImages.mockResolvedValue({ images: {} });
 
     render(
       <TableLinkageEditor
         pdfId="pdf-1"
         rootTable={root}
-        tables={[root, b]}
+        tables={[root]}
         onCancel={jest.fn()}
         onSave={jest.fn()}
       />,
@@ -1366,6 +1736,175 @@ describe('TableLinkageEditor component', () => {
     fireEvent.drop(screen.getByTestId('linked-grid'), { dataTransfer: dt, clientX: 0, clientY: 0 });
 
     expect(gridCellIds()).toEqual(['root', 'a', 'b']);
+  });
+
+  // The column a table is dropped on is the user's instruction: it is placed in that column
+  // or not at all. Neither outcome shows its reasoning on screen — an accepted table can
+  // land in a row the user was not aiming at, and a refused one just stays in Available —
+  // so both answer for themselves in a toast.
+  describe('a drop is confined to the column it landed on, and says what came of it', () => {
+    // jsdom lays nothing out, so every rectangle is empty and a drop event carries no
+    // coordinates. Give each column a 100px band by its data-col, and dispatch a native
+    // drop event with a clientX in the band being aimed at.
+    const layOutColumnsBy100 = () => {
+      jest
+        .spyOn(Element.prototype, 'getBoundingClientRect')
+        .mockImplementation(function measured() {
+          const col = this.getAttribute('data-col');
+          const left = col == null ? 0 : Number(col) * 100;
+          const width = col == null ? 0 : 100;
+          return {
+            left,
+            right: left + width,
+            top: 0,
+            bottom: 100,
+            width,
+            height: 100,
+            x: left,
+            y: 0,
+          };
+        });
+    };
+
+    const dropAt = (dt, clientX) => {
+      const event = new Event('drop', { bubbles: true, cancelable: true });
+      event.dataTransfer = dt;
+      event.clientX = clientX;
+      event.clientY = 50;
+      fireEvent(screen.getByTestId('linked-grid'), event);
+    };
+
+    // Root carries a header, `a` does not — which stops the auto-populated spine, so `b`
+    // (2 header rows) is left in Available with somewhere to go in either column: the spine
+    // below `a` (it has Root's 2 columns) or beside Root (it has Root's 3 body rows).
+    const twoWayFixture = () => {
+      const root = withBounds(
+        mkTable({
+          tableId: 'root',
+          name: 'Root',
+          pdfPage: 0,
+          cols: 2,
+          rows: 4,
+          headerCount: 1,
+        }),
+        1,
+      );
+      const a = withBounds(
+        mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }),
+        2,
+      );
+      const b = withBounds(
+        mkTable({
+          tableId: 'b',
+          name: 'Beta',
+          pdfPage: 2,
+          cols: 2,
+          rows: 5,
+          headerCount: 2,
+        }),
+        3,
+      );
+      root.next = { a, b };
+      return { root, a, b };
+    };
+
+    const renderGrid = async (root) => {
+      getTableImages.mockResolvedValue({ images: {} });
+      render(
+        <TableLinkageEditor
+          pdfId={'pdf-1'}
+          rootTable={root}
+          tables={[root]}
+          onCancel={jest.fn()}
+          onSave={jest.fn()}
+        />,
+      );
+      await waitFor(() => expect(getTableImages).toHaveBeenCalled());
+      layOutColumnsBy100();
+    };
+
+    const dragFromAvailable = (tableId) => {
+      const dt = mkDataTransfer();
+      fireEvent.dragStart(
+        screen.getByTestId('select-column').querySelector(`[data-tableid="${tableId}"]`),
+        { dataTransfer: dt },
+      );
+      return dt;
+    };
+
+    beforeEach(() => {
+      toast.success.mockClear();
+      toast.error.mockClear();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('puts a table dropped on the spine on the spine, not in the column beside it', async () => {
+      const { root } = twoWayFixture();
+      await renderGrid(root);
+
+      dropAt(dragFromAvailable('b'), 50); // column 0
+
+      expect(gridCellIds()).toEqual(['root', 'a', 'b']);
+      expect(toast.success).toHaveBeenCalledWith(
+        "Beta placed below Alpha in the first column: it has Root's 2 columns.",
+      );
+    });
+
+    it('puts a table dropped on a continuation column there, headers notwithstanding', async () => {
+      const { root } = twoWayFixture();
+      await renderGrid(root);
+
+      dropAt(dragFromAvailable('b'), 150); // column 1
+
+      // Beside Root, though it carries two header rows where Root carries one.
+      expect(gridCellIds()).toEqual(['root', 'b', 'a']);
+      expect(toast.success).toHaveBeenCalledWith(
+        'Beta placed to the right of Root: it has the same 3 body rows as Root.',
+      );
+    });
+
+    it('refuses a spine drop the first column cannot take rather than placing it elsewhere', async () => {
+      const { root } = twoWayFixture();
+      // 9 columns: the spine is closed to it, but it has Root's 3 body rows, so the cell
+      // beside Root would take it — and must not be substituted for what was asked.
+      const x = withBounds(
+        mkTable({ tableId: 'x', name: 'Ex', pdfPage: 3, cols: 9, rows: 3 }),
+        4,
+      );
+      root.next = { ...root.next, x };
+      await renderGrid(root);
+
+      dropAt(dragFromAvailable('x'), 50); // column 0
+
+      expect(gridCellIds()).toEqual(['root', 'a']);
+      expect(
+        screen.getByTestId('select-column').querySelector('[data-tableid="x"]'),
+      ).not.toBeNull();
+      expect(toast.error).toHaveBeenCalledWith(
+        'Ex was not placed: it has 9 columns where Root has 2, so it cannot join the first column.',
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it('names the body rows a refused continuation drop failed to match', async () => {
+      const { root } = twoWayFixture();
+      const w = withBounds(
+        mkTable({ tableId: 'w', name: 'Double', pdfPage: 3, cols: 9, rows: 7 }),
+        4,
+      );
+      root.next = { ...root.next, w };
+      await renderGrid(root);
+
+      dropAt(dragFromAvailable('w'), 150); // column 1
+
+      expect(gridCellIds()).toEqual(['root', 'a']);
+      expect(toast.error).toHaveBeenCalledWith(
+        'Double was not placed: it has 7 body rows where Root beside it has 3.',
+      );
+    });
   });
 
   // ---- Unlink -------------------------------------------------------------
@@ -1458,10 +1997,10 @@ describe('TableLinkageEditor component', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it('Save after Unlink hands back a root with no grid and no next, and the children restored', async () => {
-    const { root, a, x } = buildFixture();
-    // A root that ALREADY has a saved link to 'a', so 'a' is nested and absent from the
-    // top-level list — the state a real unlink has to undo.
+  // Clearing the grid clears the LAYOUT, not the group: which tables belong to the root is
+  // decided by the linking flow, and this panel may not change it.
+  it('Save after clearing the grid keeps next and nests the children still', async () => {
+    const { root, a } = buildFixture();
     const linkedRoot = { ...root, grid: [['root'], ['a']], next: { a } };
     getTableImages.mockResolvedValue({ images: {} });
     const onSave = jest.fn();
@@ -1470,7 +2009,7 @@ describe('TableLinkageEditor component', () => {
       <TableLinkageEditor
         pdfId={'pdf-1'}
         rootTable={linkedRoot}
-        tables={[linkedRoot, x]}
+        tables={[linkedRoot]}
         onCancel={jest.fn()}
         onSave={onSave}
       />,
@@ -1484,9 +2023,9 @@ describe('TableLinkageEditor component', () => {
     const saved = onSave.mock.calls[0][0];
     const savedRoot = saved.find((t) => t.tableId === 'root');
     expect(savedRoot.grid).toBeNull();
-    expect(savedRoot.next).toBeNull();
-    // 'a' is back in the top-level list rather than nested under the root.
-    expect(saved.map((t) => t.tableId).sort()).toEqual(['a', 'root', 'x']);
+    expect(Object.keys(savedRoot.next)).toEqual(['a']);
+    // 'a' stays nested under the root; it never returns to the top-level list.
+    expect(saved.map((t) => t.tableId)).toEqual(['root']);
   });
 
   // ---- Unlink and the confirmation stage ----------------------------------
@@ -1558,15 +2097,18 @@ describe('TableLinkageEditor component', () => {
     expect(savedRootFrom(onSave).confirmationStage).toBeNull();
   });
 
-  it('Ready after Unlink still marks the root ready', async () => {
+  // Ready is refused while any member of the group is unplaced, and clearing the grid
+  // unplaces all of them — so the promotion cannot be made from there.
+  it('Ready is refused after the grid is cleared, while members remain in the group', async () => {
     const { linkedRoot, tables } = linkedFixture(readyTableStage());
     const onSave = jest.fn();
     await renderForStage(linkedRoot, tables, onSave);
 
     fireEvent.click(screen.getByTestId('link-unlink'));
-    fireEvent.click(screen.getByTestId('link-ready'));
 
-    expect(savedRootFrom(onSave).confirmationStage).toBe(readyTableStage());
+    expect(screen.getByTestId('link-ready')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('link-ready'));
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it('saving a root that never had links leaves its stage alone', async () => {
@@ -1587,7 +2129,7 @@ describe('TableLinkageEditor component', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildSaveTables with only Root left in the grid', () => {
-  it('nulls grid and next rather than saving a degenerate 1x1 grid', () => {
+  it('nulls the grid rather than saving a degenerate 1x1, and keeps next', () => {
     const nested = mkTable({ tableId: 'a', pdfPage: 1 });
     const root = mkTable({
       tableId: 'root',
@@ -1597,8 +2139,8 @@ describe('buildSaveTables with only Root left in the grid', () => {
     });
     const other = mkTable({ tableId: 'x', pdfPage: 2 });
 
-    // The grid the panel holds after Unlink: Root alone, plus the trailing empties
-    // padForDisplay always adds.
+    // The grid the panel holds once every table has been dragged out: Root alone, plus the
+    // trailing empties padForDisplay always adds.
     const result = buildSaveTables(
       root,
       [
@@ -1610,16 +2152,16 @@ describe('buildSaveTables with only Root left in the grid', () => {
 
     const newRoot = result.find((t) => t.tableId === 'root');
     expect(newRoot.grid).toBeNull();
-    expect(newRoot.next).toBeNull();
-    // The previously nested table is handed back to the top-level list.
-    expect(result.map((t) => t.tableId).sort()).toEqual(['a', 'root', 'x']);
+    // The group survives its layout being cleared.
+    expect(Object.keys(newRoot.next)).toEqual(['a']);
+    expect(result.map((t) => t.tableId).sort()).toEqual(['root', 'x']);
   });
 
-  it('still builds grid and next when a table remains linked', () => {
-    const root = mkTable({ tableId: 'root', pdfPage: 0 });
+  it('writes the grid when a table is placed, still without touching next', () => {
     const b = mkTable({ tableId: 'b', pdfPage: 1 });
+    const root = mkTable({ tableId: 'root', pdfPage: 0, next: { b } });
 
-    const result = buildSaveTables(root, [[root], [b]], [root, b]);
+    const result = buildSaveTables(root, [[root], [b]], [root]);
 
     const newRoot = result.find((t) => t.tableId === 'root');
     expect(newRoot.grid).toEqual([['root'], ['b']]);

@@ -24,14 +24,20 @@ describe('overlay colour / width config', () => {
 });
 
 describe('confidence threshold config', () => {
-  it('highConfidence() returns 80', () => {
-    expect(configModule.highConfidence()).toBe(80);
-    expect(config.highConfidence()).toBe(80);
+  // The thresholds are tuned values, so what is asserted is the RANGE they have to stay
+  // in, not the numbers themselves: both are percentages, and low has to sit below high
+  // or the orange band between them disappears.
+  it('are percentages, with low below high', () => {
+    for (const source of [configModule, config]) {
+      expect(source.lowConfidence()).toBeGreaterThan(0);
+      expect(source.highConfidence()).toBeLessThanOrEqual(100);
+      expect(source.lowConfidence()).toBeLessThan(source.highConfidence());
+    }
   });
 
-  it('lowConfidence() returns 50', () => {
-    expect(configModule.lowConfidence()).toBe(50);
-    expect(config.lowConfidence()).toBe(50);
+  it('reads the same on both import paths', () => {
+    expect(config.highConfidence()).toBe(configModule.highConfidence());
+    expect(config.lowConfidence()).toBe(configModule.lowConfidence());
   });
 });
 

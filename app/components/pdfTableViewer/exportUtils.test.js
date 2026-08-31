@@ -1,4 +1,4 @@
-import { excelFilename, saveBlob } from './exportUtils';
+import { excelFilename, exportableTableIds, saveBlob } from './exportUtils';
 
 describe('excelFilename', () => {
   it('replaces the uploaded document extension with the workbook one', () => {
@@ -82,5 +82,35 @@ describe('saveBlob', () => {
     );
     expect(document.querySelectorAll('a')).toHaveLength(0);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url');
+  });
+});
+
+describe('exportableTableIds', () => {
+  it('answers every table id, in list order', () => {
+    const tables = [{ tableId: 't-1' }, { tableId: 't-2' }, { tableId: 't-3' }];
+
+    expect(exportableTableIds(tables)).toEqual(['t-1', 't-2', 't-3']);
+  });
+
+  it('leaves out a soft-deleted table', () => {
+    const tables = [{ tableId: 't-1' }, { tableId: 't-2', deleted: true }, { tableId: 't-3' }];
+
+    expect(exportableTableIds(tables)).toEqual(['t-1', 't-3']);
+  });
+
+  it('takes a linking root once, by its own id, and not the members it holds', () => {
+    // A joined table lives in the root's `next` map and is off the top-level list, so the
+    // root stands for the whole group.
+    const tables = [
+      { tableId: 'root', next: { 'joined-1': { tableId: 'joined-1' } } },
+      { tableId: 't-2' },
+    ];
+
+    expect(exportableTableIds(tables)).toEqual(['root', 't-2']);
+  });
+
+  it('answers nothing for an empty or absent list', () => {
+    expect(exportableTableIds([])).toEqual([]);
+    expect(exportableTableIds(undefined)).toEqual([]);
   });
 });

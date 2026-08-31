@@ -1,3 +1,4 @@
+import { reviewEditedCellConfidence } from 'config';
 import {
   MERGE_ROLE_JOINED,
   MERGE_ROLE_ROOT,
@@ -32,6 +33,16 @@ import {
   titlesEqual,
   withCellSpan,
   leadingSquaresBounds,
+  linkedTablesWithParents,
+  additionalTables,
+  tableSetChanged,
+  linkLabelText,
+  canJoinLinkGroup,
+  removeFromLinkGroup,
+  LINK_LABEL_END_LINKING,
+  LINK_LABEL_ROOT,
+  LINK_LABEL_JOINED,
+  LINK_LABEL_PLAIN,
 } from 'components/pdfTableViewer/tableSupportUtils';
 
 // A metadata table whose bounds already equal its column/row sums, so the idempotent
@@ -264,7 +275,10 @@ describe('mergeFindGridLines — cells left stale by the new grid', () => {
     expect(a1.bounds.height).toBeCloseTo(0.1, 10);
   });
 
-  it('keeps a cell that carries text, whose bounds are its tighter OCR box', () => {
+  // A cell that carries text is kept — discarding real extracted text is not this merge's
+  // job — but it is re-seated onto its new square and its confidence is dropped, because
+  // the text is now a claim about a different piece of the page.
+  it('re-seats a cell that carries text, keeping the text and zeroing its confidence', () => {
     const tables = [
       tbl('T', 0, 0.1, 0.2, 0.3, 0.2, {
         cells: [placeholder(border, { text: 'Total', confidence: 90 })],
@@ -277,8 +291,67 @@ describe('mergeFindGridLines — cells left stale by the new grid', () => {
       .find((t) => t.tableId === 'T')
       .cells.find((c) => c.row === 0 && c.column === 0);
     expect(a1.text).toBe('Total');
+    expect(a1.confidence).toBe(0);
+    expect(a1.bounds.width).toBeCloseTo(0.1, 10); // the square, NOT the 0.3-wide border
+    expect(a1.bounds.height).toBeCloseTo(0.1, 10);
+  });
+
+  // The other half of the rule: a square that did not move leaves its cell completely
+  // alone, tighter OCR box and confidence included. Without this a re-detect that changed
+  // nothing would still redden every cell in the table.
+  it('leaves a cell carrying text untouched when its square did not move', () => {
+    const ocrBox = { left: 0.12, top: 0.22, width: 0.05, height: 0.03 };
+    const tables = [
+      tbl('U', 0, 0.1, 0.2, 0.3, 0.2, {
+        cells: [placeholder(ocrBox, { text: 'Total', confidence: 90 })],
+      }),
+    ];
+    const result = mergeFindGridLines(tables, 0, [retGrid(0.1, 0.2, [0.3], [0.2])]);
+    const a1 = result
+      .find((t) => t.tableId === 'U')
+      .cells.find((c) => c.row === 0 && c.column === 0);
     expect(a1.confidence).toBe(90);
-    expect(a1.bounds.width).toBeCloseTo(0.3, 10);
+    expect(a1.bounds).toEqual(ocrBox);
+  });
+
+  // The reported failure. A re-detected grid that loses its top row leaves every retained
+  // cell anchored one row BELOW the strip its bounds describe. cell.bounds is what
+  // buildCalcCellsRequestTable sends as the region to read, so a cell left on its old
+  // square made the next Calculate read the row above it — copying each row's text into
+  // the row below and never reading the table's last row at all.
+  it('re-seats every cell when the detected grid loses a row off the top', () => {
+    const rows = [0.1, 0.1, 0.1];
+    const cellsAt = (top) =>
+      rows.map((_, row) =>
+        placeholder(
+          { left: 0.1, top: top + row * 0.1, width: 0.3, height: 0.1 },
+          { row, text: `r${row}`, confidence: 90 }
+        )
+      );
+    const tables = [
+      tbl('G', 0, 0.1, 0.2, 0.3, 0.3, {
+        columnWidths: [{ value: 0.3, confidence: 90 }],
+        rowHeights: rows.map((value) => ({ value, confidence: 90 })),
+        cells: cellsAt(0.2),
+      }),
+    ];
+    // The same table with its top row gone: two rows, starting 0.1 lower.
+    const result = mergeFindGridLines(tables, 0, [
+      retGrid(0.1, 0.3, [0.3], [0.1, 0.1]),
+    ]);
+    const cells = result
+      .find((t) => t.tableId === 'G')
+      .cells.slice()
+      .sort((a, b) => a.row - b.row);
+
+    // Row 2 is outside the two-row grid and is gone; the survivors sit on their own
+    // squares rather than one row above them.
+    expect(cells.map((c) => c.row)).toEqual([0, 1]);
+    expect(cells[0].bounds.top).toBeCloseTo(0.3, 10);
+    expect(cells[1].bounds.top).toBeCloseTo(0.4, 10);
+    // And they say so: what they hold was read from somewhere else.
+    expect(cells.map((c) => c.confidence)).toEqual([0, 0]);
+    expect(cells.map((c) => c.text)).toEqual(['r0', 'r1']);
   });
 
   it('keeps an empty cell whose grid square did not move', () => {
@@ -618,6 +691,61 @@ describe('calculate-cells request/merge helpers', () => {
       expect(merged.rowHeights).toEqual(table.rowHeights);
       expect(merged.name).toBe('Calc Table');
       expect(merged.confirmationStage).toBe(3);
+    });
+
+    // A manual correction is recorded at reviewEditedCellConfidence() so the next
+    // extraction leaves that region alone; the page-exit re-read has to honour the same
+    // mark. Moving a rectangle is not affected — that zeroes the cell's confidence
+    // (zeroConfidenceInRects), which takes it off the mark and back into the re-read.
+    it('leaves a manually corrected cell alone rather than retyping it from the read', () => {
+      const table = calcTable();
+      table.cells = [
+        { ...table.cells[0], text: 'User typed', confidence: reviewEditedCellConfidence() },
+        ...table.cells.slice(1),
+      ];
+      const merged = mergeCalcCellsResponse(table, {
+        tableInPage: 1,
+        cells: [
+          { row: 0, column: 0, text: 'OCR text', confidence: 60 },
+          { row: 0, column: 1, text: 'Fresh B', confidence: 95 },
+        ],
+      });
+      const at = (r, c) => merged.cells.find((x) => x.row === r && x.column === c);
+      expect(at(0, 0).text).toBe('User typed');
+      expect(at(0, 0).confidence).toBe(reviewEditedCellConfidence());
+      // Its neighbours are still re-read: the mark is per cell, not per table.
+      expect(at(0, 1).text).toBe('Fresh B');
+    });
+
+    it('leaves a manually corrected title alone', () => {
+      const table = calcTable();
+      table.title = { ...table.title, text: 'User title', confidence: reviewEditedCellConfidence() };
+      const merged = mergeCalcCellsResponse(table, {
+        tableInPage: 1,
+        cells: [],
+        title: { text: 'Read Title', confidence: 88 },
+      });
+      expect(merged.title.text).toBe('User title');
+    });
+
+    it('leaves a manually corrected section title and footer alone', () => {
+      const table = calcTable();
+      table.sectionTitles = [
+        { ...table.sectionTitles[0],
+          data: { ...table.sectionTitles[0].data, text: 'User section', confidence: reviewEditedCellConfidence() } },
+        ...table.sectionTitles.slice(1),
+      ];
+      table.footer = { ...table.footer, text: 'User footer', confidence: reviewEditedCellConfidence() };
+      const merged = mergeCalcCellsResponse(table, {
+        tableInPage: 1,
+        cells: [],
+        specials: [
+          { text: 'Read Section', confidence: 71 },
+          { text: 'Read Footer', confidence: 72 },
+        ],
+      });
+      expect(merged.sectionTitles[0].data.text).toBe('User section');
+      expect(merged.footer.text).toBe('User footer');
     });
 
     it('updates the title text and confidence but keeps its bounds', () => {
@@ -1680,5 +1808,293 @@ describe('splitEntryAt', () => {
       { value: 0.6, confidence: 80 },
       { value: 0.2, confidence: 70 },
     ]);
+  });
+});
+
+// ---- tableSetChanged -----------------------------------------------------------------
+// Answers "did the set of tables change?", not "did anything change?": ids and the deleted
+// flag only, seen at the top level and inside every `next` map.
+
+describe('tableSetChanged', () => {
+  const a = () => tbl('a', 0, 0.1, 0.1, 0.2, 0.2);
+  const b = () => tbl('b', 0, 0.5, 0.5, 0.2, 0.2);
+
+  it('is false for two identical lists', () => {
+    expect(tableSetChanged([a(), b()], [a(), b()])).toBe(false);
+  });
+
+  it('is true when a table is added at the top level', () => {
+    expect(tableSetChanged([a()], [a(), b()])).toBe(true);
+  });
+
+  it('is true when a table is removed', () => {
+    expect(tableSetChanged([a(), b()], [a()])).toBe(true);
+  });
+
+  it('is true when a table is soft-deleted', () => {
+    expect(tableSetChanged([a(), b()], [a(), { ...b(), deleted: true }])).toBe(
+      true
+    );
+  });
+
+  it('is false when only geometry moved', () => {
+    const moved = { ...b(), bounds: { left: 0.6, top: 0.6, width: 0.2, height: 0.2 } };
+    expect(tableSetChanged([a(), b()], [a(), moved])).toBe(false);
+  });
+
+  it('is false when a table moves from the top level into a next map', () => {
+    const joined = [{ ...a(), next: { b: b() } }];
+    expect(tableSetChanged([a(), b()], joined)).toBe(false);
+  });
+
+  it('is true when a table is added inside a next map', () => {
+    expect(tableSetChanged([a()], [{ ...a(), next: { b: b() } }])).toBe(true);
+  });
+
+  it('is true when a table nested in a next map is soft-deleted', () => {
+    const before = [{ ...a(), next: { b: b() } }];
+    const after = [{ ...a(), next: { b: { ...b(), deleted: true } } }];
+    expect(tableSetChanged(before, after)).toBe(true);
+  });
+
+  it('handles null and undefined lists without throwing', () => {
+    expect(tableSetChanged(null, null)).toBe(false);
+    expect(tableSetChanged(undefined, [])).toBe(false);
+    expect(tableSetChanged(null, [a()])).toBe(true);
+  });
+});
+
+// ---- linkLabelText -------------------------------------------------------------------
+
+describe('linkLabelText', () => {
+  const child = tbl('c', 1, 0.1, 0.1, 0.2, 0.2);
+  const rootTable = { ...tbl('r', 0, 0.1, 0.1, 0.2, 0.2), name: 'Root', next: { c: child } };
+  const loner = tbl('x', 0, 0.6, 0.6, 0.2, 0.2);
+  const list = [rootTable, loner];
+  const roles = mergeRolesByTableId(list);
+  const parents = linkedTablesWithParents(list);
+
+  it('reads Selected for a table in no group', () => {
+    expect(linkLabelText(loner, roles, parents, null)).toEqual({
+      state: LINK_LABEL_PLAIN,
+      text: 'Selected',
+    });
+  });
+
+  it('reads Linked for the root of a group', () => {
+    expect(linkLabelText(rootTable, roles, parents, null)).toEqual({
+      state: LINK_LABEL_ROOT,
+      text: 'Linked',
+    });
+  });
+
+  it('names the root for a joined table', () => {
+    expect(linkLabelText(child, roles, parents, null)).toEqual({
+      state: LINK_LABEL_JOINED,
+      text: 'Linked to Root',
+    });
+  });
+
+  it('reads End Linking for the table rooting an open session', () => {
+    expect(linkLabelText(loner, roles, parents, 'x')).toEqual({
+      state: LINK_LABEL_END_LINKING,
+      text: 'End Linking',
+    });
+  });
+
+  it('prefers End Linking over Linked for a root with an open session', () => {
+    expect(linkLabelText(rootTable, roles, parents, 'r').state).toBe(
+      LINK_LABEL_END_LINKING
+    );
+  });
+
+  it('falls back to the id when a joined table has no parent entry', () => {
+    expect(
+      linkLabelText(child, { c: MERGE_ROLE_JOINED }, [], null).text
+    ).toBe('Linked to c');
+  });
+});
+
+// ---- canJoinLinkGroup ----------------------------------------------------------------
+
+describe('canJoinLinkGroup', () => {
+  const rootTable = { ...tbl('r', 0, 0.1, 0.1, 0.2, 0.2), tableInPage: 1 };
+  const laterPage = { ...tbl('p', 1, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+  const laterSamePage = { ...tbl('s', 0, 0.1, 0.5, 0.2, 0.2), tableInPage: 2 };
+  const earlier = { ...tbl('e', 0, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+
+  it('admits an ungrouped table on a later page', () => {
+    expect(canJoinLinkGroup(laterPage, rootTable, {})).toBe(true);
+  });
+
+  it('admits an ungrouped table later on the same page', () => {
+    expect(canJoinLinkGroup(laterSamePage, rootTable, {})).toBe(true);
+  });
+
+  it('refuses a table above the root', () => {
+    expect(canJoinLinkGroup(earlier, rootTable, {})).toBe(false);
+  });
+
+  it('refuses the root itself', () => {
+    expect(canJoinLinkGroup(rootTable, rootTable, {})).toBe(false);
+  });
+
+  it('refuses a table already in a group', () => {
+    expect(
+      canJoinLinkGroup(laterPage, rootTable, { p: MERGE_ROLE_JOINED })
+    ).toBe(false);
+    expect(
+      canJoinLinkGroup(laterPage, rootTable, { p: MERGE_ROLE_ROOT })
+    ).toBe(false);
+  });
+
+  it('refuses a missing table or root', () => {
+    expect(canJoinLinkGroup(null, rootTable, {})).toBe(false);
+    expect(canJoinLinkGroup(laterPage, null, {})).toBe(false);
+  });
+});
+
+// ---- removeFromLinkGroup ---------------------------------------------------------------
+
+describe('removeFromLinkGroup', () => {
+  const above = { ...tbl('a', 0, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+  const member1 = { ...tbl('m1', 1, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+  const member2 = { ...tbl('m2', 2, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+  const below = { ...tbl('z', 3, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+  const root = (extra = {}) => ({
+    ...tbl('r', 0, 0.1, 0.5, 0.2, 0.2),
+    tableInPage: 1,
+    next: { m1: member1, m2: member2 },
+    ...extra,
+  });
+  const list = (extra = {}) => [above, root(extra), below];
+
+  it('takes the member out of `next` and leaves the others', () => {
+    const out = removeFromLinkGroup(list(), 'r', 'm1');
+    expect(Object.keys(out.find((t) => t.tableId === 'r').next)).toEqual(['m2']);
+  });
+
+  it('returns the member to the top-level list in document order', () => {
+    const out = removeFromLinkGroup(list(), 'r', 'm1');
+    expect(out.map((t) => t.tableId)).toEqual(['a', 'r', 'm1', 'z']);
+  });
+
+  it('appends a member that comes after every top-level table', () => {
+    const late = { ...tbl('m9', 9, 0.1, 0.1, 0.2, 0.2), tableInPage: 0 };
+    const out = removeFromLinkGroup(
+      [above, { ...root(), next: { m9: late } }, below],
+      'r',
+      'm9'
+    );
+    expect(out.map((t) => t.tableId)).toEqual(['a', 'r', 'z', 'm9']);
+  });
+
+  it('nulls `next` once the last member leaves', () => {
+    const one = [above, { ...root(), next: { m1: member1 } }, below];
+    const out = removeFromLinkGroup(one, 'r', 'm1');
+    expect(out.find((t) => t.tableId === 'r').next).toBeNull();
+  });
+
+  it('drops the root grid whole, not just the removed cell', () => {
+    const before = list({
+      grid: [
+        ['r', 'm1'],
+        ['m2', ''],
+      ],
+    });
+    const out = removeFromLinkGroup(before, 'r', 'm1');
+    expect(out.find((t) => t.tableId === 'r').grid).toBeNull();
+  });
+
+  it('leaves every other table untouched', () => {
+    const before = list();
+    const out = removeFromLinkGroup(before, 'r', 'm1');
+    expect(out.find((t) => t.tableId === 'a')).toBe(above);
+    expect(out.find((t) => t.tableId === 'z')).toBe(below);
+    expect(out.find((t) => t.tableId === 'm1')).toBe(member1);
+  });
+
+  it('returns the list unchanged by reference for an unknown root or member', () => {
+    const before = list();
+    expect(removeFromLinkGroup(before, 'nope', 'm1')).toBe(before);
+    expect(removeFromLinkGroup(before, 'r', 'nope')).toBe(before);
+    // A top-level table is not a member of the group, even though it exists.
+    expect(removeFromLinkGroup(before, 'r', 'z')).toBe(before);
+  });
+
+  it('refuses a member of a DIFFERENT root', () => {
+    const other = {
+      ...tbl('o', 0, 0.1, 0.8, 0.2, 0.2),
+      tableInPage: 2,
+      next: { x: tbl('x', 4, 0.1, 0.1, 0.2, 0.2) },
+    };
+    const before = [...list(), other];
+    expect(removeFromLinkGroup(before, 'r', 'x')).toBe(before);
+  });
+});
+
+// ---- additional tables ----------------------------------------------------------------
+// A root holding linked tables in `next` with no grid laid out for them: the state the
+// linking flow writes. The Document Overview lists them rather than a grid size.
+
+describe('additional tables', () => {
+  const child = (id, page, inPage) => ({
+    ...tbl(id, page, 0.1, 0.1, 0.2, 0.2),
+    tableInPage: inPage,
+  });
+
+  const rootWithNext = (next) => ({
+    ...tbl('r', 0, 0.1, 0.1, 0.2, 0.2),
+    next,
+  });
+
+  describe('additionalTables', () => {
+    it('is empty for a table with no next', () => {
+      expect(additionalTables(tbl('r', 0, 0.1, 0.1, 0.2, 0.2))).toEqual([]);
+      expect(additionalTables(null)).toEqual([]);
+    });
+
+    it('is empty when the root has a saved grid', () => {
+      const root = {
+        ...rootWithNext({ c: child('c', 1, 0) }),
+        grid: [['r', 'c']],
+      };
+      expect(additionalTables(root)).toEqual([]);
+    });
+
+    it('orders the next tables by page then tableInPage', () => {
+      const root = rootWithNext({
+        late: child('late', 2, 0),
+        second: child('second', 0, 5),
+        first: child('first', 0, 1),
+      });
+      expect(additionalTables(root).map((t) => t.tableId)).toEqual([
+        'first',
+        'second',
+        'late',
+      ]);
+    });
+  });
+
+  describe('tableSizeLabel with next but no grid', () => {
+    it('counts the additional tables', () => {
+      const root = rootWithNext({
+        a: child('a', 1, 0),
+        b: child('b', 2, 0),
+      });
+      expect(tableSizeLabel(root).tablesLine).toBe('Additional tables 2');
+    });
+
+    it('still reports a grid size when a grid is saved', () => {
+      const root = {
+        ...rootWithNext({ c: child('c', 1, 0) }),
+        grid: [['r', 'c']],
+      };
+      expect(tableSizeLabel(root).tablesLine).toBe('2 × 1 Tables');
+    });
+
+    it('reports no tables line for a plain table', () => {
+      expect(tableSizeLabel(tbl('r', 0, 0.1, 0.1, 0.2, 0.2)).tablesLine).toBeNull();
+    });
   });
 });

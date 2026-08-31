@@ -53,17 +53,6 @@ export const headersMatch = (a, b) => {
 };
 
 // ---------------------------------------------------------------------------
-// candidates
-// ---------------------------------------------------------------------------
-
-export const candidates = (root, tables) =>
-  sortByOrder(
-    tables.filter(
-      (t) => !t.deleted && t.tableId !== root.tableId && comesAfter(t, root),
-    ),
-  );
-
-// ---------------------------------------------------------------------------
 // hasSavedGrid
 // ---------------------------------------------------------------------------
 
@@ -196,7 +185,28 @@ export const autoPopulateGrid = (root, candidateList) => {
 // buildInitialState
 // ---------------------------------------------------------------------------
 
-export const buildInitialState = (root, tables) => {
+// The panel's whole pool is the root's own `next` map: membership of a group is decided by
+// the linking flow, and this panel only decides where its members sit. A table below the root
+// in the document that was never linked to it is not a candidate and is never drawn in.
+export const linkedMembers = (root) =>
+  sortByOrder(Object.values(root?.next ?? {}));
+
+// Every member of `next` that the grid holds. A group is ready to extract only when that is
+// all of them; a root with no links has nothing outstanding and is ready by default.
+export const allLinkedPlaced = (root, grid) => {
+  const ids = Object.keys(root?.next ?? {});
+  if (ids.length === 0) return true;
+  const placed = new Set();
+  (grid ?? []).forEach((row) =>
+    (row ?? []).forEach((cell) => {
+      if (cell) placed.add(cell.tableId);
+    }),
+  );
+  return ids.every((id) => placed.has(id));
+};
+
+export const buildInitialState = (root) => {
+  const members = linkedMembers(root);
   if (hasSavedGrid(root)) {
     const grid = reconstructGrid(root);
     const placed = new Set();
@@ -205,14 +215,10 @@ export const buildInitialState = (root, tables) => {
         if (cell) placed.add(cell.tableId);
       }),
     );
-    const select = sortByOrder(
-      candidates(root, tables).filter((t) => !placed.has(t.tableId)),
-    );
-    return { grid, select };
+    return { grid, select: members.filter((t) => !placed.has(t.tableId)) };
   }
 
-  const list = sortByOrder(candidates(root, tables));
-  const { grid, remaining } = autoPopulateGrid(root, list.slice());
+  const { grid, remaining } = autoPopulateGrid(root, members.slice());
   return { grid, select: remaining };
 };
 
@@ -257,19 +263,17 @@ export const padForDisplay = (grid) => {
   return [...withCol, trailingRow];
 };
 
+// Write the laid-out grid onto the root. `next` is NEVER touched: which tables belong to a
+// group is settled by the linking flow, and this panel only decides where they sit. A member
+// dragged out of the grid therefore leaves the layout, not the group.
 export const buildSaveTables = (root, grid, tables) => {
   const compact = compactGrid(grid);
-  const gridTables = [];
+  const placed = [];
   compact.forEach((rowArr, r) => {
     rowArr.forEach((cell, c) => {
       if (r === 0 && c === 0) return;
-      if (cell != null) gridTables.push(cell);
+      if (cell != null) placed.push(cell);
     });
-  });
-
-  const newNext = {};
-  gridTables.forEach((t) => {
-    newNext[t.tableId] = t;
   });
 
   const newGrid = compact.map((rowArr, r) =>
@@ -280,31 +284,15 @@ export const buildSaveTables = (root, grid, tables) => {
     }),
   );
 
-  const prevNext = root.next ?? {};
-  const prunedBack = Object.values(prevNext).filter(
-    (t) => !(t.tableId in newNext),
+  // Root alone in the grid is not a 1x1 layout, it is NO layout: the root is saved with a
+  // null grid. Storing a degenerate grid instead would make it read as laid out everywhere
+  // that tests for a saved grid — tableSizeLabel would append "1 × 1 Tables", and the
+  // extraction would treat it as a one-table group.
+  const laidOut = placed.length > 0;
+
+  return (tables ?? []).map((t) =>
+    t.tableId === root.tableId ? { ...t, grid: laidOut ? newGrid : null } : t,
   );
-
-  // Root alone in the grid is not a 1x1 link, it is NO link: the root is saved with both
-  // fields null. Storing a degenerate grid instead would leave the table reading as linked
-  // everywhere that tests for a saved grid — tableSizeLabel would append "1 × 1 Tables",
-  // and the extraction would treat it as a one-table group. This is the state the Unlink
-  // button produces, and equally what dragging every table out of the grid produces.
-  const linked = gridTables.length > 0;
-
-  const nextTables = tables
-    .filter((t) => !(t.tableId in newNext))
-    .map((t) =>
-      t.tableId === root.tableId
-        ? {
-            ...root,
-            grid: linked ? newGrid : null,
-            next: linked ? newNext : null,
-          }
-        : t,
-    );
-
-  return [...nextTables, ...prunedBack];
 };
 
 // ---------------------------------------------------------------------------
@@ -317,25 +305,28 @@ export const insertSorted = (list, t) => sortByOrder([...list, t]);
 // canDropSelectToGrid
 // ---------------------------------------------------------------------------
 
+// Whether two tables may sit side by side in a row: they must yield the same number of body
+// rows, so the joined row comes out square. Header counts are deliberately NOT compared —
+// a continuation that repeats the header, or drops it, is still the same row of data, and
+// a manual drop is a deliberate placement rather than a guess. autoPopulateGrid is stricter
+// (it matches header counts and header text too) because it is choosing for the user; these
+// rules only say whether what the user chose can be laid out.
+const sameBodyRows = (a, b) => nonHeaderRows(a) === nonHeaderRows(b);
+
 export const canDropSelectToGrid = (dragged, grid, r, c) => {
   if (grid[r]?.[c] !== null) return false; // target must be an empty (null) cell
   if (c === 0) {
-    // First-column (spine) drop: the dragged table must have the same number of
-    // columns as the Root table (grid[0][0]) and must not conflict in row count
-    // with the table immediately to its right in this row (a null right
-    // neighbour is no conflict). (0,0) itself is always Root, hence never empty.
+    // First-column (spine) drop: the dragged table need only carry the Root table's column
+    // count, so that it stacks below Root squarely. Whatever sits to its right does not bear
+    // on it — the drop names the spine, and the spine is where it goes. (0,0) itself is
+    // always Root, hence never empty.
     const root = grid[0]?.[0] ?? null;
     if (root == null) return false;
-    if (numCols(dragged) !== numCols(root)) return false;
-    const right = grid[r]?.[1] ?? null;
-    if (right != null && nonHeaderRows(dragged) !== nonHeaderRows(right)) {
-      return false;
-    }
-    return true;
+    return numCols(dragged) === numCols(root);
   }
   const left = grid[r][c - 1];
   if (left == null) return false;
-  if (nonHeaderRows(dragged) !== nonHeaderRows(left)) return false;
+  if (!sameBodyRows(dragged, left)) return false;
   if (r > 0) {
     const above = grid[r - 1]?.[c] ?? null;
     if (above == null) return false;
@@ -401,24 +392,116 @@ export const insertSpineRow = (grid, select, tableId, r) => {
   return { grid: newGrid, select: select.filter((t) => t.tableId !== tableId) };
 };
 
-// Every automatic placement for dropping `dragged` anywhere on the grid: the
-// ordered spine splice (when one applies) followed by every empty cell that
-// canDropSelectToGrid accepts — the trailing padded row/column included, so a
-// new bottom row is always reachable. The caller picks the candidate nearest
-// the pointer; listing the splice first makes it win exact ties.
-export const dropCandidates = (dragged, grid) => {
+// Every placement for dropping `dragged` on the grid: the ordered spine splice (when one
+// applies) followed by every empty cell that canDropSelectToGrid accepts — the trailing
+// padded row/column included, so a new bottom row is always reachable. The caller picks the
+// candidate nearest the pointer; listing the splice first makes it win exact ties.
+//
+// `column` confines the list to one grid column, which is what a drop passes: the column the
+// table was dropped on is part of the instruction, so a table dropped on the spine is placed
+// on the spine or not at all, never slid sideways into a continuation column. A splice opens
+// a new spine row, so it belongs to column 0. Omit `column` for every placement anywhere.
+export const dropCandidates = (dragged, grid, column = null) => {
+  const inColumn = (c) => column == null || c === column;
   const out = [];
   const root = grid[0]?.[0] ?? null;
-  if (root != null && numCols(dragged) === numCols(root)) {
+  if (inColumn(0) && root != null && numCols(dragged) === numCols(root)) {
     const r = orderedSpineInsertIndex(dragged, grid);
     if (r != null) out.push({ kind: 'newRow', r });
   }
   grid.forEach((rowArr, r) =>
     rowArr.forEach((cell, c) => {
-      if (cell === null && canDropSelectToGrid(dragged, grid, r, c)) {
+      if (inColumn(c) && cell === null && canDropSelectToGrid(dragged, grid, r, c)) {
         out.push({ kind: 'cell', r, c });
       }
     }),
   );
   return out;
+};
+
+// ---------------------------------------------------------------------------
+// drop explanations
+// ---------------------------------------------------------------------------
+
+// "1 column" / "3 columns" — the counts these messages quote are the placement rules'
+// own terms, so they are always spelled out rather than left as bare numbers.
+const quantity = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+// The nearest table above (r, 0), which a spine drop continues. Never null in a grid that
+// has a Root, since Root itself sits at (0, 0).
+const spinePredecessor = (grid, r) => {
+  for (let i = r - 1; i >= 0; i -= 1) {
+    const t = grid[i]?.[0] ?? null;
+    if (t != null) return t;
+  }
+  return null;
+};
+
+// Every empty cell in `column` that a drop could have landed in — one that has a table to
+// its left, and (below row 0) a table above it. A cell with neither is not open to any
+// table at all, so nothing about the dragged table explains its refusal.
+const openCellsInColumn = (grid, column) => {
+  const out = [];
+  grid.forEach((rowArr, r) => {
+    if ((rowArr?.[column] ?? null) != null) return;
+    const left = rowArr?.[column - 1] ?? null;
+    if (left == null) return;
+    const above = r > 0 ? grid[r - 1]?.[column] ?? null : null;
+    if (r > 0 && above == null) return;
+    out.push({ left, above });
+  });
+  return out;
+};
+
+// Why `dragged` landed where `placement` (a dropCandidates entry) puts it, phrased against
+// the grid as it stood BEFORE the placement — the rule that admitted the cell, named with
+// the neighbouring tables it was tested against, so the user can see the layout's logic
+// rather than watch a table jump to a cell they did not aim at.
+export const dropPlacementReason = (dragged, grid, placement) => {
+  const root = grid[0]?.[0] ?? null;
+  const rootColumns = quantity(numCols(root ?? dragged), 'column');
+  if (placement.kind === 'newRow') {
+    const below = grid[placement.r]?.[0] ?? null;
+    return `${dragged.name} placed on a new row above ${below?.name}: it has ${root?.name}'s ${rootColumns} and comes before ${below?.name} in the document.`;
+  }
+  const { r, c } = placement;
+  if (c === 0) {
+    const above = spinePredecessor(grid, r);
+    return `${dragged.name} placed below ${above?.name} in the first column: it has ${root?.name}'s ${rootColumns}.`;
+  }
+  const left = grid[r]?.[c - 1] ?? null;
+  const above = r > 0 ? grid[r - 1]?.[c] ?? null : null;
+  const columns = above
+    ? ` and the ${quantity(numCols(dragged), 'column')} of ${above.name} above it`
+    : '';
+  return `${dragged.name} placed to the right of ${left?.name}: it has the same ${quantity(nonHeaderRows(dragged), 'body row')} as ${left?.name}${columns}.`;
+};
+
+// Why no cell in `column` would take `dragged` — for a drop that dropCandidates returned
+// nothing for. The reason is given for the column dropped ON, not for the grid at large: a
+// table refused there may well have a home elsewhere, and saying so is the whole point of
+// keeping the drop in the column the user aimed at.
+export const dropRejectionReason = (dragged, grid, column) => {
+  const root = grid[0]?.[0] ?? null;
+  if (root == null) return 'the grid has no Root table to place it against';
+  if (column === 0) {
+    return numCols(dragged) === numCols(root)
+      ? 'the first column has no empty cell to take it'
+      : `it has ${quantity(numCols(dragged), 'column')} where ${root.name} has ${numCols(root)}, so it cannot join the first column`;
+  }
+  const open = openCellsInColumn(grid, column);
+  if (open.length === 0) {
+    return 'no cell in that column is open beside a placed table';
+  }
+  // One reason per open cell, deduplicated: a column whose cells were refused for different
+  // reasons has more than one thing to correct, and naming only the first would send the
+  // user back for a second refusal.
+  const reasons = new Set(
+    open.map(({ left, above }) =>
+      above && numCols(dragged) !== numCols(above)
+        ? `it has ${quantity(numCols(dragged), 'column')} where ${above.name} above it has ${numCols(above)}`
+        : `it has ${quantity(nonHeaderRows(dragged), 'body row')} where ${left.name} beside it has ${nonHeaderRows(left)}`,
+    ),
+  );
+  return [...reasons].join(', and ');
 };

@@ -138,11 +138,12 @@ export async function saveTables(pdfId, tables, colouredAreas = undefined) {
   return response.json();
 }
 
-// Build the single flat table produced by merging a linked group. `tableId` must be a
-// top-level (root) table — a linked group is reachable only through its root. The proxy
-// dispatches the asynchronous worker and long-polls the status file, so this call
-// returns only once the merged table is ready. The parsed body ({ table }) is returned
-// as-is; the caller reads `.table`.
+// Build the tables produced by merging a linked group. `tableId` must be a top-level
+// (root) table — a linked group is reachable only through its root. The proxy dispatches
+// the asynchronous worker and long-polls the status file, so this call returns only once
+// the merge is ready. The parsed body ({ tables }) is returned as-is; the caller reads
+// `.tables`, which holds one entry per section where the group was split and one entry
+// otherwise.
 export async function extractTable(pdfId, tableId) {
   const response = await fetch(
     `/api/extract/${encodeURIComponent(pdfId)}/${encodeURIComponent(tableId)}`,
@@ -157,9 +158,10 @@ export async function extractTable(pdfId, tableId) {
   return response.json();
 }
 
-// Build the reviewed table as an XLSX file. Synchronous: the proxy forwards the POST and
-// returns the response directly — no long-poll. `body` is the amalgamated table
-// ({ name, title, cells, headerCount }) plus pdfId, rootTableId and originalFilename.
+// Build the document's tables as one XLSX file. Synchronous: the proxy forwards the POST
+// and returns the response directly — no long-poll. `body` is { pdfId, rootTableIds,
+// filename } and carries no table content: the back end rebuilds every named table from
+// the stored metadata, so the document must have been saved first.
 // Returns the workbook as a Blob: the route fetches it from its presigned URL server-side,
 // so what arrives here is the file itself rather than a link to it.
 export async function tableToExcel(body) {

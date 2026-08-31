@@ -46,9 +46,16 @@ import {
   confirmedTickBadgeSizePx,
   confirmedTickColour,
   gridLineColour,
+  highConfidence,
+  lowConfidence,
   mergeLinkRootBadgeColour,
   readyTableStage,
 } from 'config';
+
+// One confidence in the middle of the ORANGE band, derived from the thresholds rather
+// than pinned to a number: the band is [lowConfidence(), highConfidence()), so a
+// retuned threshold moves this with it instead of silently recolouring the fixture.
+const orangeConfidence = Math.floor((lowConfidence() + highConfidence()) / 2);
 import {
   getImage,
   getThumbnails,
@@ -56,6 +63,7 @@ import {
   saveTables,
   findTables,
   calculateCells,
+  tableToExcel,
 } from 'services/images';
 import toast from 'react-hot-toast';
 
@@ -67,6 +75,7 @@ jest.mock('services/images', () => ({
   getTableImages: jest.fn(),
   findTables: jest.fn(),
   calculateCells: jest.fn(),
+  tableToExcel: jest.fn(),
 }));
 
 // Config is real except for the staged-editor flag, which is made controllable. The real
@@ -688,6 +697,31 @@ describe('PDFEditTableStructure', () => {
       expect(joined.querySelector('svg')).toHaveStyle({
         color: confirmedTickColour(),
       });
+    });
+
+    // Every member of a linked group — the root as well as the tables joined under it —
+    // is ringed in the emphasis colour, which jsdom drops, so the data attribute is asserted.
+    test('rings both the root and its joined table', async () => {
+      const thumb = await renderThumbnail([
+        metaTable({ next: { 1: joinedChild() } }),
+      ]);
+      const rings = await badges(thumb, 'linked-group-outline', 2);
+      rings.forEach((r) => expect(r).toHaveAttribute('data-linked', 'true'));
+      // The root's own rectangle: bounds 0.1/0.2/0.4/0.3 as percentages.
+      expect(rings[0]).toHaveStyle({
+        left: '10%',
+        top: '20%',
+        width: '40%',
+        height: '30%',
+      });
+    });
+
+    test('rings no table that is in no linked group', async () => {
+      const thumb = await renderThumbnail([metaTable()]);
+      await firstRect(thumb);
+      expect(
+        thumb.querySelector('[data-testid="linked-group-outline"]')
+      ).toBeNull();
     });
 
     test('the root of a merge renders the root link badge, the tick green on white', async () => {
@@ -4210,6 +4244,35 @@ describe('PDFEditTableStructure', () => {
     expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
   });
 
+  // A linked root is marked ready from the Grid Editor, whose Ready button is gated on every
+  // member of the group having a place in the grid. Offering Mark Ready here would be an
+  // ungated way round that gate.
+  test('a table holding linked tables shows no Mark Ready', async () => {
+    const [below] = stageFixture().tables;
+    const child = stageTable('s-child', 'Child', 0, 0.8);
+    getMetadata.mockResolvedValue({
+      tables: [{ ...below, next: { 's-child': child } }],
+    });
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Below Stage');
+    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
+    expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
+  });
+
+  test('a linked root already at the ready stage still shows Review', async () => {
+    const ready = stageFixture().tables[2];
+    const child = stageTable('s-child', 'Child', 0, 0.8);
+    getMetadata.mockResolvedValue({
+      tables: [{ ...ready, next: { 's-child': child } }],
+    });
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Ready Stage');
+    expect(row.querySelector('[data-testid="review-table"]')).not.toBeNull();
+    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
+  });
+
   test('a deleted row shows no stage button even at the confirmed stage', async () => {
     getMetadata.mockResolvedValue(stageFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
@@ -4915,7 +4978,7 @@ describe('PDFEditTableStructure', () => {
             columnSpan: 1,
             bounds: { left: 0.1, top: 0, width: 0.1, height: 0.1 },
             text: 'orange cell',
-            confidence: 70,
+            confidence: orangeConfidence,
             header: false,
           },
           {
@@ -4964,11 +5027,11 @@ describe('PDFEditTableStructure', () => {
     expect(red).not.toBeNull();
     expect(nullSquare).not.toBeNull();
 
-    // confidence 90 >= highConfidence()(80) -> green.
+    // confidence 90 >= highConfidence() -> green.
     expect(green).toHaveAttribute('data-colour', 'green');
-    // 50 <= 70 < 80 -> orange.
+    // lowConfidence() <= orangeConfidence < highConfidence() -> orange.
     expect(orange).toHaveAttribute('data-colour', 'orange');
-    // 30 < lowConfidence()(50) -> red.
+    // 30 < lowConfidence() -> red.
     expect(red).toHaveAttribute('data-colour', 'red');
     // null confidence -> treated as below low -> red.
     expect(nullSquare).toHaveAttribute('data-colour', 'red');
@@ -5027,7 +5090,7 @@ describe('PDFEditTableStructure', () => {
 
   test('clicking a below-high-confidence square marks the cell fully confident (100)', async () => {
     const middle = await renderForDrag(confidenceFixture());
-    // red cell (0,2), confidence 30 (< highConfidence 80) -> click sets it to 100.
+    // red cell (0,2), confidence 30 (< highConfidence()) -> click sets it to 100.
     fireEvent.click(
       middle.querySelector('[data-testid="confidence-square-c-1-0-2"]')
     );
@@ -5051,7 +5114,7 @@ describe('PDFEditTableStructure', () => {
 
   test('clicking an at-or-above-high-confidence square clears the cell confidence (0)', async () => {
     const middle = await renderForDrag(confidenceFixture());
-    // green cell (0,0), confidence 90 (>= highConfidence 80) -> click sets it to 0.
+    // green cell (0,0), confidence 90 (>= highConfidence()) -> click sets it to 0.
     fireEvent.click(
       middle.querySelector('[data-testid="confidence-square-c-1-0-0"]')
     );
@@ -5107,9 +5170,9 @@ describe('PDFEditTableStructure', () => {
         bounds: { left: 0, top: 0, width: 0.2, height: 0.4 },
         columnWidths: [{ value: 0.2, confidence: 90 }],
         rowHeights: [
-          { value: 0.1, confidence: 90 }, // >= high (80) -> green
-          { value: 0.1, confidence: 70 }, // low <= 70 < high -> orange
-          { value: 0.1, confidence: 30 }, // < low (50) -> red
+          { value: 0.1, confidence: 90 }, // >= high -> green
+          { value: 0.1, confidence: orangeConfidence }, // low <= it < high -> orange
+          { value: 0.1, confidence: 30 }, // < low -> red
           { value: 0.1, confidence: null }, // null -> below low -> red
         ],
       },
@@ -5880,15 +5943,17 @@ describe('Recalculate helpers', () => {
   };
 
   describe('selectLowConfidenceCells', () => {
-    test('selects only RED cells (null or < 50); excludes orange (50–79) and green (>=80)', () => {
+    // The predicate is lowConfidence()'s alone: everything at or above it is excluded,
+    // whether it reads orange or green, so only that boundary is annotated here.
+    test('selects only RED cells (null or below lowConfidence()); excludes everything above it', () => {
       const cells = [
         { row: 0, column: 0, confidence: null }, // red
         { row: 0, column: 1, confidence: 0 }, // red
         { row: 0, column: 2, confidence: 49 }, // red
-        { row: 1, column: 0, confidence: 50 }, // orange (boundary) — excluded
-        { row: 1, column: 1, confidence: 79 }, // orange — excluded
-        { row: 1, column: 2, confidence: 80 }, // green (boundary) — excluded
-        { row: 2, column: 0, confidence: 100 }, // green — excluded
+        { row: 1, column: 0, confidence: 50 }, // at lowConfidence() — excluded
+        { row: 1, column: 1, confidence: 79 }, // excluded
+        { row: 1, column: 2, confidence: 80 }, // excluded
+        { row: 2, column: 0, confidence: 100 }, // excluded
       ];
       const red = selectLowConfidenceCells(cells);
       expect(red.map((c) => `${c.row},${c.column}`)).toEqual([
@@ -6597,6 +6662,164 @@ describe('left-column size row with a saved grid', () => {
     await screen.findAllByTestId('table-entry-size');
     expect(screen.queryAllByTestId('table-entry-tables')).toHaveLength(0);
   });
+
+  // The grid-size line reaches the group's tables exactly as the "Additional tables N"
+  // line does: laying a grid out over a group does not take that route away.
+  describe('the grid line opens the group the same way', () => {
+    const renderLinked = async () => {
+      getMetadata.mockResolvedValue(linkedFixture());
+      const view = render(<PDFEditTableStructure pdfId={PDF_ID} />);
+      await screen.findAllByTestId('table-entry-size');
+      return view;
+    };
+
+    test('clicking it lists the tables the root holds', async () => {
+      await renderLinked();
+      expect(screen.queryByTestId('additional-tables-list')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+
+      expect(
+        screen
+          .getAllByTestId('additional-table-entry')
+          .map((e) => e.getAttribute('data-tableid'))
+      ).toEqual(['b-1']);
+    });
+
+    test('clicking it again closes the list', async () => {
+      await renderLinked();
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      expect(screen.getByTestId('additional-tables-list')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+
+      expect(screen.queryByTestId('additional-tables-list')).toBeNull();
+    });
+
+    test('selecting one boxes the root entry and names what is being edited', async () => {
+      await renderLinked();
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      fireEvent.click(screen.getByTestId('additional-table-entry'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('table-entry-editing')).toHaveTextContent(
+          'Continuation being edited'
+        )
+      );
+      expect(screen.getAllByTestId('table-entry')[0]).toHaveAttribute(
+        'data-editing',
+        'true'
+      );
+    });
+
+    test('the line is inert when the grid names tables the root does not hold', async () => {
+      const { tables } = linkedFixture();
+      getMetadata.mockResolvedValue({
+        tables: [{ ...tables[0], next: {} }, tables[1]],
+      });
+      render(<PDFEditTableStructure pdfId={PDF_ID} />);
+      await screen.findAllByTestId('table-entry-size');
+
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+
+      expect(screen.queryByTestId('additional-tables-list')).toBeNull();
+    });
+  });
+
+  // A group formed by linking holds its tables in `next` with no grid laid out for them.
+  // That group has no grid size to report, so the line counts its tables instead, and opens
+  // them for editing.
+  describe('a root with linked tables and no grid', () => {
+    const nextOnlyFixture = () => {
+      const [first, second] = METADATA_FIXTURE.tables;
+      const joined = {
+        ...second,
+        tableId: 'j-1',
+        name: 'Joined One',
+        pdfPage: 1,
+        tableInPage: 0,
+      };
+      const later = {
+        ...second,
+        tableId: 'j-2',
+        name: 'Joined Two',
+        pdfPage: 2,
+        tableInPage: 0,
+      };
+      const root = { ...first, next: { 'j-2': later, 'j-1': joined } };
+      return { tables: [root] };
+    };
+
+    const renderNextOnly = async () => {
+      getMetadata.mockResolvedValue(nextOnlyFixture());
+      const view = render(<PDFEditTableStructure pdfId={PDF_ID} />);
+      await screen.findAllByTestId('table-entry-size');
+      return view;
+    };
+
+    test('counts the additional tables instead of a grid size', async () => {
+      await renderNextOnly();
+      const lines = screen.getAllByTestId('table-entry-tables');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toHaveTextContent('Additional tables 2');
+    });
+
+    test('lists them in page order when the line is clicked', async () => {
+      await renderNextOnly();
+      expect(screen.queryByTestId('additional-tables-list')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+
+      expect(
+        screen
+          .getAllByTestId('additional-table-entry')
+          .map((e) => e.getAttribute('data-tableid'))
+      ).toEqual(['j-1', 'j-2']);
+    });
+
+    test('clicking the line again closes the list', async () => {
+      await renderNextOnly();
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      expect(screen.getByTestId('additional-tables-list')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      expect(screen.queryByTestId('additional-tables-list')).toBeNull();
+    });
+
+    test('selecting one boxes the root entry and names what is being edited', async () => {
+      await renderNextOnly();
+      const entry = screen.getByTestId('table-entry');
+      expect(
+        entry.querySelector('[data-testid="table-entry-editing"]')
+      ).toBeNull();
+
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      fireEvent.click(screen.getAllByTestId('additional-table-entry')[0]);
+
+      await waitFor(() =>
+        expect(
+          screen.getByTestId('table-entry-editing')
+        ).toHaveTextContent('Joined One being edited')
+      );
+      // The root entry is boxed exactly as a selected entry is.
+      expect(screen.getByTestId('table-entry')).toHaveAttribute(
+        'data-editing',
+        'true'
+      );
+    });
+
+    test('the editing line goes when the root itself is selected again', async () => {
+      await renderNextOnly();
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      fireEvent.click(screen.getAllByTestId('additional-table-entry')[0]);
+      await screen.findByTestId('table-entry-editing');
+
+      fireEvent.click(screen.getByTestId('table-entry'));
+
+      await waitFor(() =>
+        expect(screen.queryByTestId('table-entry-editing')).toBeNull()
+      );
+    });
+  });
 });
 
 describe('left-column title line', () => {
@@ -6902,6 +7125,27 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
             : t
         )
       );
+    // A saved link grid nests the joined table under its root. `join` builds that shape;
+    // `renameChild` then edits a member — something the recalculation response can never
+    // write — while a call is in flight.
+    const join = () =>
+      onChange(
+        metadata.tables
+          .filter((t) => t.tableId !== 'beta')
+          .map((t) =>
+            t.tableId === 'edit-target'
+              ? { ...t, next: { beta: metadata.tables.find((x) => x.tableId === 'beta') } }
+              : t
+          )
+      );
+    const renameChild = () =>
+      onChange(
+        metadata.tables.map((t) =>
+          t.tableId === 'edit-target'
+            ? { ...t, next: { beta: { ...t.next.beta, name: 'renamed' } } }
+            : t
+        )
+      );
     const changeTitle2 = () =>
       onChange(
         metadata.tables.map((t) =>
@@ -6941,6 +7185,18 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
         <button data-testid={'mock-next'} onClick={onNextPage}>
           {'next'}
         </button>
+        <button data-testid={'mock-join'} onClick={join}>
+          {'join'}
+        </button>
+        <button data-testid={'mock-rename-child'} onClick={renameChild}>
+          {'rename-child'}
+        </button>
+        <div data-testid={'mock-root-title'}>
+          {metadata.tables.find((t) => t.tableId === 'edit-target')?.title?.text ?? 'NO-TITLE'}
+        </div>
+        <div data-testid={'mock-child-name'}>
+          {metadata.tables.find((t) => t.tableId === 'edit-target')?.next?.beta?.name ?? 'NO-CHILD'}
+        </div>
         <button data-testid={'mock-move'} onClick={moveBoundary}>
           {'move'}
         </button>
@@ -7215,6 +7471,54 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     await waitFor(() =>
       expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta')
     );
+  });
+
+  // A root's staleness comparison used to cover its whole `next` subtree, so an edit to any
+  // joined member — even one the response cannot write — silently discarded the root's entire
+  // reading. A single table has no such surface, which is why it only showed on a linked group.
+  describe('a recalculated table that is the root of a linked group', () => {
+    const READING = {
+      pdfPage: 0,
+      tables: [{ tableInPage: 0, cells: [], title: { text: 'READ TITLE', confidence: 93 } }],
+    };
+
+    async function joinThenTitleThenLeave({ touchChildMidFlight }) {
+      let release = null;
+      calculateCells.mockImplementation(
+        () => new Promise((resolve) => {
+          release = () => resolve(READING);
+        })
+      );
+      await renderNav({ pageCount: 2 });
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+      );
+      await userEvent.click(screen.getByTestId('mock-join'));
+      await userEvent.click(screen.getByTestId('mock-title'));
+      await userEvent.click(screen.getByTestId('mock-next'));
+      await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+      if (touchChildMidFlight) {
+        await userEvent.click(screen.getByTestId('mock-rename-child'));
+      }
+      await act(async () => {
+        release();
+      });
+    }
+
+    test('the reading lands even though a joined member changed while the call was in flight', async () => {
+      await joinThenTitleThenLeave({ touchChildMidFlight: true });
+      expect(screen.getByTestId('mock-root-title')).toHaveTextContent('READ TITLE');
+    });
+
+    test('and that member keeps the change rather than being reverted to its launch state', async () => {
+      await joinThenTitleThenLeave({ touchChildMidFlight: true });
+      expect(screen.getByTestId('mock-child-name')).toHaveTextContent('renamed');
+    });
+
+    test('an undisturbed group takes the reading as before', async () => {
+      await joinThenTitleThenLeave({ touchChildMidFlight: false });
+      expect(screen.getByTestId('mock-root-title')).toHaveTextContent('READ TITLE');
+    });
   });
 
   test('editing a boundary adds the table to the change set; a page change recalculates it first, then clears the set', async () => {
@@ -7618,10 +7922,15 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     };
   }
 
+  // The props of the most recent MockPageTableEditor render, so a test can drive a channel
+  // the stand-in does not surface as a control and read one back.
+  let lastPte = null;
+  const lastPteProps = () => lastPte;
+
   // A stand-in for PageTableEditor exposing only the channels this task exercises: page nav,
-  // the hover-vs-select distinction, a per-table boundary edit, and the expected-count map
-  // the real component reports up from its transient Borders-layer fields.
+  // the hover-vs-select distinction, and a per-table boundary edit.
   function MockPageTableEditor(props) {
+    lastPte = props;
     const {
       metadata,
       onChange,
@@ -7630,7 +7939,6 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
       onHoverTable,
       onSelectTable,
       selectedTableId,
-      onExpectedCountsMapChange,
     } = props;
     // A boundary move — what the host's change tracker classifies as a change.
     const move = (tableId) =>
@@ -7673,15 +7981,22 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
           {'select'}
         </button>
         <button
-          data-testid={'mock-counts'}
-          onClick={() =>
-            onExpectedCountsMapChange({
-              't-a': { expectedColumns: '4', expectedRows: '' },
-              't-d': { expectedColumns: '', expectedRows: '9' },
-            })
-          }
+          data-testid={'mock-start-linking'}
+          onClick={() => props.onToggleLinking('t-a')}
         >
-          {'counts'}
+          {'link'}
+        </button>
+        <button
+          data-testid={'mock-link-from-b'}
+          onClick={() => props.onToggleLinking('t-b')}
+        >
+          {'link-b'}
+        </button>
+        <button
+          data-testid={'mock-end-linking'}
+          onClick={() => props.onToggleLinking(null)}
+        >
+          {'unlink'}
         </button>
       </div>
     );
@@ -7765,6 +8080,185 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await waitFor(() =>
       expect(screen.getByTestId('mock-selected')).toHaveTextContent('t-c')
     );
+  });
+
+  // While a linking session is open a thumbnail click picks a table to join the group, so it
+  // must not also change the page.
+  test('a thumbnail click does not change the page while a linking session is open', async () => {
+    await renderRecalc();
+
+    await clickAndSettle(screen.getByTestId('mock-start-linking'));
+    await clickAndSettle(thumbnail(1));
+
+    expect(screen.getByTestId('mock-selected')).toHaveTextContent('t-a');
+    expect(calculateCells).not.toHaveBeenCalled();
+
+    // Ending the session restores the normal page click.
+    await clickAndSettle(screen.getByTestId('mock-end-linking'));
+    await clickAndSettle(thumbnail(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('t-c')
+    );
+  });
+
+  // Joining a table to a group, and taking it back out: with a session open, a click on a
+  // table inside a page thumbnail adds it to the root's `next` map and takes it off the
+  // top-level list, which is what removes it from the Document Overview — and a second click
+  // on a member of that same group reverses both.
+  describe('joining a table to a linked group', () => {
+    // The hit rect of one table inside one thumbnail, by tableId.
+    const tableHit = (index, tableId) =>
+      thumbnail(index).querySelector(
+        `[data-testid="thumbnail-table-hit"][data-tableid="${tableId}"]`
+      );
+
+    async function renderLinking() {
+      await renderRecalc();
+      // Both thumbnails must have loaded for their overlays to draw.
+      screen.getAllByTestId('thumbnail').forEach((t) => {
+        const img = t.querySelector('img');
+        if (img) loadImage(img, { w: 100, h: 100 });
+      });
+      await clickAndSettle(screen.getByTestId('mock-link-from-b'));
+      await waitFor(() => expect(tableHit(0, 't-d')).not.toBeNull());
+    }
+
+    test('offers no table hit targets while no session is open', async () => {
+      await renderRecalc();
+      screen.getAllByTestId('thumbnail').forEach((t) => {
+        const img = t.querySelector('img');
+        if (img) loadImage(img, { w: 100, h: 100 });
+      });
+      await waitFor(() =>
+        expect(thumbnail(0).querySelector('rect')).not.toBeNull()
+      );
+      expect(
+        thumbnail(0).querySelector('[data-testid="thumbnail-table-hit"]')
+      ).toBeNull();
+    });
+
+    test('an eligible table joins the root and leaves the Document Overview', async () => {
+      await renderLinking();
+      expect(
+        screen.getAllByTestId('table-entry').length
+      ).toBe(4);
+
+      await clickAndSettle(tableHit(0, 't-d'));
+
+      // Off the top-level list, so off the Document Overview.
+      const names = screen
+        .getAllByTestId('table-entry-name')
+        .map((n) => n.textContent);
+      expect(names).not.toContain('Delta');
+      expect(names).toContain('Bravo');
+      // Save is enabled: the join dirtied the document.
+      expect(saveButton()).toBeEnabled();
+    });
+
+    test('a joined table lands in the root next map and leaves grid untouched', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-d'));
+      await clickAndSettle(saveButton());
+
+      const [, savedTables] = saveTables.mock.calls[0];
+      const root = savedTables.find((t) => t.tableId === 't-b');
+      expect(Object.keys(root.next ?? {})).toEqual(['t-d']);
+      expect(root.grid ?? null).toBeNull();
+      expect(savedTables.map((t) => t.tableId)).not.toContain('t-d');
+    });
+
+    test('a table on a later page may join', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(1, 't-c'));
+      const names = screen
+        .getAllByTestId('table-entry-name')
+        .map((n) => n.textContent);
+      expect(names).not.toContain('Charlie');
+    });
+
+    test('a table above the root is refused with a message naming why', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-a'));
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining('above')
+      );
+      const names = screen
+        .getAllByTestId('table-entry-name')
+        .map((n) => n.textContent);
+      expect(names).toContain('Alpha');
+      expect(saveButton()).toBeDisabled();
+    });
+
+    test('the root itself is refused', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-b'));
+      expect(saveButton()).toBeDisabled();
+    });
+
+    // The same click that adds a table takes it back out again: clicking a member of the
+    // OPEN session's group removes it, which is how a mis-click is corrected.
+    test('clicking a member of the open session group removes it again', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-d'));
+      expect(
+        screen.getAllByTestId('table-entry-name').map((n) => n.textContent)
+      ).not.toContain('Delta');
+
+      await clickAndSettle(tableHit(0, 't-d'));
+
+      // Back on the top-level list, in document order among the tables already there.
+      expect(
+        screen.getAllByTestId('table-entry-name').map((n) => n.textContent)
+      ).toContain('Delta');
+      expect(toast).not.toHaveBeenCalled();
+    });
+
+    test('removing the last member empties the root next map', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-d'));
+      await clickAndSettle(tableHit(0, 't-d'));
+      await clickAndSettle(saveButton());
+
+      const [, savedTables] = saveTables.mock.calls[0];
+      const root = savedTables.find((t) => t.tableId === 't-b');
+      expect(root.next ?? null).toBeNull();
+      expect(root.grid ?? null).toBeNull();
+      expect(savedTables.map((t) => t.tableId)).toContain('t-d');
+    });
+
+    test('a member of a DIFFERENT group is refused, not removed', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-d'));
+      // t-d now belongs to t-b's group. A session rooted at t-a may not take it out.
+      await clickAndSettle(screen.getByTestId('mock-end-linking'));
+      await clickAndSettle(screen.getByTestId('mock-start-linking'));
+      toast.mockClear();
+      await clickAndSettle(tableHit(0, 't-d'));
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining('already')
+      );
+      expect(
+        screen.getAllByTestId('table-entry-name').map((n) => n.textContent)
+      ).not.toContain('Delta');
+    });
+  });
+
+  // The Pages list picks the tables that join a group, which is boundary-pass work; the
+  // contents pass is about one table's insides, so the column goes.
+  test('the Pages list is hidden in the contents pass and an open session is ended', async () => {
+    await renderRecalc();
+    expect(screen.getAllByTestId('thumbnail').length).toBeGreaterThan(0);
+
+    await clickAndSettle(screen.getByTestId('mock-start-linking'));
+    await act(async () => {
+      lastPteProps().onEditorModeChange('grid');
+    });
+
+    expect(screen.queryAllByTestId('thumbnail')).toHaveLength(0);
+    expect(screen.queryByTestId('pages-summary')).toBeNull();
+    // A session left open would be unendable: its End Linking label is inert there and the
+    // list it picks from is gone.
+    expect(lastPteProps().linkingRootId).toBeNull();
   });
 
   test('clicking a thumbnail when nothing has changed makes no calculate-cells call', async () => {
@@ -7855,13 +8349,11 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(calculateCells).toHaveBeenCalledTimes(1);
   });
 
-  test('the transient expected counts never reach the request: calculate-cells detects nothing', async () => {
+  test('no expected counts reach the request: calculate-cells detects nothing', async () => {
     await renderRecalc();
 
-    // The centre panel reports its transient expected-count hints up (a column count for t-a,
-    // a row count for t-d). They steer grid DETECTION, and a text read detects nothing, so
-    // they have no place in this request.
-    await clickAndSettle(screen.getByTestId('mock-counts'));
+    // Expected counts steered grid DETECTION and are gone; a text read detects nothing, so
+    // no request table may carry one.
     await clickAndSettle(screen.getByTestId('mock-move-a'));
     await clickAndSettle(screen.getByTestId('mock-move-d'));
     await clickAndSettle(screen.getByTestId('mock-next'));
@@ -8260,7 +8752,7 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     expect(screen.queryByTestId('full-panel')).not.toBeInTheDocument();
   });
 
-  test('the review panel is handed the host save path, the loaded filename and the All Files callback', async () => {
+  test('the review panel is handed the host save path, and nothing to export with', async () => {
     const onAllFiles = jest.fn();
     render(<PDFEditTableStructure pdfId={PDF_ID} onAllFiles={onAllFiles} />);
     await screen.findByTestId('mock-pte');
@@ -8269,8 +8761,10 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     await screen.findByTestId('review-panel');
 
     const props = global.__REVIEW_PANEL_PROPS__;
-    expect(props.originalFilename).toBe(MODE_METADATA.name);
-    expect(props.onAllFiles).toBe(onAllFiles);
+    // The panel no longer exports, so it is given neither the document's name nor the way
+    // back to the file list.
+    expect(props.originalFilename).toBeUndefined();
+    expect(props.onAllFiles).toBeUndefined();
     // onSave is the host's own save: it PUTs the document and reports whether the server
     // was reached. Review already saved once, so this is the second call.
     let saved;
@@ -8280,6 +8774,116 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     });
     expect(saved).toBe(true);
     expect(saveTables).toHaveBeenCalledTimes(2);
+  });
+
+  describe('exporting the document', () => {
+    // The workbook itself, not a link to it: /api/to-excel collects it from its presigned
+    // url server-side, so what arrives is bytes to save from memory. jsdom neither downloads
+    // nor navigates, so the anchor click is stubbed on the prototype.
+    const workbook = new Blob(['PK the workbook']);
+    let handedOver = [];
+
+    beforeEach(() => {
+      handedOver = [];
+      global.URL.createObjectURL = jest.fn(() => 'blob:workbook');
+      global.URL.revokeObjectURL = jest.fn();
+      jest
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(function record() {
+          handedOver.push(this.download);
+        });
+      tableToExcel.mockResolvedValue(workbook);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    const exportButton = () => screen.getByTestId('export-document');
+
+    test('the Export button sits at the foot of the Document Overview', async () => {
+      await renderModes();
+
+      expect(screen.getByTestId('left-panel')).toContainElement(exportButton());
+    });
+
+    test('saves, then posts the document, its live table ids and the workbook name', async () => {
+      await renderModes();
+
+      await userEvent.click(exportButton());
+
+      await waitFor(() => expect(tableToExcel).toHaveBeenCalledTimes(1));
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(tableToExcel).toHaveBeenCalledWith({
+        pdfId: PDF_ID,
+        rootTableIds: ['alpha', 'beta'],
+        filename: 'modes.xlsx',
+      });
+    });
+
+    test('hands the workbook over under that same name', async () => {
+      await renderModes();
+
+      await userEvent.click(exportButton());
+
+      await waitFor(() => expect(handedOver).toEqual(['modes.xlsx']));
+    });
+
+    test('stays in the editor rather than leaving for the file list', async () => {
+      const onAllFiles = jest.fn();
+      render(<PDFEditTableStructure pdfId={PDF_ID} onAllFiles={onAllFiles} />);
+      await screen.findByTestId('mock-pte');
+
+      await userEvent.click(exportButton());
+
+      await waitFor(() => expect(tableToExcel).toHaveBeenCalledTimes(1));
+      expect(onAllFiles).not.toHaveBeenCalled();
+      expect(screen.getByTestId('mock-pte')).toBeInTheDocument();
+    });
+
+    test('abandons the export when the save fails', async () => {
+      saveTables.mockRejectedValueOnce(new Error('save exploded'));
+      await renderModes();
+
+      await userEvent.click(exportButton());
+
+      await waitFor(() => expect(exportButton()).toBeEnabled());
+      expect(tableToExcel).not.toHaveBeenCalled();
+      expect(handedOver).toEqual([]);
+    });
+
+    test('is disabled while an export is in flight, so no second one can start', async () => {
+      let finish;
+      tableToExcel.mockReturnValue(
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+      );
+      await renderModes();
+
+      await userEvent.click(exportButton());
+
+      await waitFor(() => expect(tableToExcel).toHaveBeenCalledTimes(1));
+      // Disabled rather than merely guarded: the click cannot even be delivered.
+      expect(exportButton()).toBeDisabled();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        finish(workbook);
+      });
+      await waitFor(() => expect(exportButton()).toBeEnabled());
+      expect(tableToExcel).toHaveBeenCalledTimes(1);
+    });
+
+    test('offers nothing to export when every table is deleted', async () => {
+      getMetadata.mockResolvedValue({
+        ...MODE_METADATA,
+        tables: MODE_METADATA.tables.map((table) => ({ ...table, deleted: true })),
+      });
+      await renderModes();
+
+      expect(exportButton()).toBeDisabled();
+    });
   });
 
   test('Cancel in the grid editor returns to the page editor', async () => {

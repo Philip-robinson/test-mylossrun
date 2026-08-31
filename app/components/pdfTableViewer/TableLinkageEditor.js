@@ -20,10 +20,12 @@ import {
   readyTableStage,
 } from 'config';
 import {
+  allLinkedPlaced,
   buildInitialState,
   buildSaveTables,
-  candidates,
   dropCandidates,
+  dropPlacementReason,
+  dropRejectionReason,
   hasSavedGrid,
   insertSpineRow,
   moveGridCellToSelect,
@@ -43,11 +45,16 @@ const CELL_WIDTH = linkTableCellWidth();
 // The image renders at its natural pixel size — the back end serves every
 // table at one shared dpi, so on-screen sizes reflect the tables' true
 // relative scale and must not be stretched to a fixed cell width.
-function LinkCell({ table, image, draggable, onDragStart }) {
+function LinkCell({ table, image, draggable, onDragStart, row, col }) {
   return (
     <Box
       data-testid={'link-cell'}
       data-tableid={table.tableId}
+      // Set for a cell in the grid and left off one in the Available column, which has no
+      // grid position: a drop reads these to work out which column it landed on, and every
+      // grid cell must answer, not only the empty ones.
+      data-row={row}
+      data-col={col}
       draggable={draggable}
       onDragStart={onDragStart}
       sx={{
@@ -85,6 +92,29 @@ function LinkCell({ table, image, draggable, onDragStart }) {
   );
 }
 
+// The grid column a drop landed on: the column of the cell whose horizontal band holds
+// `clientX`, or the nearest column when the drop falls past the end of a row. Reads the
+// laid-out cells rather than dividing the panel up, because a cell is as wide as the table
+// image it holds, so the columns are not of one width.
+const columnAt = (container, clientX) => {
+  let column = null;
+  let best = Number.POSITIVE_INFINITY;
+  container.querySelectorAll('[data-col]').forEach((el) => {
+    const rect = el.getBoundingClientRect();
+    const gap = Math.max(rect.left - clientX, clientX - rect.right, 0);
+    // A pointer or a rectangle that cannot be measured leaves every cell the same distance
+    // away, and the tie-break below then settles on the first column — the spine, which is
+    // the safe reading of a drop whose column cannot be told.
+    const distance = Number.isFinite(gap) ? gap : 0;
+    const c = Number(el.getAttribute('data-col'));
+    if (distance < best || (distance === best && column != null && c < column)) {
+      column = c;
+      best = distance;
+    }
+  });
+  return column;
+};
+
 export default function TableLinkageEditor({
   pdfId,
   rootTable,
@@ -95,7 +125,6 @@ export default function TableLinkageEditor({
   const [{ grid, select }, setState] = useState(() => {
     const init = buildInitialState(
       rootTable ?? { tableId: '', grid: null, next: null },
-      tables ?? [],
     );
     return { grid: padForDisplay(init.grid), select: init.select };
   });
@@ -174,21 +203,35 @@ export default function TableLinkageEditor({
     setState({ grid: padForDisplay(next.grid), select: next.select });
   };
 
-  // Drop anywhere on the grid panel: placement is automatic. All valid
-  // placements are computed (the ordered spine splice plus every empty cell
-  // that accepts the table) and the one nearest the pointer wins — so a drop
-  // right on an empty cell still lands there, while a drop on the panel at
-  // large picks the correct ordered spot, opening a new row when needed.
+  // Drop on the grid panel: the COLUMN dropped on is the user's instruction and is obeyed,
+  // the row within it is worked out. Every placement the column allows is computed (for the
+  // spine, the ordered splice as well as its empty cells) and the one nearest the pointer
+  // wins — so a drop right on an empty cell lands there, while a vaguer drop still takes
+  // the right spot in the column aimed at, opening a new spine row when that is what the
+  // document order calls for. A table the column cannot take is refused outright rather
+  // than slid into a column the user did not choose.
+  //
+  // Every drop answers for itself in a toast, because neither outcome explains itself on
+  // screen: an accepted table can land in a row the user was not aiming at, and a refused
+  // one simply stays in the Available column with nothing to say why. The reasons are the
+  // placement rules themselves, named against the neighbouring tables they were tested on.
   const handleDropOnGrid = (e) => {
     e.preventDefault();
     const payload = readPayload(e);
     if (!payload || payload.from !== 'select') return;
     const dragged = select.find((t) => t.tableId === payload.tableId);
     if (!dragged) return;
-    const candidates = dropCandidates(dragged, grid);
-    if (candidates.length === 0) return;
-
     const container = e.currentTarget;
+    const column = columnAt(container, e.clientX);
+    if (column == null) return; // an empty grid has no column to drop on
+    const candidates = dropCandidates(dragged, grid, column);
+    if (candidates.length === 0) {
+      toast.error(
+        `${dragged.name} was not placed: ${dropRejectionReason(dragged, grid, column)}.`,
+      );
+      return;
+    }
+
     // Distance from the pointer to a candidate's anchor: an empty cell's
     // rectangle (0 when the pointer is inside it), or a spliced row's top edge.
     const distanceTo = (cand) => {
@@ -220,20 +263,27 @@ export default function TableLinkageEditor({
       best.kind === 'newRow'
         ? insertSpineRow(grid, select, payload.tableId, best.r)
         : moveSelectToGridCell(grid, select, payload.tableId, best.r, best.c);
-    if (next) setState({ grid: padForDisplay(next.grid), select: next.select });
+    if (!next) {
+      toast.error(`${dragged.name} was not placed.`);
+      return;
+    }
+    // Described against the grid as it stood, before the placement is applied.
+    const reason = dropPlacementReason(dragged, grid, best);
+    setState({ grid: padForDisplay(next.grid), select: next.select });
+    toast.success(reason);
   };
 
-  // "Unlink" empties the grid: Root stays at (0,0) and every table linked to it returns to
-  // the Available column, in document order like the rest of that list. This is a LOCAL
-  // edit, exactly like dragging each table out by hand — nothing is committed, so Save or
-  // Ready persists it (buildSaveTables nulls the root's `grid` and `next` once only Root is
-  // left) and Cancel abandons it.
+  // "Unlink" empties the GRID: Root stays at (0,0) and every table laid out under it returns
+  // to the Available column, in document order like the rest of that list. It does NOT
+  // dissolve the group — membership lives in the root's `next` map, which the linking flow
+  // owns and this panel never writes — so every table it moves is still a member and is still
+  // offered for placing. A LOCAL edit, exactly like dragging each table out by hand: Save or
+  // Ready persists the cleared layout and Cancel abandons it.
   //
   // The tables returned are the ones ON SCREEN, not a reconstruction from `rootTable.next`:
-  // the grid may hold tables dragged in but not yet saved, and going back to the saved state
-  // would silently discard those. Note this deliberately does NOT rebuild through
-  // buildInitialState — with no saved grid that auto-populates the spine, which would
-  // re-link everything Unlink just removed.
+  // the grid may hold tables placed but not yet saved, which going back to the saved state
+  // would silently discard. Rebuilding through buildInitialState would be worse still — with
+  // no saved grid it auto-populates the spine, re-placing everything this just cleared.
   const handleUnlink = () => {
     const linkedChildren = grid
       .flat()
@@ -269,6 +319,10 @@ export default function TableLinkageEditor({
         : { ...entry, confirmationStage: Math.min(stage, confirmedTableStage()) };
     });
   };
+
+  // A group is ready to extract only once every table in it has a place in the grid: a member
+  // left in the Available column would be silently dropped from the extraction.
+  const readyEnabled = allLinkedPlaced(rootTable, grid);
 
   // "Ready" is the same local save as "Save", with the root table additionally
   // promoted to the ready stage. The save list is built first, then the root's
@@ -405,6 +459,8 @@ export default function TableLinkageEditor({
                       key={c}
                       table={cell}
                       image={images[cell.tableId]}
+                      row={r}
+                      col={c}
                       draggable={!isRoot}
                       onDragStart={
                         isRoot ? undefined : (e) => handleGridDragStart(e, r, c)
@@ -452,6 +508,7 @@ export default function TableLinkageEditor({
           <Button
             data-testid={'link-ready'}
             variant={'contained'}
+            disabled={!readyEnabled}
             onClick={handleReady}
           >
             {'Ready'}

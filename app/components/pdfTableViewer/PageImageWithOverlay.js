@@ -62,6 +62,7 @@ import {
   metadataTableToThumbnailOverlay,
   moveDivider,
   overlaps,
+  pageTableName,
   pickCalcResultTable,
   recalcShortfallMessage,
   reconcileAxisEdit,
@@ -830,7 +831,7 @@ export function PageImageWithOverlay({
 
     const newTable = {
       tableId: newUUID(),
-      name: `Page ${P + 1} Table ${Tabs + 1}`, // 1-based for humans; pdfPage stays 0-based
+      name: pageTableName(P, Tabs), // 1-based for humans; pdfPage stays 0-based
       next: null,
       pdfPage: P, // 0-based
       tableInPage,

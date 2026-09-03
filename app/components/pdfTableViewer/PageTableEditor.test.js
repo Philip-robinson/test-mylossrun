@@ -1496,3 +1496,72 @@ describe('PageTableEditor — the switch it hands the toolbar', () => {
     expect(screen.queryByTestId('probe-actions')).toBeNull();
   });
 });
+
+// Re-detecting one table's grid looks the result up in the merged list. A table joined into
+// another table's group is not on the top-level list, so a top-level scan cannot find it and
+// the correct merge was thrown away with "No table found".
+describe('re-detecting the grid of a joined member', () => {
+  const MEMBER = {
+    ...TABLE_B,
+    tableId: 'MEMBER',
+    name: 'Member',
+    tableInPage: 1,
+  };
+  const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
+
+  const stagedProps = () =>
+    mockStagedProps.mock.calls[mockStagedProps.mock.calls.length - 1][0];
+
+  const renderHosted = async (onChange) => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    function Host() {
+      const [tables, setTables] = React.useState([ROOT]);
+      return (
+        <PageTableEditor
+          metadata={metadataWith(tables)}
+          page={0}
+          onChange={(next) => {
+            setTables(next);
+            onChange(next);
+          }}
+          selectedTableId={'MEMBER'}
+          onSelectTable={jest.fn()}
+          onSave={jest.fn().mockResolvedValue(true)}
+        />
+      );
+    }
+    const view = render(<Host />);
+    await screen.findByTestId('staged-editor');
+    return view;
+  };
+
+  test('applies the detected grid to the member instead of reporting nothing found', async () => {
+    // A grid covering the member's border, as the detector would return it.
+    findGridLines.mockResolvedValue({
+      tables: [
+        {
+          tableInPage: 99,
+          bounds: { left: 0.05, top: 0, width: 0.08, height: 0.04 },
+          columnWidths: [{ value: 0.08, confidence: 80 }],
+          rowHeights: [{ value: 0.04, confidence: 80 }],
+        },
+      ],
+    });
+    const onChange = jest.fn();
+    await renderHosted(onChange);
+
+    // Mark the member as the just-created table, so the confirm control is offered for it.
+    await act(async () => {
+      stagedProps().onCreatedTable('MEMBER');
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('opt-confirm-created'));
+    });
+
+    expect(toast).not.toHaveBeenCalledWith('No table found');
+    expect(onChange).toHaveBeenCalled();
+    const written = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(written.map((t) => t.tableId)).toEqual(['ROOT']);
+    expect(written[0].next.MEMBER.bounds.width).toBeCloseTo(0.08, 6);
+  });
+});

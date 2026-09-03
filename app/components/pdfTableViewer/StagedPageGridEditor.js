@@ -47,6 +47,7 @@ import {
   mergeRolesByTableId,
   moveDivider,
   overlaps,
+  pageTableName,
   reconcileAxisEdit,
   replaceTableById,
   resizeBoundary,
@@ -155,7 +156,7 @@ function buildManualTable(list, page, b, pixelWidth, pixelHeight) {
   const bounds = { top: T, left: L, width: W, height: H };
   const table = {
     tableId: newUUID(),
-    name: `Page ${page + 1} Table ${tabs + 1}`,
+    name: pageTableName(page, tabs),
     next: null,
     pdfPage: page,
     tableInPage,

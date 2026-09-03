@@ -23,6 +23,12 @@ import toast from 'react-hot-toast';
 import {
   excelFileSuffix,
   highConfidence,
+  reviewFlaggedCountHelpId,
+  reviewGridHelpId,
+  reviewPoorCellsHelpId,
+  reviewSaveHelpId,
+  reviewSectionTitleHelpId,
+  reviewTitleHelpId,
   lowConfidence,
   mediumConfidence,
   reviewCellBorderColour,
@@ -40,6 +46,7 @@ import {
   reviewSelectedCellRadiusPx,
   reviewSelectedCellShadow,
   reviewTitleLabel,
+  reviewSectionTitleLabel,
   reviewWideCellMinCharacters,
 } from 'config';
 
@@ -55,6 +62,21 @@ jest.mock('services/images', () => ({
 // the dialog is a real collaborator and reads them at render.
 jest.mock('config', () => ({
   __esModule: true,
+  // Not a sentinel: the dialog reports which help screen it is, and reads the id of that
+  // screen from here, so the real function passes through. No assertion in this suite
+  // touches it, and a sentinel would only be a second place for the id to live.
+  cellEditorScreenId: jest.requireActual('config').cellEditorScreenId,
+  // The help ids the panel's own elements carry, for the same reason: the copy module
+  // keys this screen's tips by these very functions, so the real ones pass through and
+  // the id is a literal on neither side.
+  reviewFlaggedCountHelpId: jest.requireActual('config').reviewFlaggedCountHelpId,
+  reviewPoorCellsHelpId: jest.requireActual('config').reviewPoorCellsHelpId,
+  reviewTitleHelpId: jest.requireActual('config').reviewTitleHelpId,
+  reviewSectionTitleHelpId: jest.requireActual('config').reviewSectionTitleHelpId,
+  reviewGridHelpId: jest.requireActual('config').reviewGridHelpId,
+  reviewSaveHelpId: jest.requireActual('config').reviewSaveHelpId,
+  // Read by ReviewTableTabs, a real collaborator here.
+  reviewTabsHelpId: jest.requireActual('config').reviewTabsHelpId,
   lowConfidence: jest.fn(() => 50),
   mediumConfidence: jest.fn(() => 80),
   highConfidence: jest.fn(() => 90),
@@ -75,6 +97,8 @@ jest.mock('config', () => ({
   reviewCellEditRowCount: jest.fn(() => 1),
   reviewCellEditorMinWidthPx: jest.fn(() => 120),
   maxCellEditorImageHeight: jest.fn(() => 66),
+  cellEditImageSpinnerSizePx: jest.fn(() => 18),
+  cellEditImageLoadingHeightPx: jest.fn(() => 33),
   reviewPoorCellSelectWidthPx: jest.fn(() => 111),
   reviewGutterWidthPx: jest.fn(() => 33),
   reviewGutterHeightPx: jest.fn(() => 17),
@@ -83,6 +107,7 @@ jest.mock('config', () => ({
   // Deliberately not the real 'Title': the panel must take the title's name from config
   // rather than spell it out, and a sentinel is what proves it.
   reviewTitleLabel: jest.fn(() => 'Table title'),
+  reviewSectionTitleLabel: jest.fn(() => 'Section heading'),
   // Distinct from the real 100 so nothing can pass by coincidence, but still ABOVE the
   // sentinel high threshold — a corrected cell must stop counting towards the
   // below-high tally, and a sentinel below it would hide that.
@@ -513,7 +538,19 @@ describe('ReviewTablePanel', () => {
     expect(screen.queryByText('Extracting…')).not.toBeInTheDocument();
   });
 
-  it('calls onExit when Exit is clicked, once the save it runs first has landed', async () => {
+  // The button saves and then leaves, so it is labelled for the part that can fail.
+  it('labels the leave button Save', async () => {
+    extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+    renderPanel();
+
+    await waitFor(() =>
+      expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+    );
+    expect(screen.getByTestId('review-exit')).toHaveTextContent('Save');
+  });
+
+  it('calls onExit when Save is clicked, once the save it runs first has landed', async () => {
     extractTable.mockResolvedValue({ tables: [simpleTable] });
     const onExit = jest.fn();
 
@@ -1052,6 +1089,15 @@ describe('ReviewTablePanel', () => {
         ...screen.getByTestId('review-poor-cells').querySelectorAll('option'),
       ].map((o) => o.textContent);
 
+    it('labels the title', async () => {
+      await shown(titled(40));
+
+      expect(screen.getByTestId('review-title-label')).toHaveTextContent(
+        `${reviewTitleLabel()}:`
+      );
+      expect(title()).not.toHaveTextContent(reviewTitleLabel());
+    });
+
     it('shows the title above the grid, outside the scrolling region', async () => {
       await shown(titled(40));
 
@@ -1191,10 +1237,11 @@ describe('ReviewTablePanel', () => {
 
     // The dialog goes BESIDE what it is editing, bottom edges level, because the thing
     // being edited now holds the field. The title runs almost the full width of the
-    // editor, so there is room on neither side and it pins to the near edge instead of
-    // opening off the screen. jsdom measures everything as 0, so the title's rectangle
-    // and the dialog's height are both stubbed to make the placement observable.
-    it('places the edit dialog against the title, pinned to the near edge when neither side fits', async () => {
+    // editor, so there is room on neither side and it goes BELOW instead — over the
+    // title is the one place it must not be. jsdom measures everything as 0, so the
+    // title's rectangle and the dialog's height are both stubbed to make the placement
+    // observable.
+    it('places the edit dialog below the title when neither side fits', async () => {
       const heightSpy = jest
         .spyOn(HTMLElement.prototype, 'offsetHeight', 'get')
         .mockReturnValue(120);
@@ -1217,7 +1264,8 @@ describe('ReviewTablePanel', () => {
           { width: reviewCellEditDialogWidthPx(), height: 120 },
           { width: window.innerWidth, height: window.innerHeight }
         );
-        expect(expected.left).toBe(0);
+        expect(expected.placement).toBe('below');
+        expect(expected.top).toBe(wide.bottom);
         const dialog = screen.getByTestId('cell-edit-dialog');
         expect(dialog.style.left).toBe(`${expected.left}px`);
         expect(dialog.style.top).toBe(`${expected.top}px`);
@@ -1844,7 +1892,193 @@ describe('ReviewTablePanel', () => {
       expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
     });
 
-    // The cache and the requested-set live in the panel, not the short-lived dialog,
+    // A failed fetch must be an ANSWER, not silence: the dialog spins while the cache
+    // holds `undefined` at a key, so a failure that wrote nothing would spin for ever.
+    it('records that a failed crop fetch has no image, so the dialog stops waiting', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      getCellImages.mockRejectedValue(new Error('no crop for you'));
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await openEditor('ABC Ltd');
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('no crop for you')
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId('cell-edit-image-loading')
+        ).not.toBeInTheDocument()
+      );
+      expect(screen.queryByTestId('cell-edit-image')).not.toBeInTheDocument();
+      // The dialog is still usable: the crop is a convenience, and losing it must not
+      // cost the user the edit.
+      expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+    });
+
+    // The recorded null is also what stops the failure being retried on every render.
+    it('does not re-request a crop the fetch already failed for', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      getCellImages.mockRejectedValue(new Error('no crop for you'));
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await openEditor('ABC Ltd');
+      await waitFor(() => expect(getCellImages).toHaveBeenCalledTimes(1));
+
+      await userEvent.click(screen.getByTestId('cell-edit-cancel'));
+      await openEditor('ABC Ltd');
+
+      expect(getCellImages).toHaveBeenCalledTimes(1);
+    });
+
+    // The section title a split tab was cut on. The placeholder column it came from decides
+  // the split and names the tab, and is then dropped from the grid — so this is the only
+  // place the reviewer can see or correct it.
+  describe('the section title a tab was split on', () => {
+    const goToOptions = () =>
+      [
+        ...screen.getByTestId('review-poor-cells').querySelectorAll('option'),
+      ].map((o) => o.textContent);
+
+    const splitTable = (confidence) => ({
+      ...simpleTable,
+      sectionTitle: {
+        tableId: 'root',
+        sectionTitleIndex: 0,
+        text: 'Section A',
+        confidence,
+      },
+    });
+
+    it('is labelled, so it is not mistaken for the title above it', async () => {
+      extractTable.mockResolvedValue({ tables: [splitTable(95)] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      expect(
+        screen.getByTestId('review-section-title-label')
+      ).toHaveTextContent(`${reviewSectionTitleLabel()}:`);
+      // The label is not part of the value, so the wash, the ring and the click target
+      // stay on the value alone.
+      expect(screen.getByTestId('review-section-title')).toHaveTextContent(
+        'Section A'
+      );
+      expect(screen.getByTestId('review-section-title')).not.toHaveTextContent(
+        reviewSectionTitleLabel()
+      );
+    });
+
+    it('is drawn under the title, above the grid', async () => {
+      extractTable.mockResolvedValue({ tables: [splitTable(95)] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      expect(screen.getByTestId('review-section-title')).toHaveTextContent(
+        'Section A'
+      );
+    });
+
+    it('is not drawn for a table that was never split', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      expect(screen.queryByTestId('review-section-title')).toBeNull();
+    });
+
+    it('is flagged for review when it was read below high confidence', async () => {
+      extractTable.mockResolvedValue({ tables: [splitTable(30)] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      expect(screen.getByTestId('review-confidence-count')).toHaveTextContent(
+        '1 entry flagged for review'
+      );
+      expect(goToOptions()).toContain(reviewSectionTitleLabel());
+    });
+
+    it('is not flagged when it was read confidently', async () => {
+      extractTable.mockResolvedValue({ tables: [splitTable(95)] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      expect(goToOptions()).not.toContain(reviewSectionTitleLabel());
+    });
+
+    it('opens the edit dialog on it, and corrects the section title in the metadata', async () => {
+      extractTable.mockResolvedValue({ tables: [splitTable(30)] });
+      const tables = metadataTables();
+      const onEditTables = jest.fn();
+
+      renderPanel({ tables, onEditTables });
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await userEvent.click(screen.getByTestId('review-section-title'));
+      expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+
+      await typeCorrection('Section Z');
+      await userEvent.click(screen.getByTestId('cell-edit-confirm'));
+
+      expect(onEditTables).toHaveBeenCalledTimes(1);
+      const nextTables = onEditTables.mock.calls[0][0];
+      expect(nextTables[0].sectionTitles[0].data.text).toBe('Section Z');
+      expect(nextTables[0].sectionTitles[0].data.confidence).toBe(
+        reviewEditedCellConfidence()
+      );
+    });
+
+    // The heading is drawn from the merged table's own `sectionTitle`, not from the
+    // grid, so a correction that reached only the metadata left the field showing the
+    // old text again the moment it closed — and only a reload agreed with what had
+    // actually been saved.
+    it('shows the correction in the heading once the field closes', async () => {
+      extractTable.mockResolvedValue({ tables: [splitTable(30)] });
+
+      renderPanel({ tables: metadataTables() });
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await userEvent.click(screen.getByTestId('review-section-title'));
+      await typeCorrection('Section Z');
+      await userEvent.click(screen.getByTestId('cell-edit-confirm'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('review-section-title')).toHaveTextContent(
+          'Section Z'
+        )
+      );
+      // Corrected at the edited confidence, so it is no longer worth the user's
+      // attention either.
+      expect(goToOptions()).not.toContain(reviewSectionTitleLabel());
+    });
+  });
+
+  // The cache and the requested-set live in the panel, not the short-lived dialog,
     // so re-opening the same cell shows what was already fetched.
     it('does not re-request a crop when the same cell is re-opened', async () => {
       extractTable.mockResolvedValue({ tables: [simpleTable] });
@@ -2083,6 +2317,62 @@ describe('ReviewTablePanel', () => {
         );
       });
 
+      // Tab is the keyboard's Next: the same handler, so a correction settled by keystroke
+      // lands exactly as one settled by the button.
+      it('takes Tab as Next: saves, then re-opens on the next low confidence cell', async () => {
+        extractTable.mockResolvedValue({ tables: [twoPoor] });
+        const tables = metadataTables();
+        const onEditTables = jest.fn();
+
+        renderPanel({ tables, onEditTables });
+        await waitFor(() =>
+          expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+        );
+        await openEditor('ABC Ltd');
+        await typeCorrection('XYZ Ltd');
+        await userEvent.tab();
+
+        await waitFor(() =>
+          expect(
+            cellTexts()
+          ).toEqual(['Claim', 'Amount', 'XYZ Ltd', '1,234.00'])
+        );
+        expect(onEditTables).toHaveBeenCalledTimes(1);
+
+        expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+        expect(screen.getByTestId('review-cell-editor')).toHaveValue('1,234.00');
+        expect(screen.getByTestId('review-selected-cell')).toHaveTextContent(
+          'Selected cell B2'
+        );
+      });
+
+      // Refused on exactly the terms that disable the tick: a correction that could not be
+      // persisted must not be accepted by a keystroke when the button refuses it.
+      it('leaves Tab alone on a cell with no source', async () => {
+        const withPadding = {
+          ...twoPoor,
+          cells: [
+            [cell('root', 0, 0, 'Claim', 99), sourceless('')],
+            [cell('root', 1, 0, 'ABC Ltd', 60), sourceless('')],
+          ],
+        };
+        extractTable.mockResolvedValue({ tables: [withPadding] });
+        const onEditTables = jest.fn();
+
+        renderPanel({ onEditTables });
+        await waitFor(() =>
+          expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+        );
+        // The padding cell: clickable and editable, but with nothing to write back to.
+        await userEvent.click(screen.getAllByTestId('review-cell')[1]);
+        expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+        await typeCorrection('nope');
+        await userEvent.tab();
+
+        expect(onEditTables).not.toHaveBeenCalled();
+        expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+      });
+
       it('closes on the last low confidence cell, having saved it', async () => {
         extractTable.mockResolvedValue({ tables: [twoPoor] });
         const onEditTables = jest.fn();
@@ -2125,5 +2415,83 @@ describe('ReviewTablePanel', () => {
         ).toEqual(['Claim', 'Amount', 'ABC Ltd', '1,234.00']);
       });
     });
+  });
+});
+
+// The overlay measures each tip's hole from these attributes and the copy module keys the
+// same tips by the same functions, so no id is a literal on either side. The two title
+// rows carry theirs on the row, not the value, so the hole holds the label that names it.
+describe('ReviewTablePanel — the help anchors', () => {
+  const shown = async (table) => {
+    extractTable.mockResolvedValue({ tables: [table] });
+    renderPanel();
+    await waitFor(() =>
+      expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+    );
+  };
+
+  const titledTable = {
+    name: 'root',
+    title: {
+      tableId: 'root',
+      text: 'Loss run 2024',
+      confidence: 99,
+      bounds: bounds(0.1, 0.05, 0.5, 0.04),
+    },
+    headerCount: 1,
+    cells: [
+      [cell('root', 0, 0, 'Claim', 99), cell('root', 0, 1, 'Amount', 99)],
+      [cell('root', 1, 0, 'ABC Ltd', 97), cell('root', 1, 1, '1,234.00', 97)],
+    ],
+  };
+
+  it('names the count, the go-to controls, the grid and Save', async () => {
+    await shown(simpleTable);
+
+    expect(screen.getByTestId('review-confidence-count')).toHaveAttribute(
+      'data-help-id',
+      reviewFlaggedCountHelpId()
+    );
+    expect(
+      screen
+        .getByTestId('review-poor-cells')
+        .closest(`[data-help-id="${reviewPoorCellsHelpId()}"]`)
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('review-scroll')).toHaveAttribute(
+      'data-help-id',
+      reviewGridHelpId()
+    );
+    expect(screen.getByTestId('review-exit')).toHaveAttribute(
+      'data-help-id',
+      reviewSaveHelpId()
+    );
+  });
+
+  it('names the title row, label and value together', async () => {
+    await shown(titledTable);
+
+    expect(
+      screen
+        .getByTestId('review-title')
+        .closest(`[data-help-id="${reviewTitleHelpId()}"]`)
+    ).toContainElement(screen.getByTestId('review-title-label'));
+  });
+
+  it('names the section title row, label and value together', async () => {
+    await shown({
+      ...simpleTable,
+      sectionTitle: {
+        tableId: 'root',
+        sectionTitleIndex: 0,
+        text: 'Section A',
+        confidence: 95,
+      },
+    });
+
+    expect(
+      screen
+        .getByTestId('review-section-title')
+        .closest(`[data-help-id="${reviewSectionTitleHelpId()}"]`)
+    ).toContainElement(screen.getByTestId('review-section-title-label'));
   });
 });

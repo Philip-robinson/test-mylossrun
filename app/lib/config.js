@@ -524,7 +524,19 @@ export function reviewCellEditorMinWidthPx() {
 // fit the dialog's width; anything still taller than this scrolls rather than pushing the
 // text field off the bottom of the dialog.
 export function maxCellEditorImageHeight() {
-  return 75;
+  return 150;
+}
+
+// Diameter (screen px) of the spinner shown in the cell-edit dialog's image area while
+// the crop is being fetched.
+export function cellEditImageSpinnerSizePx() {
+  return 24;
+}
+
+// Height (screen px) the cell-edit dialog's image area reserves while that spinner shows,
+// so the dialog does not jump when the crop lands.
+export function cellEditImageLoadingHeightPx() {
+  return 40;
 }
 
 // Confidence written into a cell that has been manually corrected. cell_reread's
@@ -570,6 +582,420 @@ export function reviewGutterBorderColour() {
 // name of its own rather than a spreadsheet reference.
 export function reviewTitleLabel() {
   return 'Title';
+}
+
+// The section title a split review table was cut on: the label drawn beside it on the
+// review screen, its entry in the Go to… list, and the word the selected-value readout uses
+// for it. Like the title it is at no grid coordinate, so it needs a name rather than a
+// spreadsheet reference. One word, matching reviewTitleLabel() beside it.
+export function reviewSectionTitleLabel() {
+  return 'Section';
+}
+
+// ---------------------------------------------------------------------------
+// Help and hints overlay
+//
+// Colours and metrics of the help overlay — its scrim, the hole it cuts around
+// the described element, and the card it draws beside that hole — plus the
+// localStorage key prefix its "seen" record uses. These return literal values
+// rather than var(--…) references to globals.css: the overlay owns its own
+// palette.
+// ---------------------------------------------------------------------------
+
+// Fill of the scrim drawn over the whole viewport behind the overlay.
+export function helpScrimColour() {
+  return 'rgba(28, 32, 30, 0.62)';
+}
+
+// Padding (screen px) added around the described element's rect to make the hole
+// the scrim leaves clear of it.
+export function helpHolePaddingPx() {
+  return 6;
+}
+
+// Corner radius (screen px) of that hole.
+export function helpHoleRadiusPx() {
+  return 8;
+}
+
+// Spread (screen px) of the box-shadow that paints the scrim outward from the
+// hole. Large enough to cover any viewport.
+export function helpHoleShadowSpreadPx() {
+  return 9999;
+}
+
+// Rendered width (screen px) of the help card.
+export function helpCardWidthPx() {
+  return 380;
+}
+
+// Height (screen px) the card is assumed to have while it is being placed. The card
+// is positioned before the browser lays it out, so its real height is not knowable
+// at that point; placement clamps every edge inside the viewport margins, so an
+// assumed height that is wrong only slides the card along the hole's edge.
+export function helpCardAssumedHeightPx() {
+  return 220;
+}
+
+// Size (screen px) of the caret pointing from the card at the hole. It stands this
+// far out from the card's edge and is twice this across, being a border triangle.
+export function helpCardCaretSizePx() {
+  return 8;
+}
+
+// Gap (screen px) between the hole's edge and the card beside it.
+export function helpCardGapPx() {
+  return 12;
+}
+
+// Minimum gap (screen px) between the card and the viewport edge.
+export function helpViewportMarginPx() {
+  return 16;
+}
+
+// z-index of the overlay layer. Above every level the application already uses.
+export function helpLayerZIndex() {
+  return 2000;
+}
+
+// Namespace prefix for the localStorage keys recording which screen's hints a
+// user has already seen. localStorage is shared with unprefixed keys, so these
+// carry their own namespace.
+export function helpSeenKeyPrefix() {
+  return 'mylossrun.help.seen.';
+}
+
+// Fill of the help card.
+export function helpCardBackgroundColour() {
+  return '#1d4634';
+}
+
+// Text colour on that card.
+export function helpCardTextColour() {
+  return '#ffffff';
+}
+
+// Font size of the card's body text — the tip's words, and the summary and
+// introduction on the entry card. Smaller than the title above it.
+export function helpCardBodyFontSize() {
+  return '0.8rem';
+}
+
+// Line height of that body text.
+export function helpCardBodyLineHeight() {
+  return 1.2;
+}
+
+// Fill of the HELP chip on the card.
+export function helpChipBackgroundColour() {
+  return '#2f6b4f';
+}
+
+// Fill of the numbered hint badge, and the colour of the number on it.
+export function helpBadgeBackgroundColour() {
+  return '#3DB86A';
+}
+
+export function helpBadgeTextColour() {
+  return '#ffffff';
+}
+
+// The `data-help-id` values. Each element the overlay can describe carries one of
+// these as its attribute and the copy module keys its tips by the same function,
+// so no id exists as a literal on either side: an unknown id is ignored by the
+// hit-test, so a typo would show up as help that does nothing rather than as an
+// error.
+//
+// helpButtonHelpId is read by three sides that must agree — the overlay measures
+// the entry card's hole from it, the toolbar button carries it as its attribute,
+// and no screen may author a tip for it.
+export function helpButtonHelpId() {
+  return 'help-button';
+}
+
+export function dropBoxHelpId() {
+  return 'document-drop-box';
+}
+
+export function documentListCountsHelpId() {
+  return 'document-list-counts';
+}
+
+export function documentListTableHelpId() {
+  return 'document-list-table';
+}
+
+export function documentListStatusHelpId() {
+  return 'document-list-status';
+}
+
+// The boundary pass's ids. The two Options buttons and the pass-switch / page buttons
+// live in the Layers panel, the dim and scale controls in the editor's own toolbar, the
+// two labels on the selected table's corners, and the rest in the Document Overview
+// column down the left or the Pages column down the right.
+//
+// The Document Overview column stands unchanged through both editor passes, so the ids
+// from documentOverviewSaveHelpId down are described by the contents pass too.
+export function boundaryDeleteTableHelpId() {
+  return 'boundary-delete-table';
+}
+
+export function boundaryCreateTableHelpId() {
+  return 'boundary-create-table';
+}
+
+// The three things in the editor's own title bar, above the page: which document and page
+// are on screen, and the two controls for how that page is shown.
+export function editorPageTitleHelpId() {
+  return 'editor-page-title';
+}
+
+export function editorDimDocumentHelpId() {
+  return 'editor-dim-document';
+}
+
+export function editorScaleHelpId() {
+  return 'editor-scale';
+}
+
+export function pagesColumnHelpId() {
+  return 'pages-column';
+}
+
+export function tableLinkLabelHelpId() {
+  return 'table-link-label';
+}
+
+export function tableNameLabelHelpId() {
+  return 'table-name-label';
+}
+
+export function toolbarAllFilesHelpId() {
+  return 'toolbar-all-files';
+}
+
+// The toolbar's two pass tabs. They stand in the toolbar rather than the Layers panel, so
+// they carry ids of their own even though their words are the panel buttons' words: an id
+// names one element, and the overlay measures its hole from the element it finds.
+export function toolbarValidateBordersHelpId() {
+  return 'toolbar-validate-borders';
+}
+
+export function toolbarValidateTablesHelpId() {
+  return 'toolbar-validate-tables';
+}
+
+export function validateTablesHelpId() {
+  return 'layers-validate-tables';
+}
+
+// The pass switch's other face, in the same place in the panel: the contents pass shows
+// Validate Borders where the boundary pass shows Validate Tables.
+export function validateBordersHelpId() {
+  return 'layers-validate-borders';
+}
+
+export function layersPreviousHelpId() {
+  return 'layers-previous';
+}
+
+export function layersNextHelpId() {
+  return 'layers-next';
+}
+
+export function documentOverviewSaveHelpId() {
+  return 'document-overview-save';
+}
+
+export function includeDeletedHelpId() {
+  return 'overview-include-deleted';
+}
+
+export function documentOverviewHelpId() {
+  return 'document-overview';
+}
+
+export function documentOverviewEntryHelpId() {
+  return 'document-overview-entry';
+}
+
+export function documentOverviewLinkHelpId() {
+  return 'document-overview-link';
+}
+
+export function documentOverviewReviewHelpId() {
+  return 'document-overview-review';
+}
+
+export function documentOverviewExportHelpId() {
+  return 'document-overview-export';
+}
+
+// The contents pass's ids: the page in the centre, the Layers column, the tool rail and
+// its three buttons, and the nine entries of the Special tool's sub-menu.
+export function editorPageTableHelpId() {
+  return 'editor-page-table';
+}
+
+export function layersPanelHelpId() {
+  return 'layers-panel';
+}
+
+// One per toggleable layer row in that panel. Borders carries none: it is listed by the
+// boundary pass alone, is always drawn, and the pass's own tips already describe it.
+export function layersRowsHelpId() {
+  return 'layers-rows';
+}
+
+export function layersColumnsHelpId() {
+  return 'layers-columns';
+}
+
+export function layersSpecialHelpId() {
+  return 'layers-special';
+}
+
+export function layersColoursHelpId() {
+  return 'layers-colours';
+}
+
+export function gridToolRailHelpId() {
+  return 'grid-tool-rail';
+}
+
+export function gridToolRowsHelpId() {
+  return 'grid-tool-rows';
+}
+
+export function gridToolColumnsHelpId() {
+  return 'grid-tool-columns';
+}
+
+export function gridToolSpecialHelpId() {
+  return 'grid-tool-special';
+}
+
+export function specialToolHeaderHelpId() {
+  return 'special-tool-header';
+}
+
+export function specialToolTitleHelpId() {
+  return 'special-tool-title';
+}
+
+export function specialToolSectionHelpId() {
+  return 'special-tool-section';
+}
+
+export function specialToolHideRowHelpId() {
+  return 'special-tool-hide-row';
+}
+
+// The review screen's ids: the two titles above the grid, the count and the go-to controls
+// in the bar over them, the grid itself, the section tabs under it and the Save that ends
+// the review.
+// The grid editor's ids: the two lists it moves tables between, and the four buttons on
+// its foot.
+export function linkAvailableTablesHelpId() {
+  return 'link-available-tables';
+}
+
+export function linkLinkedTablesHelpId() {
+  return 'link-linked-tables';
+}
+
+export function linkUnlinkHelpId() {
+  return 'link-unlink';
+}
+
+export function linkCancelHelpId() {
+  return 'link-cancel';
+}
+
+export function linkSaveHelpId() {
+  return 'link-save';
+}
+
+export function linkReadyHelpId() {
+  return 'link-ready';
+}
+
+export function reviewTitleHelpId() {
+  return 'review-title-row';
+}
+
+export function reviewSectionTitleHelpId() {
+  return 'review-section-title-row';
+}
+
+export function reviewFlaggedCountHelpId() {
+  return 'review-flagged-count';
+}
+
+export function reviewPoorCellsHelpId() {
+  return 'review-poor-cells-controls';
+}
+
+export function reviewGridHelpId() {
+  return 'review-grid';
+}
+
+export function reviewTabsHelpId() {
+  return 'review-tabs';
+}
+
+export function reviewSaveHelpId() {
+  return 'review-save';
+}
+
+export function specialToolColouredRowsHelpId() {
+  return 'special-tool-coloured-rows';
+}
+
+export function specialToolColouredColumnsHelpId() {
+  return 'special-tool-coloured-columns';
+}
+
+export function specialToolColouredTableHelpId() {
+  return 'special-tool-coloured-table';
+}
+
+export function specialToolColouredCellHelpId() {
+  return 'special-tool-coloured-cell';
+}
+
+export function specialToolColouredAreaHelpId() {
+  return 'special-tool-coloured-area';
+}
+
+// The screen ids. Each names one arrangement of the UI that gets its own help, and
+// is derived from state that already exists: the document list is PDFLoader being
+// mounted, the two passes are the editor's border/grid modes, and the link and
+// review screens are its centreMode. Named here because the copy keys its screens
+// by them and the registration sites report them, so a literal in either place
+// would fail silently — an id with no copy simply has no help.
+export function documentListScreenId() {
+  return 'documentList';
+}
+
+export function boundaryPassScreenId() {
+  return 'boundaryPass';
+}
+
+export function contentsPassScreenId() {
+  return 'contentsPass';
+}
+
+export function linkTablesScreenId() {
+  return 'linkTables';
+}
+
+export function reviewTableScreenId() {
+  return 'reviewTable';
+}
+
+export function cellEditorScreenId() {
+  return 'cellEditor';
 }
 
 // Export default config object
@@ -665,6 +1091,8 @@ export default {
   reviewCellEditRowCount,
   reviewCellEditorMinWidthPx,
   maxCellEditorImageHeight,
+  cellEditImageSpinnerSizePx,
+  cellEditImageLoadingHeightPx,
   reviewEditedCellConfidence,
   reviewPoorCellSelectWidthPx,
   reviewGutterWidthPx,
@@ -672,4 +1100,88 @@ export default {
   reviewGutterBackgroundColour,
   reviewGutterBorderColour,
   reviewTitleLabel,
+  reviewSectionTitleLabel,
+  helpScrimColour,
+  helpHolePaddingPx,
+  helpHoleRadiusPx,
+  helpHoleShadowSpreadPx,
+  helpCardWidthPx,
+  helpCardAssumedHeightPx,
+  helpCardCaretSizePx,
+  helpCardGapPx,
+  helpViewportMarginPx,
+  helpLayerZIndex,
+  helpSeenKeyPrefix,
+  helpCardBackgroundColour,
+  helpCardTextColour,
+  helpCardBodyFontSize,
+  helpCardBodyLineHeight,
+  helpChipBackgroundColour,
+  helpBadgeBackgroundColour,
+  helpBadgeTextColour,
+  helpButtonHelpId,
+  documentListScreenId,
+  boundaryPassScreenId,
+  contentsPassScreenId,
+  linkTablesScreenId,
+  reviewTableScreenId,
+  cellEditorScreenId,
+  dropBoxHelpId,
+  documentListCountsHelpId,
+  documentListTableHelpId,
+  documentListStatusHelpId,
+  boundaryDeleteTableHelpId,
+  boundaryCreateTableHelpId,
+  editorPageTitleHelpId,
+  editorDimDocumentHelpId,
+  editorScaleHelpId,
+  pagesColumnHelpId,
+  tableLinkLabelHelpId,
+  tableNameLabelHelpId,
+  toolbarAllFilesHelpId,
+  toolbarValidateBordersHelpId,
+  toolbarValidateTablesHelpId,
+  validateTablesHelpId,
+  validateBordersHelpId,
+  layersPreviousHelpId,
+  layersNextHelpId,
+  documentOverviewSaveHelpId,
+  includeDeletedHelpId,
+  documentOverviewHelpId,
+  documentOverviewEntryHelpId,
+  documentOverviewLinkHelpId,
+  documentOverviewReviewHelpId,
+  documentOverviewExportHelpId,
+  editorPageTableHelpId,
+  layersPanelHelpId,
+  layersRowsHelpId,
+  layersColumnsHelpId,
+  layersSpecialHelpId,
+  layersColoursHelpId,
+  gridToolRailHelpId,
+  gridToolRowsHelpId,
+  gridToolColumnsHelpId,
+  gridToolSpecialHelpId,
+  specialToolHeaderHelpId,
+  specialToolTitleHelpId,
+  specialToolSectionHelpId,
+  specialToolHideRowHelpId,
+  linkAvailableTablesHelpId,
+  linkLinkedTablesHelpId,
+  linkUnlinkHelpId,
+  linkCancelHelpId,
+  linkSaveHelpId,
+  linkReadyHelpId,
+  reviewTitleHelpId,
+  reviewSectionTitleHelpId,
+  reviewFlaggedCountHelpId,
+  reviewPoorCellsHelpId,
+  reviewGridHelpId,
+  reviewTabsHelpId,
+  reviewSaveHelpId,
+  specialToolColouredRowsHelpId,
+  specialToolColouredColumnsHelpId,
+  specialToolColouredTableHelpId,
+  specialToolColouredCellHelpId,
+  specialToolColouredAreaHelpId,
 };

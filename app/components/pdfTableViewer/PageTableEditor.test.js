@@ -1,6 +1,9 @@
 import React from 'react';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import PageTableEditor from 'components/pdfTableViewer/PageTableEditor';
+import EditorPassProvider, {
+  useEditorPass,
+} from 'components/EditorPassProvider';
 import { makeDefaultCell } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   getImage,
@@ -11,7 +14,11 @@ import {
   findGridLines,
   calculateCells,
 } from 'services/images';
-import { stagedGridEditorEnabled, baseImageWidthPx } from 'config';
+import {
+  editorPageTitleHelpId,
+  stagedGridEditorEnabled,
+  baseImageWidthPx,
+} from 'config';
 import toast from 'react-hot-toast';
 
 jest.mock('services/images', () => ({
@@ -622,6 +629,68 @@ describe('PageTableEditor — the two passes', () => {
       expect(onSave).toHaveBeenCalledTimes(1);
       expect(lastStagedProps().editorMode).toBe('border');
       expect(screen.getByTestId('layers-validate-tables')).toBeInTheDocument();
+    });
+  });
+
+  describe('Validate Borders', () => {
+    // Get into the contents pass the way a user does, so the way back is tested from where
+    // the user would actually take it.
+    const enterGridMode = async (props = {}) => {
+      const view = await renderStaged({
+        onSave: jest.fn().mockResolvedValue(true),
+        ...props,
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-tables'));
+      });
+      await waitFor(() => expect(lastStagedProps().editorMode).toBe('grid'));
+      return view;
+    };
+
+    test('saves, then returns to borderMode', async () => {
+      const onSave = jest.fn().mockResolvedValue(true);
+      await enterGridMode({ onSave });
+      onSave.mockClear();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-borders'));
+      });
+
+      expect(onSave).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(lastStagedProps().editorMode).toBe('border'));
+      expect(screen.getByTestId('layers-validate-tables')).toBeInTheDocument();
+      expect(screen.queryByTestId('layers-validate-borders')).toBeNull();
+      expect(screen.queryByTestId('grid-toolbar')).toBeNull();
+    });
+
+    test('a failed save abandons the switch and stays in gridMode', async () => {
+      const onSave = jest.fn().mockResolvedValue(true);
+      await enterGridMode({ onSave });
+      onSave.mockClear();
+      onSave.mockResolvedValue(false);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-borders'));
+      });
+
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(lastStagedProps().editorMode).toBe('grid');
+      expect(screen.getByTestId('layers-validate-borders')).toBeInTheDocument();
+    });
+
+    // The boundary pass is about the page, so the table the user was working on stays
+    // selected — unlike Validate Tables, which arrives with none chosen and picks one.
+    test('leaves the selected table alone', async () => {
+      const onSelectTable = jest.fn();
+      await enterGridMode({ onSelectTable, selectedTableId: 'B' });
+      onSelectTable.mockClear();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-borders'));
+      });
+
+      await waitFor(() => expect(lastStagedProps().editorMode).toBe('border'));
+      expect(onSelectTable).not.toHaveBeenCalled();
     });
   });
 
@@ -1261,5 +1330,169 @@ describe('PageTableEditor — the two passes', () => {
         .filter(Boolean);
       written.forEach((t) => expect(t.confirmationStage).toBe(3));
     });
+  });
+});
+
+// The overlay measures its tip's hole from a data-help-id, and the tip the contents pass
+// authors about the table is carried by the selected table's own box inside the staged
+// editor. The page around it carries nothing: an id here would highlight the whole PDF
+// page in place of the table it describes.
+describe('PageTableEditor — the page the contents pass describes', () => {
+  test('the staged page carries no help id of its own', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    render(
+      <PageTableEditor
+        metadata={metadataWith([TABLE_A, TABLE_B])}
+        page={0}
+        onChange={jest.fn()}
+        selectedTableId={'A'}
+        onSelectTable={jest.fn()}
+      />
+    );
+    await screen.findByTestId('staged-editor');
+
+    expect(screen.getByTestId('middle-image')).not.toHaveAttribute(
+      'data-help-id'
+    );
+  });
+
+  // The label above the page, in the editor's own title bar. Both passes show it and both
+  // describe it, so it carries its id in either editor.
+  test('the title bar carries the selected-page help id', async () => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    render(
+      <PageTableEditor
+        metadata={metadataWith([TABLE_A, TABLE_B])}
+        page={0}
+        onChange={jest.fn()}
+        selectedTableId={'A'}
+        onSelectTable={jest.fn()}
+      />
+    );
+    await screen.findByTestId('staged-editor');
+
+    expect(screen.getByTestId('middle-title-bar')).toHaveAttribute(
+      'data-help-id',
+      editorPageTitleHelpId()
+    );
+  });
+
+  test('the legacy page carries none', async () => {
+    stagedGridEditorEnabled.mockReturnValue(false);
+    render(
+      <PageTableEditor
+        metadata={metadataWith([TABLE_A, TABLE_B])}
+        page={0}
+        onChange={jest.fn()}
+      />
+    );
+
+    expect(await screen.findByTestId('middle-image')).not.toHaveAttribute(
+      'data-help-id'
+    );
+  });
+});
+
+// The toolbar's pass tabs make the same switch as the Layers panel's Validate button, so
+// the editor hands the toolbar its own handlers rather than letting a second copy of them
+// be written. Registered through the editor-pass context, since the toolbar is not in this
+// tree at all.
+describe('PageTableEditor — the switch it hands the toolbar', () => {
+  let registered = null;
+
+  // Captures what the editor registered, which is what the toolbar's tabs would call.
+  function PassProbe() {
+    const editorPass = useEditorPass();
+    registered = editorPass.actions;
+
+    return <span data-testid={'probe-actions'}>{registered ? 'yes' : 'no'}</span>;
+  }
+
+  const renderWithPass = async (props = {}) => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    const view = render(
+      <EditorPassProvider>
+        <PassProbe />
+        <PageTableEditor
+          metadata={metadataWith([TABLE_A, TABLE_B])}
+          page={0}
+          onChange={jest.fn()}
+          selectedTableId={'A'}
+          onSelectTable={jest.fn()}
+          onSave={jest.fn().mockResolvedValue(true)}
+          {...props}
+        />
+      </EditorPassProvider>
+    );
+    await screen.findByTestId('staged-editor');
+    return view;
+  };
+
+  beforeEach(() => {
+    registered = null;
+  });
+
+  test('ends the boundary pass exactly as the Layers button does', async () => {
+    const onSave = jest.fn().mockResolvedValue(true);
+    const onEditorModeChange = jest.fn();
+    await renderWithPass({ onSave, onEditorModeChange });
+
+    await act(async () => {
+      registered.validateTables();
+    });
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(onEditorModeChange).toHaveBeenLastCalledWith('grid')
+    );
+  });
+
+  test('comes back from the contents pass exactly as the Layers button does', async () => {
+    const onSave = jest.fn().mockResolvedValue(true);
+    const onEditorModeChange = jest.fn();
+    await renderWithPass({ onSave, onEditorModeChange });
+
+    await act(async () => {
+      registered.validateTables();
+    });
+    await waitFor(() =>
+      expect(onEditorModeChange).toHaveBeenLastCalledWith('grid')
+    );
+
+    await act(async () => {
+      registered.validateBorders();
+    });
+
+    await waitFor(() =>
+      expect(onEditorModeChange).toHaveBeenLastCalledWith('border')
+    );
+  });
+
+  // A failed save abandons the switch, the same way it does from the panel: the tab is the
+  // same action, not a second one that could settle the pass differently.
+  test('abandons the switch on a failed save', async () => {
+    const onSave = jest.fn().mockResolvedValue(false);
+    const onEditorModeChange = jest.fn();
+    await renderWithPass({ onSave, onEditorModeChange });
+    onEditorModeChange.mockClear();
+
+    await act(async () => {
+      registered.validateTables();
+    });
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onEditorModeChange).not.toHaveBeenCalledWith('grid');
+  });
+
+  // Taken back when the editor goes, which is what tells the toolbar the switch is out of
+  // reach while a full panel stands over it.
+  test('takes the switch back when the editor goes', async () => {
+    const { unmount } = await renderWithPass();
+
+    expect(registered).not.toBeNull();
+
+    unmount();
+
+    expect(screen.queryByTestId('probe-actions')).toBeNull();
   });
 });

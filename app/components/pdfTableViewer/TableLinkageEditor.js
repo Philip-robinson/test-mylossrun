@@ -16,7 +16,13 @@ import toast from 'react-hot-toast';
 import { getTableImages } from 'services/images';
 import {
   confirmedTableStage,
+  linkAvailableTablesHelpId,
+  linkCancelHelpId,
+  linkLinkedTablesHelpId,
+  linkReadyHelpId,
+  linkSaveHelpId,
   linkTableCellWidth,
+  linkUnlinkHelpId,
   readyTableStage,
 } from 'config';
 import {
@@ -355,6 +361,7 @@ export default function TableLinkageEditor({
         <Box sx={{ display: 'flex', gap: '10px', flex: 1, minWidth: 0, minHeight: 0 }}>
           <Box
             data-testid={'available-panel'}
+            data-help-id={linkAvailableTablesHelpId()}
             sx={{
               display: 'flex',
               flexDirection: 'column',
@@ -410,6 +417,7 @@ export default function TableLinkageEditor({
 
           <Box
             data-testid={'linked-panel'}
+            data-help-id={linkLinkedTablesHelpId()}
             sx={{
               display: 'flex',
               flexDirection: 'column',
@@ -488,18 +496,24 @@ export default function TableLinkageEditor({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Button
             data-testid={'link-unlink'}
+            data-help-id={linkUnlinkHelpId()}
             variant={'contained'}
             onClick={handleUnlink}
           >
             {'Unlink'}
           </Button>
-          <Button data-testid={'link-cancel'} onClick={onCancel}>
+          <Button
+            data-testid={'link-cancel'}
+            data-help-id={linkCancelHelpId()}
+            onClick={onCancel}
+          >
             {'Cancel'}
           </Button>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
             data-testid={'link-save'}
+            data-help-id={linkSaveHelpId()}
             variant={'contained'}
             onClick={() => onSave(savedTables())}
           >
@@ -507,6 +521,7 @@ export default function TableLinkageEditor({
           </Button>
           <Button
             data-testid={'link-ready'}
+            data-help-id={linkReadyHelpId()}
             variant={'contained'}
             disabled={!readyEnabled}
             onClick={handleReady}

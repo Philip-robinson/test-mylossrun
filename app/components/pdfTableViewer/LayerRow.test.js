@@ -30,19 +30,30 @@ describe('LayerRow', () => {
     });
   });
 
-  it('shows the open eye and no row background when on', () => {
+  it('shows the open eye and the layer background colour when on', () => {
     renderRow({ on: true });
     expect(screen.getByTestId('layer-eye')).toBeInTheDocument();
     expect(screen.queryByTestId('layer-eye-off')).toBeNull();
+    expect(screen.getByTestId('layer-row')).toHaveAttribute('data-on', 'true');
+    expect(screen.getByTestId('layer-row')).toHaveStyle({
+      backgroundColor: PALE_BLUE,
+    });
+  });
+
+  it('shows the slashed eye and no row background when off', () => {
+    renderRow({ on: false });
+    expect(screen.getByTestId('layer-eye-off')).toBeInTheDocument();
+    expect(screen.queryByTestId('layer-eye')).toBeNull();
+    expect(screen.getByTestId('layer-row')).toHaveAttribute('data-on', 'false');
     expect(screen.getByTestId('layer-row')).toHaveStyle({
       backgroundColor: 'transparent',
     });
   });
 
-  it('shows the slashed eye and the layer background colour when off', () => {
-    renderRow({ on: false });
-    expect(screen.getByTestId('layer-eye-off')).toBeInTheDocument();
-    expect(screen.queryByTestId('layer-eye')).toBeNull();
+  // Borders is untoggleable and always on, so it now carries its tint too.
+  it('gives an untoggleable row the background colour, since it is always on', () => {
+    renderRow({ toggleable: false });
+    expect(screen.getByTestId('layer-row')).toHaveAttribute('data-on', 'true');
     expect(screen.getByTestId('layer-row')).toHaveStyle({
       backgroundColor: PALE_BLUE,
     });

@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import GridToolRail from 'components/pdfTableViewer/GridToolRail';
+import { gridToolRailHelpId } from 'config';
 
 describe('GridToolRail', () => {
   it('renders the tool-bar whatever the armed tool is', () => {
@@ -50,5 +51,16 @@ describe('GridToolRail', () => {
     );
     fireEvent.click(screen.getByTestId('special-tool-header'));
     expect(onSelectSpecialTool).toHaveBeenCalledWith('header');
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('carries the rail help id', () => {
+    render(<GridToolRail onSelectTool={() => {}} />);
+
+    expect(screen.getByTestId('grid-tool-rail')).toHaveAttribute(
+      'data-help-id',
+      gridToolRailHelpId()
+    );
   });
 });

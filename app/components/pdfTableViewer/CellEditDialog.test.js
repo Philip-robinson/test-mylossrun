@@ -1,3 +1,10 @@
+// The overlay is stubbed: the dialog's part in the help feature is reporting which
+// screen it is, not what the overlay then draws.
+jest.mock('components/help/HelpOverlay', () => ({
+  __esModule: true,
+  default: () => <div data-testid={'help-overlay'} />,
+}));
+
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CellEditDialog from 'components/pdfTableViewer/CellEditDialog';
@@ -15,19 +22,29 @@ import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 // mocked accessor rather than by naming a literal, so a change to a real constant
 // can never fail a test here.
 import {
+  cellEditImageLoadingHeightPx,
+  cellEditImageSpinnerSizePx,
+  cellEditorScreenId,
   confirmColour,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
 } from 'config';
+import HelpProvider, { useHelp } from 'components/help/HelpProvider';
 
 jest.mock('config', () => ({
   __esModule: true,
+  // Real apart from the six sentinels below: the help provider the registration test
+  // mounts the dialog inside reads constants of its own from config, and a mock that
+  // named only this suite's values would leave those undefined.
+  ...jest.requireActual('config'),
   cancelColour: jest.fn(() => 'rgb(9, 0, 0)'),
   confirmColour: jest.fn(() => 'rgb(0, 9, 0)'),
   // Deliberately wide enough that the stubbed viewport below leaves room on only one
   // side of some anchors, so the placement tests exercise both sides of the rule.
   reviewCellEditDialogWidthPx: jest.fn(() => 220),
   maxCellEditorImageHeight: jest.fn(() => 66),
+  cellEditImageSpinnerSizePx: jest.fn(() => 18),
+  cellEditImageLoadingHeightPx: jest.fn(() => 33),
 }));
 
 // jsdom implements no PointerEvent, so fireEvent falls back to a bare Event whose
@@ -145,7 +162,15 @@ let onCancel;
 let onConfirm;
 let onConfirmAndNext;
 
-const renderDialog = (props = {}) =>
+// Reads the registered help screen out into the DOM, so what the dialog reported can be
+// asserted without reaching into the overlay.
+function HelpScreenProbe() {
+  const { screenId } = useHelp();
+
+  return <span data-testid={'probe-screen'}>{screenId || 'none'}</span>;
+}
+
+const renderDialog = (props = {}, options = undefined) =>
   render(
     <CellEditDialog
       pdfId={'pdf-1'}
@@ -158,7 +183,8 @@ const renderDialog = (props = {}) =>
       onConfirm={onConfirm}
       onConfirmAndNext={onConfirmAndNext}
       {...props}
-    />
+    />,
+    options
   );
 
 beforeEach(() => {
@@ -302,6 +328,75 @@ describe('CellEditDialog', () => {
     renderDialog();
 
     expect(screen.queryByTestId('cell-edit-image')).not.toBeInTheDocument();
+  });
+
+  // Three states, not two: the panel writes null when the fetch failed, so an empty area
+  // that will never fill can be told from one that is still being waited on.
+  describe('while the crop is being fetched', () => {
+    it('spins for a cell whose source resolves and whose crop has not arrived', () => {
+      renderDialog();
+
+      expect(screen.getByTestId('cell-edit-image-loading')).toBeInTheDocument();
+      expect(screen.queryByTestId('cell-edit-image')).not.toBeInTheDocument();
+    });
+
+    it('reserves the configured height while it spins, so the dialog does not jump', () => {
+      renderDialog();
+
+      const area = screen.getByTestId('cell-edit-image-loading').parentElement;
+      expect(area).toHaveStyle({
+        minHeight: `${cellEditImageLoadingHeightPx()}px`,
+        display: 'flex',
+      });
+    });
+
+    it('sizes the spinner from config', () => {
+      renderDialog();
+
+      const spinner = screen.getByTestId('cell-edit-image-loading');
+      expect(spinner).toHaveStyle({
+        width: `${cellEditImageSpinnerSizePx()}px`,
+        height: `${cellEditImageSpinnerSizePx()}px`,
+      });
+    });
+
+    // A recorded null is an ANSWER — the fetch failed — so the dialog stops waiting.
+    it('stops spinning once the panel records that there is no crop', () => {
+      renderDialog({ image: null });
+
+      expect(
+        screen.queryByTestId('cell-edit-image-loading')
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cell-edit-image')).not.toBeInTheDocument();
+    });
+
+    it('stops spinning once the crop arrives', () => {
+      renderDialog({ image: bothImages });
+
+      expect(
+        screen.queryByTestId('cell-edit-image-loading')
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId('cell-edit-image')).toBeInTheDocument();
+    });
+
+    // Nothing was asked for, so there is nothing to wait for.
+    it('does not spin for a cell with no source', () => {
+      renderDialog({ cell: sourcelessCell });
+
+      expect(
+        screen.queryByTestId('cell-edit-image-loading')
+      ).not.toBeInTheDocument();
+      expect(onRequestImage).not.toHaveBeenCalled();
+    });
+
+    it('does not spin when the source table is not among the tables', () => {
+      renderDialog({ tables: [] });
+
+      expect(
+        screen.queryByTestId('cell-edit-image-loading')
+      ).not.toBeInTheDocument();
+      expect(onRequestImage).not.toHaveBeenCalled();
+    });
   });
 
   it('requests nothing for a cell with no source', () => {
@@ -616,5 +711,26 @@ describe('CellEditDialog', () => {
       expect(onConfirm).not.toHaveBeenCalled();
       expect(onCancel).not.toHaveBeenCalled();
     });
+  });
+
+  // Mounting IS opening for this dialog, so its being mounted is what says the user is on
+  // the cell-editor screen; the id comes from config, which is also where the copy module
+  // takes the key of the screen it describes.
+  it('reports itself to the help overlay as the cell-editor screen', () => {
+    renderDialog(
+      {},
+      {
+        wrapper: ({ children }) => (
+          <HelpProvider>
+            <HelpScreenProbe />
+            {children}
+          </HelpProvider>
+        ),
+      }
+    );
+
+    expect(screen.getByTestId('probe-screen')).toHaveTextContent(
+      cellEditorScreenId()
+    );
   });
 });

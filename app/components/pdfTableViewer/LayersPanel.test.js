@@ -1,5 +1,16 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import LayersPanel from 'components/pdfTableViewer/LayersPanel';
+import {
+  layersColoursHelpId,
+  layersColumnsHelpId,
+  layersNextHelpId,
+  layersPanelHelpId,
+  layersPreviousHelpId,
+  layersRowsHelpId,
+  layersSpecialHelpId,
+  validateBordersHelpId,
+  validateTablesHelpId,
+} from 'config';
 
 // A table with two rows, three columns, a header, one section title and a name, so every
 // row's count is distinguishable.
@@ -42,6 +53,7 @@ describe('LayersPanel', () => {
       expect(screen.getAllByTestId('layer-row')).toHaveLength(1);
       expect(screen.getByText('Borders')).toBeInTheDocument();
       expect(screen.getByTestId('layers-validate-tables')).toBeInTheDocument();
+      expect(screen.queryByTestId('layers-validate-borders')).toBeNull();
     });
 
     it('gives the Borders row no eye, since it is always drawn', () => {
@@ -64,9 +76,19 @@ describe('LayersPanel', () => {
       expect(labels()).toEqual(['Rows', 'Columns', 'Special Areas', 'Colours']);
     });
 
-    it('offers no Validate Tables button', () => {
+    it('offers Validate Borders in place of Validate Tables', () => {
       renderPanel({ editorMode: 'grid' });
       expect(screen.queryByTestId('layers-validate-tables')).toBeNull();
+      expect(screen.getByTestId('layers-validate-borders')).toHaveTextContent(
+        'Validate Borders'
+      );
+    });
+
+    it('calls onValidateBorders when that button is clicked', () => {
+      const onValidateBorders = jest.fn();
+      renderPanel({ editorMode: 'grid', onValidateBorders });
+      fireEvent.click(screen.getByTestId('layers-validate-borders'));
+      expect(onValidateBorders).toHaveBeenCalledTimes(1);
     });
 
     it('shows each row on or off according to layerVisibility', () => {
@@ -110,5 +132,61 @@ describe('LayersPanel', () => {
     fireEvent.click(screen.getByTestId('layers-next'));
     expect(onPrev).toHaveBeenCalledTimes(1);
     expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('carries the help ids of the panel and of its three buttons', () => {
+    renderPanel();
+
+    expect(screen.getByTestId('layers-panel')).toHaveAttribute(
+      'data-help-id',
+      layersPanelHelpId()
+    );
+    expect(screen.getByTestId('layers-prev')).toHaveAttribute(
+      'data-help-id',
+      layersPreviousHelpId()
+    );
+    expect(screen.getByTestId('layers-next')).toHaveAttribute(
+      'data-help-id',
+      layersNextHelpId()
+    );
+    expect(screen.getByTestId('layers-validate-tables')).toHaveAttribute(
+      'data-help-id',
+      validateTablesHelpId()
+    );
+  });
+
+  // The contents pass describes each layer it lists, in the order the panel lists them.
+  it('carries a help id on every layer row it lists in gridMode', () => {
+    renderPanel({ editorMode: 'grid' });
+
+    expect(
+      screen.getAllByTestId('layer-row').map((row) => row.getAttribute('data-help-id')),
+    ).toEqual([
+      layersRowsHelpId(),
+      layersColumnsHelpId(),
+      layersSpecialHelpId(),
+      layersColoursHelpId(),
+    ]);
+  });
+
+  // Borders is the boundary pass's one row, always drawn, and that pass describes it
+  // through its own tips rather than as a layer.
+  it('leaves the Borders row unannotated', () => {
+    renderPanel();
+
+    expect(screen.getByTestId('layer-row')).not.toHaveAttribute('data-help-id');
+  });
+
+  // The pass switch wears one label in each pass and each pass describes the label it
+  // shows, so the two faces of the one button carry an id apiece.
+  it('carries the validate-borders help id in gridMode', () => {
+    renderPanel({ editorMode: 'grid' });
+
+    expect(screen.getByTestId('layers-validate-borders')).toHaveAttribute(
+      'data-help-id',
+      validateBordersHelpId()
+    );
   });
 });

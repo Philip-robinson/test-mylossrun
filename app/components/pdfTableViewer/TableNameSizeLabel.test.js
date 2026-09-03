@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import TableNameSizeLabel from 'components/pdfTableViewer/TableNameSizeLabel';
+import { tableNameLabelHelpId } from 'config';
 
 const table = {
   tableId: 't1',
@@ -44,5 +45,16 @@ describe('TableNameSizeLabel', () => {
   it('counts a table with no axes as 0 x 0', () => {
     renderLabel({ table: { tableId: 't2', name: 'Empty' } });
     expect(screen.getByTestId('selected-label-size')).toHaveTextContent('0 × 0');
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('carries the table-name help id', () => {
+    renderLabel();
+
+    expect(screen.getByTestId('selected-label')).toHaveAttribute(
+      'data-help-id',
+      tableNameLabelHelpId()
+    );
   });
 });

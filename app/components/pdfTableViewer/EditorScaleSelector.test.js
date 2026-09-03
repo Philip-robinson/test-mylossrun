@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import EditorScaleSelector from 'components/pdfTableViewer/EditorScaleSelector';
+import { editorScaleHelpId } from 'config';
 
 describe('EditorScaleSelector', () => {
   it('renders the current percent', () => {
@@ -31,5 +32,15 @@ describe('EditorScaleSelector', () => {
     render(<EditorScaleSelector percent={200} onChange={() => {}} />);
     expect(screen.getByTestId('scale-zoom-in')).toBeDisabled();
     expect(screen.getByTestId('scale-zoom-out')).not.toBeDisabled();
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('carries the scale help id on the whole control, not one of its buttons', () => {
+    const { container } = render(<EditorScaleSelector percent={100} onChange={() => {}} />);
+    const annotated = container.querySelector(`[data-help-id="${editorScaleHelpId()}"]`);
+
+    expect(annotated).toContainElement(screen.getByTestId('scale-zoom-out'));
+    expect(annotated).toContainElement(screen.getByTestId('scale-zoom-in'));
   });
 });

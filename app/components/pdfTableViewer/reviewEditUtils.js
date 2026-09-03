@@ -132,6 +132,24 @@ export const applyEditToGrid = (rows, cell, text, confidence) => {
   });
 };
 
+// The next section-title heading for one merged table with the correction applied, or
+// the same reference when that heading is not what was edited. The heading is drawn
+// above the grid rather than in it - the placeholder column it came from is dropped
+// from the grid - so a section-title correction has to reach it separately from
+// applyEditToGrid. Each tab of a split carries its own heading, so the source key is
+// what decides which of them moves.
+export const applyEditToSectionTitle = (
+  sectionTitle,
+  cell,
+  text,
+  confidence,
+) => {
+  const key = cellSourceKey(cell);
+  if (key === null) return sectionTitle;
+  if (!sectionTitle || cellSourceKey(sectionTitle) !== key) return sectionTitle;
+  return { ...sectionTitle, text, confidence };
+};
+
 // True when two getBoundingClientRect-shaped rectangles describe the same box.
 // Compared member by member because a fresh measurement is a NEW object every time,
 // so identity says nothing; this is what lets a caller re-measure after every paint
@@ -164,24 +182,25 @@ const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
 // too low for the dialog to hang below it - is answered by moving the dialog until
 // it fits, which is what the top clamp does.
 //
-// The final fallback is the pathological case only: a dialog wider than the space
-// on either side of the cell fits nowhere beside it, so it is pinned to the
-// nearest edge rather than being placed off screen.
+// A wide element - the review screen's title and section fields span almost the
+// whole editor - leaves room for the dialog on neither side. It then goes BELOW
+// the element, left edges aligned: still clear of the field the correction is
+// typed into, which pinning it to the nearest side edge was not.
 export const dialogPlacement = (cellRect, dialogSize, viewport) => {
-  const top = clamp(
+  const beside = clamp(
     cellRect.bottom - dialogSize.height,
     0,
     viewport.height - dialogSize.height,
   );
   const left = cellRect.left - dialogSize.width;
-  if (left >= 0) return { left, top, placement: 'left' };
+  if (left >= 0) return { left, top: beside, placement: 'left' };
   if (cellRect.right + dialogSize.width <= viewport.width) {
-    return { left: cellRect.right, top, placement: 'right' };
+    return { left: cellRect.right, top: beside, placement: 'right' };
   }
   return {
-    left: clamp(left, 0, viewport.width - dialogSize.width),
-    top,
-    placement: 'left',
+    left: clamp(cellRect.left, 0, viewport.width - dialogSize.width),
+    top: clamp(cellRect.bottom, 0, viewport.height - dialogSize.height),
+    placement: 'below',
   };
 };
 

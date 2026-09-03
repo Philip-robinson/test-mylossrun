@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import LayerOptions from 'components/pdfTableViewer/LayerOptions';
+import { boundaryCreateTableHelpId, boundaryDeleteTableHelpId } from 'config';
 
 // Every testid the block can ever render, so a test can assert that only the expected
 // ones are present.
@@ -156,5 +157,20 @@ describe('LayerOptions', () => {
   it('renders the block itself even when it is empty', () => {
     render(<LayerOptions editorMode={'grid'} />);
     expect(screen.getByTestId('layer-options')).toBeInTheDocument();
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('gives the two boundary-pass buttons their own help ids', () => {
+    render(<LayerOptions editorMode={'border'} />);
+
+    expect(screen.getByTestId('opt-delete-table')).toHaveAttribute(
+      'data-help-id',
+      boundaryDeleteTableHelpId()
+    );
+    expect(screen.getByTestId('opt-create-table')).toHaveAttribute(
+      'data-help-id',
+      boundaryCreateTableHelpId()
+    );
   });
 });

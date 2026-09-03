@@ -32,7 +32,13 @@ import { getTableImages } from 'services/images';
 import toast from 'react-hot-toast';
 import {
   confirmedTableStage,
+  linkAvailableTablesHelpId,
+  linkCancelHelpId,
+  linkLinkedTablesHelpId,
+  linkReadyHelpId,
+  linkSaveHelpId,
   linkTableCellWidth,
+  linkUnlinkHelpId,
   readyTableStage,
 } from 'config';
 
@@ -1282,6 +1288,36 @@ describe('TableLinkageEditor component', () => {
 
   beforeEach(() => {
     getTableImages.mockReset();
+  });
+
+  // The overlay measures each tip's hole from these attributes and the copy module keys the
+  // same tips by the same functions, so no id is a literal on either side.
+  it('carries the help ids of its two lists and its four buttons', async () => {
+    const { root, tables } = buildFixture();
+    getTableImages.mockResolvedValue({ images: {} });
+    render(
+      <TableLinkageEditor
+        pdfId={'pdf-1'}
+        rootTable={root}
+        tables={tables}
+        onCancel={jest.fn()}
+        onSave={jest.fn()}
+      />,
+    );
+    await waitFor(() => expect(getTableImages).toHaveBeenCalled());
+
+    const anchors = [
+      ['available-panel', linkAvailableTablesHelpId()],
+      ['linked-panel', linkLinkedTablesHelpId()],
+      ['link-unlink', linkUnlinkHelpId()],
+      ['link-cancel', linkCancelHelpId()],
+      ['link-save', linkSaveHelpId()],
+      ['link-ready', linkReadyHelpId()],
+    ];
+
+    for (const [testId, helpId] of anchors) {
+      expect(screen.getByTestId(testId)).toHaveAttribute('data-help-id', helpId);
+    }
   });
 
   // A group is ready to extract only once every table in it has a place in the grid.

@@ -1341,3 +1341,45 @@ describe('StagedPageGridEditor', () => {
     });
   });
 });
+
+// The help overlay cuts its hole from the rect of the element carrying a tip's help id,
+// so the tip about the table needs an element that is the table's box and nothing wider.
+// Alpha spans page fractions [0..0.1] and Beta [0.3..0.4], which on the mocked 100x100
+// image are the screen boxes asserted here.
+describe('StagedPageGridEditor — the box help points at', () => {
+  const frames = (container) =>
+    Array.from(container.querySelectorAll('[data-testid="table-help-frame"]'));
+
+  it("draws one frame, over the selected table's box", async () => {
+    const { container } = await renderLoaded(
+      baseProps({ selectedTableId: 't1' })
+    );
+
+    const [frame, ...rest] = frames(container);
+
+    expect(rest).toHaveLength(0);
+    expect(frame).toHaveAttribute('data-tableid', 't1');
+    expect(frame.style.left).toBe('0px');
+    expect(frame.style.top).toBe('0px');
+    expect(frame.style.width).toBe('100px');
+    expect(frame.style.height).toBe('100px');
+  });
+
+  it('moves to whichever table is selected', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ selectedTableId: 't2' })
+    );
+
+    const [frame] = frames(container);
+
+    expect(frame).toHaveAttribute('data-tableid', 't2');
+    expect(frame.style.left).toBe('300px');
+    expect(frame.style.top).toBe('300px');
+  });
+
+  it('draws none where the page holds no table at all', async () => {
+    const { container } = await renderLoaded(baseProps({ metadataTables: [] }));
+
+    expect(frames(container)).toHaveLength(0);
+  });
+});

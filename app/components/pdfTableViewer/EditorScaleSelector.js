@@ -6,7 +6,7 @@
 import { Box, IconButton, Typography } from '@mui/material';
 import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
-import { scalePercentOptions } from 'config';
+import { editorScaleHelpId, scalePercentOptions } from 'config';
 import { stepScale } from 'components/pdfTableViewer/layerUtils';
 
 export default function EditorScaleSelector({ percent, onChange }) {
@@ -15,7 +15,10 @@ export default function EditorScaleSelector({ percent, onChange }) {
   const next = stepScale(options, percent, +1);
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+    <Box
+      data-help-id={editorScaleHelpId()}
+      sx={{ display: 'flex', alignItems: 'center' }}
+    >
       <IconButton
         data-testid="scale-zoom-out"
         aria-label="Zoom out"

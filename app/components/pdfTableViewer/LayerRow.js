@@ -5,7 +5,11 @@
 // a separate control — clicking anywhere on the row toggles the layer. Purely
 // presentational and controlled: all state lives in the parent.
 //
-// Borders is rendered untoggleable: it is always drawn, so it carries no eye and no click.
+// Borders is rendered untoggleable: it is always drawn, so it carries no eye and no click,
+// and it always shows its background colour.
+//
+// `helpId` is the row's own help id where its layer has one; a row without one is simply
+// not described, so the attribute is left off rather than written empty.
 
 import { Box, Typography } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -17,6 +21,7 @@ export default function LayerRow({
   backgroundColour,
   label,
   count,
+  helpId,
   on = true,
   toggleable = true,
   onToggle,
@@ -24,6 +29,7 @@ export default function LayerRow({
   return (
     <Box
       data-testid={'layer-row'}
+      data-help-id={helpId}
       data-on={on ? 'true' : 'false'}
       onClick={toggleable ? () => onToggle(!on) : undefined}
       sx={{
@@ -33,9 +39,10 @@ export default function LayerRow({
         px: 1,
         py: 0.75,
         cursor: toggleable ? 'pointer' : 'default',
-        // A layer that is off carries its own 10%-opacity background, so the panel states
-        // what is hidden without the icons having to be read.
-        backgroundColor: on ? 'transparent' : backgroundColour,
+        // A layer that is on carries its own 10%-opacity background, so the panel states
+        // what is drawn without the icons having to be read. Borders is untoggleable and
+        // always on, so it always carries its tint — which is true of it.
+        backgroundColor: on ? backgroundColour : 'transparent',
         borderRadius: 1,
       }}
     >

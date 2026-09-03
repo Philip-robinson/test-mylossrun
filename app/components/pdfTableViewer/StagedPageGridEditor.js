@@ -31,6 +31,7 @@ import {
 } from 'components/pdfTableViewer/colourUtils';
 import TableNameSizeLabel from 'components/pdfTableViewer/TableNameSizeLabel';
 import TableLinkLabel from 'components/pdfTableViewer/TableLinkLabel';
+import TableHelpFrame from 'components/pdfTableViewer/TableHelpFrame';
 import {
   LINK_LABEL_END_LINKING,
   clampBoundaryTarget,
@@ -2230,6 +2231,17 @@ export function StagedPageGridEditor({
           {renderCreatePreview()}
           {renderSectionAreaPreview()}
         </svg>
+      )}
+      {/* The selected table's box, for the help overlay to point at. Nothing is drawn:
+          it is there so help can highlight the table rather than the whole page. */}
+      {overlayScale && selected && (
+        <TableHelpFrame
+          table={selected}
+          left={selected.bounds.left * pixelWidth * overlayScale.sx}
+          top={selected.bounds.top * pixelHeight * overlayScale.sy}
+          width={selected.bounds.width * pixelWidth * overlayScale.sx}
+          height={selected.bounds.height * pixelHeight * overlayScale.sy}
+        />
       )}
       {/* Every table's pair of labels: name + "cols × rows" above its top-left corner, and
           its Link label above its top-right. Absolutely-positioned HTML siblings (the SVG's

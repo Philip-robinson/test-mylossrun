@@ -17,8 +17,11 @@ import {
   gridToolbarBorderWidthPx,
   gridToolbarCornerRadiusPx,
   gridToolbarShadow,
+  gridToolColumnsHelpId,
   gridToolIconSizePx,
   gridToolLineThicknessPx,
+  gridToolRowsHelpId,
+  gridToolSpecialHelpId,
   gridToolSquareStrokePx,
   layerColumnsBackgroundColour,
   layerColumnsColour,
@@ -86,6 +89,7 @@ const TOOL_DEFS = [
     key: 'rows',
     caption: 'Rows',
     testId: 'grid-tool-rows',
+    helpId: gridToolRowsHelpId,
     background: layerRowsBackgroundColour,
     Icon: RowsIcon,
   },
@@ -93,6 +97,7 @@ const TOOL_DEFS = [
     key: 'columns',
     caption: 'Columns',
     testId: 'grid-tool-columns',
+    helpId: gridToolColumnsHelpId,
     background: layerColumnsBackgroundColour,
     Icon: ColumnsIcon,
   },
@@ -100,6 +105,7 @@ const TOOL_DEFS = [
     key: 'special',
     caption: 'Special',
     testId: 'grid-tool-special',
+    helpId: gridToolSpecialHelpId,
     background: layerSpecialCellsBackgroundColour,
     Icon: SpecialIcon,
   },
@@ -121,13 +127,14 @@ export default function GridToolbar({ tool = null, onSelectTool }) {
         boxShadow: gridToolbarShadow(),
       }}
     >
-      {TOOL_DEFS.map(({ key, caption, testId, background, Icon }) => (
+      {TOOL_DEFS.map(({ key, caption, testId, helpId, background, Icon }) => (
         <Stack key={key} alignItems={'center'} spacing={0.25}>
           <Typography variant={'caption'} sx={{ lineHeight: 1 }}>
             {caption}
           </Typography>
           <GridToolButton
             testId={testId}
+            helpId={helpId()}
             ariaLabel={caption}
             active={tool === key}
             activeBackgroundColour={background()}

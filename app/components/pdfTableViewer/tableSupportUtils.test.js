@@ -30,6 +30,7 @@ import {
   splitMapBelow,
   tableSizeLabel,
   tablesOnPage,
+  tablesWithLostConfidence,
   titlesEqual,
   withCellSpan,
   leadingSquaresBounds,
@@ -1768,6 +1769,119 @@ describe('zeroConfidenceInRects', () => {
   it('returns the list untouched when there is nothing to change', () => {
     const list = [table('a', 0, [cell(0, 0, 0.15, 0.15, 90)])];
     expect(zeroConfidenceInRects(list, 0, [])).toBe(list);
+  });
+
+  // The title and the section titles are read by the same call the cells are, and both count
+  // towards Ready for Export. Leaving them at their old confidence under a recoloured area
+  // leaves a reading that is stale AND unflagged.
+  it('zeroes a title the rectangle covers', () => {
+    const titled = table('a', 0, [], {
+      title: { bounds: { left: 0.15, top: 0.15, width: 0.05, height: 0.02 }, text: 'T', confidence: 88 },
+    });
+    const out = zeroConfidenceInRects([titled], 0, RECT);
+    expect(out[0].title.confidence).toBe(0);
+    // The reading itself is kept: it is the confidence that says it can no longer be trusted.
+    expect(out[0].title.text).toBe('T');
+  });
+
+  it('leaves a title clear of the rectangle alone, by reference', () => {
+    const list = [
+      table('a', 0, [], {
+        title: { bounds: { left: 0.6, top: 0.6, width: 0.05, height: 0.02 }, text: 'T', confidence: 88 },
+      }),
+    ];
+    expect(zeroConfidenceInRects(list, 0, RECT)).toBe(list);
+  });
+
+  it('zeroes a section title value the rectangle covers and leaves its siblings alone', () => {
+    const section = (row, left, confidence) => ({
+      tableRow: row,
+      delete: false,
+      columnName: null,
+      data: { bounds: { left, top: 0.15, width: 0.05, height: 0.02 }, text: 'S', confidence },
+    });
+    const sectioned = table('a', 0, [], {
+      sectionTitles: [section(1, 0.15, 88), section(2, 0.6, 88)],
+    });
+    const out = zeroConfidenceInRects([sectioned], 0, RECT);
+    expect(out[0].sectionTitles[0].data.confidence).toBe(0);
+    expect(out[0].sectionTitles[1]).toBe(sectioned.sectionTitles[1]);
+  });
+
+  it('gives a table no key it did not already have', () => {
+    const out = zeroConfidenceInRects([table('a', 0, [cell(0, 0, 0.15, 0.15, 90)])], 0, RECT);
+    expect(Object.keys(out[0])).not.toContain('title');
+    expect(Object.keys(out[0])).not.toContain('sectionTitles');
+  });
+});
+
+// The signal that a coloured-area edit has left values owing a re-read: zeroConfidenceInRects
+// applies the invalidation, this spots it, and the host puts the named tables into the
+// page-exit change set.
+describe('tablesWithLostConfidence', () => {
+  const cell = (row, column, confidence) => ({ row, column, text: 'x', confidence });
+  const table = (id, cells, extra = {}) => ({ tableId: id, cells, ...extra });
+
+  it('names a table whose cell dropped to zero', () => {
+    const before = table('a', [cell(0, 0, 90)]);
+    const after = table('a', [cell(0, 0, 0)]);
+    expect(tablesWithLostConfidence(before, after)).toEqual([after]);
+  });
+
+  it('names a table whose title dropped to zero', () => {
+    const before = table('a', [], { title: { text: 'T', confidence: 88 } });
+    const after = table('a', [], { title: { text: 'T', confidence: 0 } });
+    expect(tablesWithLostConfidence(before, after)).toEqual([after]);
+  });
+
+  it('names a table whose section title value dropped to zero', () => {
+    const withConfidence = (confidence) => ({
+      sectionTitles: [{ tableRow: 1, data: { text: 'S', confidence } }],
+    });
+    const before = table('a', [], withConfidence(88));
+    const after = table('a', [], withConfidence(0));
+    expect(tablesWithLostConfidence(before, after)).toEqual([after]);
+  });
+
+  it('names nothing when a value merely gained text', () => {
+    const before = table('a', [cell(0, 0, 90)]);
+    const after = table('a', [{ row: 0, column: 0, text: 'read', confidence: 95 }]);
+    expect(tablesWithLostConfidence(before, after)).toEqual([]);
+  });
+
+  it('names nothing for a value that was already at zero', () => {
+    const before = table('a', [cell(0, 0, 0)]);
+    const after = table('a', [cell(0, 0, 0)]);
+    expect(tablesWithLostConfidence(before, after)).toEqual([]);
+  });
+
+  // A cell materialised into a grid square that did not exist before has no counterpart to
+  // have lost anything: fillGridCells seeds it at zero, and the grid edit that created it is
+  // already in the change set on its own account.
+  it('names nothing for a cell that has no counterpart before the edit', () => {
+    const before = table('a', [cell(0, 0, 90)]);
+    const after = table('a', [cell(0, 0, 90), cell(0, 1, 0)]);
+    expect(tablesWithLostConfidence(before, after)).toEqual([]);
+  });
+
+  it('names nothing when there is no pre-edit snapshot at all', () => {
+    expect(tablesWithLostConfidence(undefined, table('a', [cell(0, 0, 0)]))).toEqual([]);
+  });
+
+  it('names a joined member rather than its root, since the member is its own re-read target', () => {
+    const member = (confidence) => table('m', [cell(0, 0, confidence)]);
+    const before = table('r', [cell(0, 0, 90)], { next: { m: member(90) } });
+    const after = table('r', [cell(0, 0, 90)], { next: { m: member(0) } });
+    expect(tablesWithLostConfidence(before, after)).toEqual([after.next.m]);
+  });
+
+  it('skips a soft-deleted table and a soft-deleted member', () => {
+    const before = table('r', [cell(0, 0, 90)], { next: { m: table('m', [cell(0, 0, 90)]) } });
+    const after = table('r', [cell(0, 0, 0)], {
+      deleted: true,
+      next: { m: table('m', [cell(0, 0, 0)], { deleted: true }) },
+    });
+    expect(tablesWithLostConfidence(before, after)).toEqual([]);
   });
 });
 

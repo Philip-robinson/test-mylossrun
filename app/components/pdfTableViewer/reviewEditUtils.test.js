@@ -6,6 +6,7 @@ import {
   findSourceValue,
   applyEditToTables,
   applyEditToGrid,
+  applyEditToSectionTitle,
   dialogPlacement,
   draggedPosition,
   sameRect,
@@ -471,6 +472,49 @@ describe('reviewEditUtils', () => {
     });
   });
 
+  // The heading a split tab was cut on. It is drawn above the grid rather than in it,
+  // so it takes its correction through this rather than through applyEditToGrid.
+  describe('applyEditToSectionTitle', () => {
+    it('applies the correction to the heading the edit names', () => {
+      const heading = gridSectionTitle('t1', 0, 'old', 40);
+      const next = applyEditToSectionTitle(heading, heading, 'new', 100);
+      expect(next).toEqual({ ...heading, text: 'new', confidence: 100 });
+      expect(heading.text).toBe('old');
+    });
+
+    // Every tab of a split carries its own heading, and only the edited one moves.
+    it('returns a heading of another section by identity', () => {
+      const heading = gridSectionTitle('t1', 1, 'other', 40);
+      const next = applyEditToSectionTitle(
+        heading,
+        gridSectionTitle('t1', 0, 'old', 40),
+        'new',
+        100,
+      );
+      expect(next).toBe(heading);
+    });
+
+    it('returns the heading by identity for an ordinary cell or a title', () => {
+      const heading = gridSectionTitle('t1', 0, 'old', 40);
+      expect(
+        applyEditToSectionTitle(heading, gridCell('t1', 0, 0), 'new', 100),
+      ).toBe(heading);
+      expect(applyEditToSectionTitle(heading, titleRef('t1'), 'new', 100)).toBe(
+        heading,
+      );
+    });
+
+    it('answers with what it was given when there is no heading or no source', () => {
+      const heading = gridSectionTitle('t1', 0, 'old', 40);
+      expect(
+        applyEditToSectionTitle(null, gridSectionTitle('t1', 0), 'new', 100),
+      ).toBeNull();
+      expect(
+        applyEditToSectionTitle(heading, gridCell('', 0, 0), 'new', 100),
+      ).toBe(heading);
+    });
+  });
+
   describe('sameRect', () => {
     const rect = {
       left: 10,
@@ -559,12 +603,33 @@ describe('reviewEditUtils', () => {
       });
     });
 
-    // A wide element — the review screen's title spans almost the whole editor — leaves
-    // room on neither side. It is pinned to the near edge rather than placed off screen.
-    it('pins to the near edge when there is room on neither side', () => {
+    // A wide element — the review screen's title and section fields span almost the
+    // whole editor — leaves room on neither side, so the dialog goes below it rather
+    // than over the field being corrected.
+    it('goes below when there is room on neither side', () => {
       const wide = { left: 20, top: 400, right: 980, bottom: 440 };
       const placement = dialogPlacement(wide, size, viewport);
-      expect(placement).toEqual({ left: 0, top: 340, placement: 'left' });
+      expect(placement).toEqual({ left: 20, top: 440, placement: 'below' });
+    });
+
+    // Below is still the answer for an element too low to hang a whole dialog under:
+    // it comes up only as far as the bottom of the screen requires.
+    it('comes up from the bottom of the screen when a wide element sits too low', () => {
+      const wide = { left: 20, top: 740, right: 980, bottom: 780 };
+      const placement = dialogPlacement(wide, size, viewport);
+      expect(placement).toEqual({
+        left: 20,
+        top: viewport.height - size.height,
+        placement: 'below',
+      });
+    });
+
+    // The left edges are aligned, so a wide element scrolled off the left of the screen
+    // would take the dialog with it.
+    it('holds a below placement on the screen horizontally', () => {
+      const wide = { left: -40, top: 400, right: 980, bottom: 440 };
+      const placement = dialogPlacement(wide, size, viewport);
+      expect(placement).toEqual({ left: 0, top: 440, placement: 'below' });
     });
 
     it('never returns a negative coordinate, even oversized', () => {

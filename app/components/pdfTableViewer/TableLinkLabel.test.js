@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import TableLinkLabel from 'components/pdfTableViewer/TableLinkLabel';
+import { tableLinkLabelHelpId } from 'config';
 import {
   LINK_LABEL_END_LINKING,
   LINK_LABEL_JOINED,
@@ -54,5 +55,16 @@ describe('TableLinkLabel', () => {
     });
     fireEvent.click(screen.getByTestId('link-label'));
     expect(onClick).not.toHaveBeenCalled();
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('carries the link-label help id', () => {
+    renderLabel();
+
+    expect(screen.getByTestId('link-label')).toHaveAttribute(
+      'data-help-id',
+      tableLinkLabelHelpId()
+    );
   });
 });

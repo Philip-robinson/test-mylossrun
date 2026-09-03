@@ -80,6 +80,20 @@ export const flaggedForReviewLabel = (count) =>
 export const lowConfidenceTitle = (title, highThreshold, label) =>
   title && title.confidence < highThreshold ? { title: true, label } : null;
 
+// The section title a split table was cut on, as an entry for the low-confidence list, or
+// null when there is nothing to flag. `sectionTitle` is the merged table's `sectionTitle`
+// ({ tableId, sectionTitleIndex, text, confidence }) or null; `label` is the caller's name
+// for it, since this module holds no config.
+//
+// It is flagged on exactly the title's terms, and for a sharper reason: the placeholder
+// column this value came from decides how the grid is split and names the table, and is
+// then dropped from the grid — so a misreading silently mis-sections the data and misnames
+// the sheet, and appears nowhere the reviewer could correct it.
+export const lowConfidenceSectionTitle = (sectionTitle, highThreshold, label) =>
+  sectionTitle && sectionTitle.confidence < highThreshold
+    ? { sectionTitle: true, label }
+    : null;
+
 // The entry `step` places along `poorCells` from `selected` (+1 forward, -1 back), or
 // null when there is nowhere to go. Stepping STOPS at each end rather than wrapping:
 // running off the end and silently reappearing at the other would leave the user unsure

@@ -5,7 +5,8 @@ import DropBox from 'components/DropBox';
 import DocumentList from 'components/DocumentList';
 import { getPdfDisplayList, sleep } from 'services/pdfDisplayList';
 import { awaitEntryChange } from 'services/awaitEntryChange';
-import { pollIntervalMs, entryWatchTotalMs } from 'config';
+import { documentListScreenId, pollIntervalMs, entryWatchTotalMs } from 'config';
+import useScreenHelp from 'components/help/useScreenHelp';
 import { readPdfListCache, writePdfListCache } from './pdfListCache';
 
 const deepEqualJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -15,6 +16,10 @@ const deepEqualJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const WATCH_STOP_STATUSES = ['READY_FOR_REVIEW', 'ERROR'];
 
 export default function PDFLoader({ onSelectPdf }) {
+  // Being mounted IS being on the document list — the application is a single route —
+  // so the loader is what tells the help overlay which screen the user is looking at.
+  useScreenHelp(documentListScreenId());
+
   // Seed from the process-lifetime cache so a remount (after visiting the editor
   // and returning) restores the list and resumes polling from the last date
   // rather than showing an empty screen and refetching everything.

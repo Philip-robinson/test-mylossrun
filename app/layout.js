@@ -5,6 +5,8 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { Toaster } from 'react-hot-toast';
 import { useEffect } from 'react';
 import AccessGate from 'components/AccessGate';
+import HelpProvider from 'components/help/HelpProvider';
+import EditorPassProvider from 'components/EditorPassProvider';
 import 'app/globals.css';
 
 const lightTheme = createTheme({
@@ -97,9 +99,13 @@ export default function RootLayout({ children }) {
         <ThemeProvider theme={lightTheme}>
           <CssBaseline />
           <Toaster />
-          <AccessGate>
-            {children}
-          </AccessGate>
+          <HelpProvider>
+            <EditorPassProvider>
+              <AccessGate>
+                {children}
+              </AccessGate>
+            </EditorPassProvider>
+          </HelpProvider>
         </ThemeProvider>
       </body>
     </html>

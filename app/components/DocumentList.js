@@ -16,7 +16,12 @@ import {
   Typography,
 } from '@mui/material';
 import PictureAsPdf from '@mui/icons-material/PictureAsPdf';
-import { nameTruncateLength } from 'config';
+import {
+  documentListCountsHelpId,
+  documentListStatusHelpId,
+  documentListTableHelpId,
+  nameTruncateLength,
+} from 'config';
 
 const INACTIVE_STATUSES = ['ALLOCATED', 'INITIALISED', 'LOADED', 'ERROR'];
 
@@ -186,6 +191,7 @@ export default function DocumentList({ pdfs = [], hasLoaded = false, onSelectPdf
       >
         <Box
           data-testid={"status-summary"}
+          data-help-id={documentListCountsHelpId()}
           sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1.5, mb: 1 }}
         >
           {STATUS_SUMMARY.map(({ key, label }) => (
@@ -206,6 +212,7 @@ export default function DocumentList({ pdfs = [], hasLoaded = false, onSelectPdf
           ))}
         </Box>
         <TableContainer
+          data-help-id={documentListTableHelpId()}
           sx={{
             flex: '1 1 auto',
             minHeight: 0,
@@ -254,7 +261,7 @@ export default function DocumentList({ pdfs = [], hasLoaded = false, onSelectPdf
                     </TableCell>
                     <TableCell>{formatUploaded(pdf.created)}</TableCell>
                     <TableCell>{formatSize(pdf.size)}</TableCell>
-                    <TableCell>
+                    <TableCell data-help-id={documentListStatusHelpId()}>
                       {pdf.status === 'ERROR' ? (
                         <Tooltip title={pdf.error}>
                           <Box component={"span"} sx={{ display: 'inline-flex' }}>

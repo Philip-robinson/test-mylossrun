@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import DropBox from './DropBox';
 import { upload } from 'services/upload';
 import toast from 'react-hot-toast';
+import { dropBoxHelpId } from 'config';
 
 // Mock the upload service (only backend access path).
 jest.mock('services/upload', () => ({
@@ -97,5 +98,17 @@ describe('DropBox', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     // Inline error text also appears.
     expect(await screen.findByRole('alert')).toHaveTextContent('boom');
+  });
+
+  // The help overlay measures its hint's hole from this attribute, and the copy module
+  // keys the same tip by the same function, so the id is read from config on both sides
+  // rather than written out here.
+  test('(f) the drop panel carries the drop-box help id', () => {
+    const { container } = render(<DropBox />);
+
+    expect(container.querySelector('.drop-box')).toHaveAttribute(
+      'data-help-id',
+      dropBoxHelpId(),
+    );
   });
 });

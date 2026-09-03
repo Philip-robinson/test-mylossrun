@@ -1479,29 +1479,98 @@ export function changedColouredAreaRects(previousAreas, nextAreas) {
   return rects;
 }
 
-// Every cell of `page`'s tables that impinges on any of `rects`, marked confidence 0.
+// Every readable value of `page`'s tables that impinges on any of `rects`, marked
+// confidence 0: its cells, its title and each of its section titles' values.
 //
-// A coloured area decides how its region is flattened before the grid is read, so a cell the
+// A coloured area decides how its region is flattened before the page is read, so a value the
 // change touched can no longer be trusted to hold what was OCR'd from it. Zero is the value a
 // freshly materialised cell carries (see makeDefaultCell), so it renders red and reads as
 // awaiting re-OCR.
 //
-// Identity is preserved throughout — an untouched cell, table and list come back by reference
-// — so a caller can test "did anything change?" by reference. Walked with mapAllTables so a
-// table joined under another table's grid is reached too.
+// The title and the section titles are covered for the same reason the cells are, and they
+// have to be named separately because they are not cells: a coloured area drawn over a title
+// would otherwise leave a stale reading sitting at its old confidence, which is worse than a
+// flagged one — it is wrong and nothing says so. Both count towards Ready for Export
+// (lowConfidenceValues in exportReadinessUtils), and both are re-read by the same
+// calculate-cells call the cells are.
+//
+// Identity is preserved throughout — an untouched value, table and list come back by
+// reference — so a caller can test "did anything change?" by reference, and a table gains no
+// key it did not already have. Walked with mapAllTables so a table joined under another
+// table's grid is reached too.
 export function zeroConfidenceInRects(tables, page, rects) {
   if (!(rects ?? []).length) return tables ?? [];
   return mapAllTables(tables, (table) => {
     if (table.pdfPage !== page || table.deleted) return table;
     let changed = false;
-    const cells = (table.cells ?? []).map((cell) => {
-      if (cell.confidence === 0 || !cell.bounds) return cell;
-      if (!rects.some((rect) => overlaps(cell.bounds, rect))) return cell;
+    const invalidate = (value) => {
+      if (!value?.bounds || value.confidence === 0) return value;
+      if (!rects.some((rect) => overlaps(value.bounds, rect))) return value;
       changed = true;
-      return { ...cell, confidence: 0 };
-    });
-    return changed ? { ...table, cells } : table;
+      return { ...value, confidence: 0 };
+    };
+    const next = { ...table };
+    if (table.cells) next.cells = table.cells.map(invalidate);
+    if (table.title) next.title = invalidate(table.title);
+    if (table.sectionTitles) {
+      next.sectionTitles = table.sectionTitles.map((sectionTitle) => {
+        const data = invalidate(sectionTitle?.data);
+        return data === sectionTitle?.data
+          ? sectionTitle
+          : { ...sectionTitle, data };
+      });
+    }
+    return changed ? next : table;
   });
+}
+
+// The confidences one table's readable values carry, keyed so a value can be matched to its
+// counterpart across an edit: each cell by its grid position, the title, and each section
+// title by the row it names.
+const confidenceByValueKey = (table) => {
+  const found = new Map();
+  (table?.cells ?? []).forEach((cell) => {
+    found.set(`cell:${cell.row},${cell.column}`, cell.confidence);
+  });
+  if (table?.title) found.set('title', table.title.confidence);
+  (table?.sectionTitles ?? []).forEach((sectionTitle) => {
+    if (sectionTitle?.data) {
+      found.set(`section:${sectionTitle.tableRow}`, sectionTitle.data.confidence);
+    }
+  });
+  return found;
+};
+
+// True when a readable value of `after` sits at confidence 0 where its counterpart in
+// `before` did not. A value the edit left alone, and one already at zero, both compare equal;
+// a value with no counterpart (a cell materialised into a new grid square) is not a loss.
+const lostConfidence = (before, after) => {
+  if (!before) return false;
+  const was = confidenceByValueKey(before);
+  for (const [key, confidence] of confidenceByValueKey(after)) {
+    if (confidence === 0 && (was.get(key) ?? 0) > 0) return true;
+  }
+  return false;
+};
+
+// Every table — top-level or joined member — that lost confidence in one of its readable
+// values between the pre-edit `before` snapshot and the post-edit `after` one. This is what
+// zeroConfidenceInRects leaves behind, and it is the signal that those values owe a re-read:
+// they still hold the text of the flattening that has just been replaced.
+//
+// Members are walked as well as their root because a member's edit arrives as a change to the
+// root, so comparing roots alone would miss it — and a member sits on its own page, so it is
+// its own re-read target.
+export function tablesWithLostConfidence(before, after) {
+  const found = [];
+  if (!after.deleted && lostConfidence(before, after)) found.push(after);
+  const beforeMembers = before?.next ?? {};
+  for (const [id, member] of Object.entries(after.next ?? {})) {
+    if (!member.deleted && lostConfidence(beforeMembers[id], member)) {
+      found.push(member);
+    }
+  }
+  return found;
 }
 
 // Sum of a PDFValue array's `.value` fields (0 for an empty array).

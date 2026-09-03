@@ -5,7 +5,8 @@
 // alone and lists Borders, while gridMode is about one table's contents and lists the
 // other four. Each listed row but Borders is an independent visibility flag, toggled by
 // clicking the row. Below the rows sit the context-dependent Options block, the
-// Previous / Next buttons, and — in borderMode — the button that ends the boundary pass.
+// Previous / Next buttons, and the button that switches passes — Validate Tables in
+// borderMode, Validate Borders in gridMode.
 //
 // It is controlled and holds no state: counts come from the pure `layerUtils` helpers,
 // the flags and the mode come from props, and every action is forwarded to a callback.
@@ -25,12 +26,23 @@ import {
   layerRowsColour,
   layerSpecialCellsBackgroundColour,
   layerSpecialCellsColour,
+  layersColoursHelpId,
+  layersColumnsHelpId,
+  layersNextHelpId,
+  layersPanelHelpId,
   layersPanelWidthPx,
+  layersPreviousHelpId,
+  layersRowsHelpId,
+  layersSpecialHelpId,
+  validateBordersHelpId,
+  validateTablesHelpId,
 } from 'config';
 
 // The five rows in display order: Borders first, because the boundary pass comes first,
 // and Colours last. `countKey` selects the row's count from `layerCounts`; `toggleable`
-// is false only for Borders, which is always drawn and so carries no eye.
+// is false only for Borders, which is always drawn and so carries no eye. `helpId` is the
+// id the help overlay describes the row by — the four gridMode layers have one, Borders
+// none.
 const LAYER_DEFS = [
   {
     key: 'border',
@@ -42,6 +54,7 @@ const LAYER_DEFS = [
   },
   {
     key: 'rows',
+    helpId: layersRowsHelpId,
     label: 'Rows',
     colour: layerRowsColour,
     backgroundColour: layerRowsBackgroundColour,
@@ -50,6 +63,7 @@ const LAYER_DEFS = [
   },
   {
     key: 'columns',
+    helpId: layersColumnsHelpId,
     label: 'Columns',
     colour: layerColumnsColour,
     backgroundColour: layerColumnsBackgroundColour,
@@ -58,6 +72,7 @@ const LAYER_DEFS = [
   },
   {
     key: 'special',
+    helpId: layersSpecialHelpId,
     label: 'Special Areas',
     colour: layerSpecialCellsColour,
     backgroundColour: layerSpecialCellsBackgroundColour,
@@ -66,6 +81,7 @@ const LAYER_DEFS = [
   },
   {
     key: 'colours',
+    helpId: layersColoursHelpId,
     label: 'Colours',
     colour: layerColoursColour,
     backgroundColour: layerColoursBackgroundColour,
@@ -86,6 +102,7 @@ export default function LayersPanel({
   onPrev,
   onNext,
   onValidateTables,
+  onValidateBorders,
   isCreatedUnconfirmed,
   ...optionsCallbacks
 }) {
@@ -102,6 +119,7 @@ export default function LayersPanel({
   return (
     <Box
       data-testid={'layers-panel'}
+      data-help-id={layersPanelHelpId()}
       sx={{
         width: layersPanelWidthPx(),
         flexShrink: 0,
@@ -135,6 +153,7 @@ export default function LayersPanel({
             backgroundColour={def.backgroundColour()}
             label={def.label}
             count={counts[def.countKey]}
+            helpId={def.helpId ? def.helpId() : undefined}
             on={def.toggleable ? layerVisibility[def.key] !== false : true}
             toggleable={def.toggleable}
             onToggle={() => onToggleLayer(def.key)}
@@ -160,6 +179,7 @@ export default function LayersPanel({
         <Stack direction={'row'} spacing={1}>
           <Button
             data-testid={'layers-prev'}
+            data-help-id={layersPreviousHelpId()}
             size={'small'}
             variant={'outlined'}
             onClick={onPrev}
@@ -168,6 +188,7 @@ export default function LayersPanel({
           </Button>
           <Button
             data-testid={'layers-next'}
+            data-help-id={layersNextHelpId()}
             size={'small'}
             variant={'outlined'}
             onClick={onNext}
@@ -175,17 +196,30 @@ export default function LayersPanel({
             {'Next'}
           </Button>
         </Stack>
-        {/* Ends the boundary pass: what it owes is settled and saved before the move. */}
+        {/* The pass switch, one button or the other and never neither: Validate Tables ends
+            the boundary pass for the contents pass, Validate Borders goes back the other way.
+            Either way what the pass being left owes is settled and saved before the move. */}
         {borderMode ? (
           <Button
             data-testid={'layers-validate-tables'}
+            data-help-id={validateTablesHelpId()}
             size={'small'}
             variant={'outlined'}
             onClick={onValidateTables}
           >
             {'Validate Tables'}
           </Button>
-        ) : null}
+        ) : (
+          <Button
+            data-testid={'layers-validate-borders'}
+            data-help-id={validateBordersHelpId()}
+            size={'small'}
+            variant={'outlined'}
+            onClick={onValidateBorders}
+          >
+            {'Validate Borders'}
+          </Button>
+        )}
       </Stack>
     </Box>
   );

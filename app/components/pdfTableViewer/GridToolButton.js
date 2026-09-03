@@ -11,6 +11,7 @@ import { gridToolIconSizePx } from 'config';
 
 export default function GridToolButton({
   testId,
+  helpId,
   ariaLabel,
   active = false,
   activeBackgroundColour,
@@ -23,6 +24,7 @@ export default function GridToolButton({
       component={'button'}
       type={'button'}
       data-testid={testId}
+      data-help-id={helpId}
       data-active={active ? 'true' : 'false'}
       aria-label={ariaLabel}
       onClick={onClick}

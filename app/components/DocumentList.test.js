@@ -1,6 +1,11 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import DocumentList from 'components/DocumentList';
+import {
+  documentListCountsHelpId,
+  documentListStatusHelpId,
+  documentListTableHelpId,
+} from 'config';
 
 // DocumentList is presentational now: the list, loading flag and polling live in
 // the parent (pdfLoader). These tests drive it purely through props.
@@ -251,5 +256,33 @@ describe('DocumentList', () => {
     expect(within(tableRow).getByText('Processing')).toBeInTheDocument();
     expect(within(tableRow).getByTestId('status-dot')).toBeInTheDocument();
     expect(within(tableRow).getByTestId('status-progress-fill')).toHaveStyle({ width });
+  });
+
+  // The three elements this screen's hints point at. Each id is read from its config
+  // function, the same one the copy module keys the tip by, so neither side carries the
+  // string: an id that only matched by accident would show up as a hint that highlights
+  // nothing rather than as a failure.
+  test('the counts row, the table and every row status carry their help ids', () => {
+    render(
+      <DocumentList
+        pdfs={[row({ pdfId: '1' }), row({ pdfId: '2', name: 'other.pdf' })]}
+        hasLoaded
+      />,
+    );
+
+    expect(screen.getByTestId('status-summary')).toHaveAttribute(
+      'data-help-id',
+      documentListCountsHelpId(),
+    );
+
+    const tableContainer = document.querySelector(
+      `[data-help-id="${documentListTableHelpId()}"]`,
+    );
+    expect(tableContainer).toContainElement(screen.getByRole('table'));
+
+    // One per row, not one for the column: the hint is about a document's status.
+    expect(
+      document.querySelectorAll(`[data-help-id="${documentListStatusHelpId()}"]`),
+    ).toHaveLength(2);
   });
 });

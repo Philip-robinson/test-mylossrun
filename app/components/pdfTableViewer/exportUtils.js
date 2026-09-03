@@ -12,14 +12,23 @@ export function excelFilename(originalFilename) {
   return `${stem}${excelFileSuffix()}`;
 }
 
-// The ids of the tables an export should cover: every table still in the document, in the
-// order the Document Overview lists them.
+// The tables an export should cover: every table still in the document, in the order the
+// Document Overview lists them.
 //
 // The editor's top-level list is already exactly "tables that are not members of a linking
 // group, plus the roots of linking groups" — joining a table to a group moves it off this
 // list and into the root's `next` map — so a soft-delete test is the only filtering needed.
+//
+// Answered as the tables themselves as well as by id below, because the Export button has
+// to ask whether each of them is ready for export and an id cannot be asked. One filter
+// serves both, so the two can never come to disagree about what the set is.
+export function exportableTables(tables) {
+  return (tables ?? []).filter((table) => !table.deleted);
+}
+
+// The ids of those same tables, which is what the export endpoint takes.
 export function exportableTableIds(tables) {
-  return (tables ?? []).filter((table) => !table.deleted).map((table) => table.tableId);
+  return exportableTables(tables).map((table) => table.tableId);
 }
 
 // Save a Blob to the user's downloads under `filename`.

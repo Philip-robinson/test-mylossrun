@@ -10,14 +10,19 @@
 
 import { Box, Button, Stack } from '@mui/material';
 import ColourSelectors from 'components/pdfTableViewer/ColourSelectors';
-import { colourSpecialToolKeys } from 'config';
+import {
+  boundaryCreateTableHelpId,
+  boundaryDeleteTableHelpId,
+  colourSpecialToolKeys,
+} from 'config';
 
 // One Options button. Kept tiny and local — every button in this block shares
 // the same look and only differs by testid / label / handler / disabled state.
-function OptionButton({ testId, label, onClick, disabled }) {
+function OptionButton({ testId, helpId, label, onClick, disabled }) {
   return (
     <Button
       data-testid={testId}
+      data-help-id={helpId}
       size={'small'}
       variant={'outlined'}
       onClick={onClick}
@@ -55,12 +60,14 @@ export default function LayerOptions({
       <OptionButton
         key={'delete-table'}
         testId={'opt-delete-table'}
+        helpId={boundaryDeleteTableHelpId()}
         label={'Delete this table'}
         onClick={onDeleteTable}
       />,
       <OptionButton
         key={'create-table'}
         testId={'opt-create-table'}
+        helpId={boundaryCreateTableHelpId()}
         label={'Create table'}
         onClick={onCreateTable}
       />,

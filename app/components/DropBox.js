@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Box, Typography, Button } from '@mui/material';
 import toast from 'react-hot-toast';
 import { upload } from 'services/upload';
+import { dropBoxHelpId } from 'config';
 
 export default function DropBox({ onUploaded }) {
   const inputRef = useRef(null);
@@ -89,6 +90,7 @@ export default function DropBox({ onUploaded }) {
   return (
     <Box
       className={'drop-box'}
+      data-help-id={dropBoxHelpId()}
       onClick={handleContainerClick}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}

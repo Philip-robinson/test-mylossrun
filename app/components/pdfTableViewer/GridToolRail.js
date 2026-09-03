@@ -10,6 +10,7 @@
 import { Box } from '@mui/material';
 import GridToolbar from 'components/pdfTableViewer/GridToolbar';
 import SpecialToolMenu from 'components/pdfTableViewer/SpecialToolMenu';
+import { gridToolRailHelpId } from 'config';
 
 export default function GridToolRail({
   tool = null,
@@ -20,6 +21,7 @@ export default function GridToolRail({
   return (
     <Box
       data-testid={'grid-tool-rail'}
+      data-help-id={gridToolRailHelpId()}
       sx={{
         flexShrink: 0,
         display: 'flex',

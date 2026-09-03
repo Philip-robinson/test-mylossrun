@@ -1,5 +1,14 @@
+// The overlay is stubbed: what matters here is which screen the loader reports itself
+// as, not what the overlay then draws.
+jest.mock('components/help/HelpOverlay', () => ({
+  __esModule: true,
+  default: () => <div data-testid={'help-overlay'} />,
+}));
+
 import { render, screen, waitFor, act } from '@testing-library/react';
 import PDFLoader from 'components/pdfLoader/pdfLoader';
+import HelpProvider, { useHelp } from 'components/help/HelpProvider';
+import { documentListScreenId } from 'config';
 import { getPdfDisplayList } from 'services/pdfDisplayList';
 import { awaitEntryChange } from 'services/awaitEntryChange';
 import { resetPdfListCache } from 'components/pdfLoader/pdfListCache';
@@ -38,6 +47,14 @@ jest.mock('react-hot-toast', () => {
   toast.dismiss = jest.fn();
   return { __esModule: true, default: toast };
 });
+
+// Reads the registered screen out into the DOM, so what the loader reported can be
+// asserted without reaching into the overlay.
+function HelpScreenProbe() {
+  const { screenId } = useHelp();
+
+  return <span data-testid={'probe-screen'}>{screenId || 'none'}</span>;
+}
 
 // A promise that never settles — parks a loop after its scripted results.
 const never = () => new Promise(() => {});
@@ -187,5 +204,25 @@ describe('PDFLoader', () => {
     );
     // The watched optimistic row is preserved (re-prepended), not dropped.
     expect(capturedDocumentListProps.pdfs.some((p) => p.pdfId === 'pdf-x')).toBe(true);
+  });
+
+  // The document list is a screen with its own help, and it is the loader being mounted
+  // that says so — there is no route to read it off. The id is read from config, which is
+  // also where the copy module takes the key of the screen it describes.
+  test('reports itself to the help overlay as the document-list screen', async () => {
+    render(
+      <HelpProvider>
+        <HelpScreenProbe />
+        <PDFLoader onSelectPdf={() => {}} />
+      </HelpProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('probe-screen')).toHaveTextContent(
+        documentListScreenId(),
+      ),
+    );
+    // Let the mount poll settle so its state update runs inside act().
+    await waitFor(() => expect(capturedDocumentListProps.hasLoaded).toBe(true));
   });
 });

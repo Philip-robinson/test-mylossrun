@@ -1,6 +1,7 @@
 'use client';
 
 import { Box } from '@mui/material';
+import { tableNameLabelHelpId } from 'config';
 
 // Presentational: a table's name and its column × row size, lifted just above the table's
 // top-left corner. An absolutely-positioned HTML sibling of the overlay SVG rather than SVG
@@ -13,6 +14,7 @@ export default function TableNameSizeLabel({ table, left, top, colour, colourNam
   return (
     <Box
       data-testid={'selected-label'}
+      data-help-id={tableNameLabelHelpId()}
       data-tableid={table.tableId}
       data-colour={colourName}
       style={{

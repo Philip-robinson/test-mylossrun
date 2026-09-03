@@ -35,8 +35,10 @@ import {
   rowBounds,
 } from 'components/pdfTableViewer/gridToolUtils';
 import { hasSavedGrid } from 'components/pdfTableViewer/gridUtilities';
+import { useEditorPass } from 'components/EditorPassProvider';
 import { getImage, findGridLines } from 'services/images';
 import {
+  editorPageTitleHelpId,
   resizeDebounceMs,
   stagedGridEditorEnabled,
   defaultScalePercent,
@@ -106,6 +108,11 @@ export default function PageTableEditor({
   onSave = async () => true,
 }) {
   const staged = stagedGridEditorEnabled();
+
+  // The toolbar's pass tabs stand outside this tree and switch passes through the handlers
+  // below. Absent outside a provider, which a test that renders this component alone is.
+  const editorPass = useEditorPass();
+  const setPassActions = editorPass ? editorPass.setPassActions : null;
 
   // The getImage response tagged with the page it was fetched for ({ ...data, page }),
   // or null until the first image loads. `data` carries image (base64 PNG), pixelWidth,
@@ -1032,6 +1039,55 @@ export default function PageTableEditor({
     });
   }, [leaveFor, onSave, samePageTables, onSelectTable]);
 
+  // Ends the contents pass and goes back to the boundary pass, the reverse of
+  // handleValidateTables and settling the same debts on the way: the rebuild the pass owes
+  // is made through leaveFor, and the save is not optional — a failure abandons the switch
+  // and leaves the user where they were, its own toast being the feedback.
+  //
+  // The armed tool and the selections that belong to the contents pass go with it; they
+  // mean nothing in the boundary pass. The SELECTED TABLE does not. handleValidateTables
+  // picks the page's first table because the contents pass is about one table and arrives
+  // with none chosen; the boundary pass is about the page, so the table the user was just
+  // working on is still a sensible thing to have selected.
+  const handleValidateBorders = useCallback(() => {
+    leaveFor(async () => {
+      const saved = await onSave();
+      if (!saved) return;
+      setEditorMode('border');
+      setTool(null);
+      setSpecialTool(null);
+      setSelectedLine(null);
+      setSelectedSectionRow(null);
+      setSelectedColouredIndex(null);
+      setPendingSelection(null);
+    });
+  }, [leaveFor, onSave]);
+
+  // The toolbar's two pass tabs make the same switch the Layers panel's Validate button
+  // makes, so they call these very handlers rather than a second copy of them. Registered
+  // once, through a ref: both are rebuilt whenever the page's tables change, and handing
+  // the context a new pair each time would re-render the whole application for callbacks
+  // nothing reads until a tab is clicked. The registration goes when this component does,
+  // which is what tells the toolbar the switch is out of reach while a full panel is up.
+  const passSwitchRef = useRef({});
+  passSwitchRef.current = {
+    validateBorders: handleValidateBorders,
+    validateTables: handleValidateTables,
+  };
+
+  useEffect(() => {
+    if (!setPassActions) {
+      return undefined;
+    }
+
+    setPassActions({
+      validateBorders: () => passSwitchRef.current.validateBorders(),
+      validateTables: () => passSwitchRef.current.validateTables(),
+    });
+
+    return () => setPassActions(null);
+  }, [setPassActions]);
+
   // Loading overlay shown while the page image loads or a Calculate/Recalculate poll runs.
   const loadingOverlay = !error && (imageLoading || actionBusy) && (
     <Box
@@ -1081,6 +1137,7 @@ export default function PageTableEditor({
         >
           <Box
             data-testid={'middle-title-bar'}
+            data-help-id={editorPageTitleHelpId()}
             sx={{
               flexGrow: 1,
               minWidth: 0,
@@ -1120,7 +1177,10 @@ export default function PageTableEditor({
             }}
           >
             {!error && pageImage && (
-              <Box data-testid={'middle-image'} sx={{ width: 'fit-content' }}>
+              <Box
+                data-testid={'middle-image'}
+                sx={{ width: 'fit-content' }}
+              >
                 <StagedPageGridEditor
                   image={pageImage.image}
                   pixelWidth={pageImage.pixelWidth}
@@ -1185,6 +1245,7 @@ export default function PageTableEditor({
             onPrev={handlePrev}
             onNext={handleNext}
             onValidateTables={handleValidateTables}
+            onValidateBorders={handleValidateBorders}
             isCreatedUnconfirmed={isCreatedUnconfirmed}
             onDeleteTable={() =>
               deleteActionRef.current?.(selectedTable?.tableId)

@@ -2,6 +2,7 @@
 
 import { Box } from '@mui/material';
 import { LINK_LABEL_JOINED } from 'components/pdfTableViewer/tableSupportUtils';
+import { tableLinkLabelHelpId } from 'config';
 
 // Presentational: a table's part in a linked group, lifted just above its top-RIGHT corner
 // in the same style as TableNameSizeLabel sits above its top-left. `left` and `top` are CSS
@@ -32,6 +33,7 @@ export default function TableLinkLabel({
   return (
     <Box
       data-testid={'link-label'}
+      data-help-id={tableLinkLabelHelpId()}
       data-tableid={table.tableId}
       data-colour={colourName}
       data-state={state}

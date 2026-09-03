@@ -28,7 +28,7 @@
 // and would vanish at the next extraction, is worse than visibly refusing it.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Box, Button, Typography } from '@mui/material';
+import { Box, Button, CircularProgress, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import CheckIcon from '@mui/icons-material/Check';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
@@ -43,10 +43,14 @@ import {
 import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 import {
   cancelColour,
+  cellEditImageLoadingHeightPx,
+  cellEditImageSpinnerSizePx,
+  cellEditorScreenId,
   confirmColour,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
 } from 'config';
+import useScreenHelp from 'components/help/useScreenHelp';
 
 export default function CellEditDialog({
   pdfId,
@@ -60,6 +64,10 @@ export default function CellEditDialog({
   onConfirm,
   onConfirmAndNext,
 }) {
+  // Mounting is opening, so being mounted is what puts the user on the cell-editor screen.
+  // It registers over the review panel's own screen and hands back when it goes.
+  useScreenHelp(cellEditorScreenId());
+
   const dialogRef = useRef(null);
   // The dialog's own height decides where its bottom edge can be put, so it is measured
   // rather than assumed; 0 until the first measurement, which simply means the first
@@ -93,15 +101,23 @@ export default function CellEditDialog({
     setHeight((current) => (current === measured ? current : measured));
   });
 
+  // What this cell's crop would be taken from. A cell with no source, a source table no
+  // longer in the metadata, or a source value deleted since the extraction all resolve to
+  // nothing to crop.
+  //
+  // Computed here rather than inside the request effect because the RENDER needs the same
+  // answer: whether a request was issued at all is what separates "the crop is still
+  // coming" from "there was never going to be one", and only the first of those spins.
+  const sourceTable =
+    key === null ? null : findSourceTable(tables, reviewedTableId, cell);
+  const sourceValue = sourceTable
+    ? findSourceValue(sourceTable, cell)
+    : null;
+
   // Ask the panel for this cell's crop once per source, and only while the panel has
-  // not already supplied one. A cell with no source, a source table no longer in the
-  // metadata, or a source value deleted since the extraction all resolve to nothing to
-  // crop, and are left showing an empty image area.
+  // not already supplied one.
   useEffect(() => {
     if (key === null || image !== undefined) return;
-    const sourceTable = findSourceTable(tables, reviewedTableId, cell);
-    if (!sourceTable) return;
-    const sourceValue = findSourceValue(sourceTable, cell);
     if (!sourceValue) return;
     const { left, top, width, height: boundsHeight } = sourceValue.bounds;
     onRequestImage({
@@ -121,6 +137,11 @@ export default function CellEditDialog({
   // because the pair is undefined until the panel answers; a response that carried no raw
   // member leaves the image area empty rather than falling back to the processed one.
   const shownImage = image?.raw;
+
+  // Waiting means a request went out and has not been answered. The panel records `null`
+  // at the key when the fetch failed, which IS an answer — so a failure shows an empty
+  // area rather than a spinner that would never stop.
+  const waiting = sourceValue !== null && image === undefined;
 
   const size = { width: reviewCellEditDialogWidthPx(), height };
   const viewport = { width: window.innerWidth, height: window.innerHeight };
@@ -210,11 +231,22 @@ export default function CellEditDialog({
       {/* The crop, which has the dialog's full interior width to itself. */}
       <Box
         sx={{
-          // Deliberately NOT a flex container. As a flex item the crop was squashed on
-          // both axes: `align-items: stretch` compressed it to the capped height rather
-          // than letting it overflow, and `flex-shrink` narrowed it independently of
-          // that. A block box leaves the img in charge of its own aspect ratio.
-          display: 'block',
+          // Deliberately NOT a flex container while it holds the crop. As a flex item the
+          // crop was squashed on both axes: `align-items: stretch` compressed it to the
+          // capped height rather than letting it overflow, and `flex-shrink` narrowed it
+          // independently of that. A block box leaves the img in charge of its own aspect
+          // ratio. The flex layout applies only while the spinner is shown, which has no
+          // aspect ratio to lose and does want centring.
+          ...(waiting
+            ? {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                // Reserved so the dialog does not jump when the crop lands — and the
+                // dialog's own height is what decides where it is placed.
+                minHeight: cellEditImageLoadingHeightPx(),
+              }
+            : { display: 'block' }),
           // The crop was requested at the cell's own width, so it arrives about the
           // size it should be shown at — but a cell wider than the dialog, or a tall
           // one, still has to be contained. Width is handled by scaling the image
@@ -224,6 +256,12 @@ export default function CellEditDialog({
           overflowY: 'auto',
         }}
       >
+        {waiting && (
+          <CircularProgress
+            data-testid={'cell-edit-image-loading'}
+            size={cellEditImageSpinnerSizePx()}
+          />
+        )}
         {shownImage && (
           // eslint-disable-next-line @next/next/no-img-element
           <img

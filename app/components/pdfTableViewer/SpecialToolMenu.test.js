@@ -1,5 +1,16 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import SpecialToolMenu from 'components/pdfTableViewer/SpecialToolMenu';
+import {
+  specialToolColouredAreaHelpId,
+  specialToolColouredCellHelpId,
+  specialToolColouredColumnsHelpId,
+  specialToolColouredRowsHelpId,
+  specialToolColouredTableHelpId,
+  specialToolHeaderHelpId,
+  specialToolHideRowHelpId,
+  specialToolSectionHelpId,
+  specialToolTitleHelpId,
+} from 'config';
 
 const KEYS = [
   'header',
@@ -82,5 +93,40 @@ describe('SpecialToolMenu', () => {
     );
     fireEvent.click(screen.getByTestId('special-tool-title'));
     expect(onSelectSpecialTool).toHaveBeenCalledWith('title');
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('gives every entry its own help id', () => {
+    render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
+
+    const expected = {
+      header: specialToolHeaderHelpId(),
+      title: specialToolTitleHelpId(),
+      hideRow: specialToolHideRowHelpId(),
+      sectionTitle: specialToolSectionHelpId(),
+      colouredRows: specialToolColouredRowsHelpId(),
+      colouredColumns: specialToolColouredColumnsHelpId(),
+      colouredTable: specialToolColouredTableHelpId(),
+      colouredCell: specialToolColouredCellHelpId(),
+      colouredArea: specialToolColouredAreaHelpId(),
+    };
+
+    KEYS.forEach((key) =>
+      expect(screen.getByTestId(`special-tool-${key}`)).toHaveAttribute(
+        'data-help-id',
+        expected[key]
+      )
+    );
+  });
+
+  it('gives no two entries the same help id', () => {
+    render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
+
+    const ids = KEYS.map((key) =>
+      screen.getByTestId(`special-tool-${key}`).getAttribute('data-help-id')
+    );
+
+    expect(new Set(ids).size).toBe(KEYS.length);
   });
 });

@@ -1,4 +1,9 @@
-import { excelFilename, exportableTableIds, saveBlob } from './exportUtils';
+import {
+  excelFilename,
+  exportableTables,
+  exportableTableIds,
+  saveBlob,
+} from './exportUtils';
 
 describe('excelFilename', () => {
   it('replaces the uploaded document extension with the workbook one', () => {
@@ -112,5 +117,38 @@ describe('exportableTableIds', () => {
   it('answers nothing for an empty or absent list', () => {
     expect(exportableTableIds([])).toEqual([]);
     expect(exportableTableIds(undefined)).toEqual([]);
+  });
+});
+
+describe('exportableTables', () => {
+  it('answers the tables themselves, in list order', () => {
+    const tables = [{ tableId: 't-1' }, { tableId: 't-2' }];
+
+    expect(exportableTables(tables)).toEqual(tables);
+  });
+
+  it('leaves out a soft-deleted table', () => {
+    const kept = { tableId: 't-1' };
+    const tables = [kept, { tableId: 't-2', deleted: true }];
+
+    expect(exportableTables(tables)).toEqual([kept]);
+  });
+
+  it('answers nothing for an empty or absent list', () => {
+    expect(exportableTables([])).toEqual([]);
+    expect(exportableTables(undefined)).toEqual([]);
+  });
+
+  // One definition of the set, so the ids and the objects can never disagree.
+  it('names exactly the tables exportableTableIds answers for', () => {
+    const tables = [
+      { tableId: 'root', next: { 'joined-1': { tableId: 'joined-1' } } },
+      { tableId: 't-2', deleted: true },
+      { tableId: 't-3' },
+    ];
+
+    expect(exportableTables(tables).map((t) => t.tableId)).toEqual(
+      exportableTableIds(tables)
+    );
   });
 });

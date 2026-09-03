@@ -33,14 +33,34 @@ import {
 import {
   excelFilename,
   exportableTableIds,
+  exportableTables,
   saveBlob,
 } from 'components/pdfTableViewer/exportUtils';
 import {
+  allExportReady,
+  isExportReady,
+} from 'components/pdfTableViewer/exportReadinessUtils';
+import {
+  boundaryPassScreenId,
   confirmedTableStage,
+  contentsPassScreenId,
+  documentOverviewEntryHelpId,
+  documentOverviewExportHelpId,
+  documentOverviewHelpId,
+  documentOverviewLinkHelpId,
+  documentOverviewReviewHelpId,
+  documentOverviewSaveHelpId,
+  highConfidence,
+  includeDeletedHelpId,
+  linkTablesScreenId,
+  pagesColumnHelpId,
   readyTableStage,
   resizeDebounceMs,
+  reviewTableScreenId,
   stagedGridEditorEnabled,
 } from 'config';
+import useScreenHelp from 'components/help/useScreenHelp';
+import { useEditorPass } from 'components/EditorPassProvider';
 import { linkedMembers } from 'components/pdfTableViewer/gridUtilities';
 import {
   buildCalcCellsRequestTable,
@@ -55,6 +75,7 @@ import {
   tableCountLabel,
   tableSizeLabel,
   tablesOnPage,
+  tablesWithLostConfidence,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import { layerDataChanged } from 'components/pdfTableViewer/layerUtils';
 import { PageImageWithOverlay } from 'components/pdfTableViewer/PageImageWithOverlay';
@@ -105,6 +126,42 @@ function recalcComparable(table) {
   return JSON.stringify({ ...table, confirmationStage: null, next: null });
 }
 
+// The rectangles a table asks to have read that are not cells: its title, and each of its
+// section titles' value areas. Both are drawn by hand and seeded empty, and both are read by
+// the same calculate-cells call.
+function readableRegionBounds(table) {
+  return JSON.stringify([
+    table?.title?.bounds ?? null,
+    (table?.sectionTitles ?? []).map(
+      (sectionTitle) => sectionTitle?.data?.bounds ?? null
+    ),
+  ]);
+}
+
+// Every table whose readable rectangles are new or have moved, which is the edit that
+// creates a region needing to be read. One that gained text at the same bounds has been
+// corrected, not redrawn.
+//
+// Joined members are walked as well as top-level tables: a member's edit arrives as a change
+// to its ROOT, so comparing roots alone would miss a rectangle drawn on one — and a member
+// sits on its own page, so it is its own recalculation target.
+function tablesWithNewRegions(before, after) {
+  const found = [];
+  if (!after.deleted && readableRegionBounds(before) !== readableRegionBounds(after)) {
+    found.push(after);
+  }
+  const beforeMembers = before?.next ?? {};
+  for (const [id, member] of Object.entries(after.next ?? {})) {
+    if (
+      !member.deleted &&
+      readableRegionBounds(beforeMembers[id]) !== readableRegionBounds(member)
+    ) {
+      found.push(member);
+    }
+  }
+  return found;
+}
+
 function classifyTableChange(before, after) {
   if (!before) return { changed: true, titleChanged: false };
   const boundaryMoved =
@@ -120,6 +177,20 @@ function classifyTableChange(before, after) {
     changed: boundaryMoved || gridMoved || specialChanged,
     titleChanged,
   };
+}
+
+// Which of the editor's four screens the user is looking at, for the help overlay. The
+// internal names and the users' names for these do not line up: the screen the user calls
+// the GRID EDITOR is `centreMode === 'link'`, not the contents pass — and it is the
+// contents pass whose own mode is the one called `grid`.
+function editorHelpScreenId(centreMode, editorMode) {
+  if (centreMode === 'link') {
+    return linkTablesScreenId();
+  }
+  if (centreMode === 'review') {
+    return reviewTableScreenId();
+  }
+  return editorMode === 'grid' ? contentsPassScreenId() : boundaryPassScreenId();
 }
 
 export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
@@ -184,6 +255,11 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // the tables that join a linked group, which is boundary-pass work, so the contents pass
   // does not show it.
   const [editorMode, setEditorMode] = useState('border');
+  // The toolbar's pass tabs live outside this tree, so the pass reaches them through the
+  // editor-pass context. Absent outside a provider, which a test that renders this
+  // component alone is.
+  const editorPass = useEditorPass();
+  const setEditorPass = editorPass ? editorPass.setPass : null;
   // tableId of the root whose linked-tables list is expanded in the Document Overview, or
   // null when none is. Either size line opens it — "Additional tables N" and "A × B
   // Tables" behave the same way. Only one is open at a time: the list is a way of reaching a linked
@@ -427,9 +503,41 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     // Update the per-table change set by comparing each next table against its pre-edit
     // snapshot (the current `tables`, captured in this closure). A `titleChanged` flag, once
     // set for a table, sticks until the set is cleared.
+    const beforeById = new Map(tables.map((t) => [t.tableId, t]));
+    // A title or section-title rectangle the user has just drawn or moved is a region they
+    // have asked to have read, and nothing else reads it: the page-exit recalculation would,
+    // but only once the page is left, so a rectangle drawn and left alone stays unread —
+    // empty text at no confidence — which flags it for review and holds the document out of
+    // Ready for Export.
+    //
+    // Only the BOUNDS are watched. A value whose text changed is a correction the user typed
+    // on the review screen, and re-reading it would be asking the extraction to second-guess
+    // them; mergeCalcCellsResponse refuses to overwrite a manually entered reading anyway,
+    // so the call would be pure waste.
+    const drawnTitles = nextTables.flatMap((after) =>
+      tablesWithNewRegions(beforeById.get(after.tableId), after)
+    );
+    const drawnTitleIds = new Set(drawnTitles.map((t) => t.tableId));
+
+    // A coloured-area edit decides how its region is flattened before it is read, so
+    // zeroConfidenceInRects strips the confidence from every value under it. Without this the
+    // value stayed flagged for ever while still holding the text of the OLD flattening:
+    // colours are page-scoped, so classifyTableChange never sees the edit — it asks
+    // layerDataChanged, which returns false for 'colours' by design — and the table never
+    // reached the page-exit recalculation that would have re-read it.
+    //
+    // Adding it to the change set is all that is owed, and the read stays where every other
+    // edit's is. Reading on the spot, as a drawn title is, would be wrong here: a colour
+    // session commits on every add, delete, resize and colour pick, so it would fire a call
+    // per mutation and the staleness guard would discard all but the last.
+    const invalidatedIds = nextTables.flatMap((after) =>
+      tablesWithLostConfidence(beforeById.get(after.tableId), after).map(
+        (t) => t.tableId
+      )
+    );
+
     setChangedTableIds((prev) => {
       const updated = { ...prev };
-      const beforeById = new Map(tables.map((t) => [t.tableId, t]));
       for (const after of nextTables) {
         const { changed, titleChanged } = classifyTableChange(
           beforeById.get(after.tableId),
@@ -441,10 +549,24 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
           };
         }
       }
+      for (const id of invalidatedIds) {
+        updated[id] = { titleChanged: updated[id]?.titleChanged ?? false };
+      }
+      // A table about to be read on the spot owes no page-exit read: the request carries the
+      // whole table, so the immediate call covers whatever else had changed on it too.
+      for (const id of drawnTitleIds) delete updated[id];
       return updated;
     });
     setTables(nextTables);
     setDirty(true);
+
+    for (const page of new Set(drawnTitles.map((t) => t.pdfPage))) {
+      recalcPageTables(
+        page,
+        drawnTitles.filter((t) => t.pdfPage === page).map((t) => t.tableId),
+        nextTables
+      );
+    }
   };
 
   // Recalculate the listed tables of ONE page: the single place every recalculation trigger
@@ -452,6 +574,9 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // is one call rather than a copy of this body. `recalcPage` is the 0-based page and
   // `tableIds` the ids to consider — non-existent ids, ids on another page and soft-deleted
   // tables are dropped here, so a caller can simply hand over its whole change set.
+  // `sourceTables` is the list to read those tables out of, defaulting to the current state;
+  // a caller reacting to an edit passes the post-edit list, because the state it would
+  // otherwise be read from is the pre-edit one until React applies the update.
   //
   // Each table contributes one calculate-cells request table (buildCalcCellsRequestTable): its
   // own rectangle, its cells' rectangles and, when it has them, its title and special-area
@@ -466,9 +591,17 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // returned table's TEXT is merged into the local table it was produced for (matched by
   // tableInPage + pdfPage) via a functional setTables update. Best-effort: a failure is
   // surfaced but the page has already moved.
-  const recalcPageTables = (recalcPage, tableIds) => {
+  const recalcPageTables = (recalcPage, tableIds, sourceTables = tables) => {
     const ids = new Set(tableIds);
-    const changedOnPage = tables.filter(
+    // Joined members are candidates too. A member is off the top-level list, so taking that
+    // list alone left it unreadable for ever: a rectangle drawn on one after it was joined
+    // stayed unread, which silently held its root out of "Ready for Export". A member sits
+    // on its own page, so it is matched on that page like any other table.
+    const candidates = sourceTables.flatMap((t) => [
+      t,
+      ...Object.values(t.next ?? {}),
+    ]);
+    const changedOnPage = candidates.filter(
       (t) => ids.has(t.tableId) && t.pdfPage === recalcPage && !t.deleted
     );
     if (changedOnPage.length === 0) {
@@ -523,31 +656,48 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
           return;
         }
         let wrote = false;
+        // Take the reading for one table, wherever it lives. Returns the table unchanged
+        // when there is no reading for it, when the user has edited it since the call
+        // launched, or when the reading says nothing new.
+        const takeReading = (t) => {
+          const replacement = replacementById[t.tableId];
+          if (!replacement) return t;
+          // The staleness guard: any difference OTHER than confirmationStage (see
+          // recalcComparable) means the user edited the table after this recalculation
+          // launched, so their version stands untouched.
+          if (recalcComparable(t) !== launchSnapshotById[t.tableId]) return t;
+          // A result identical to the table we already hold (the snapshot, which we have just
+          // established still matches) is not an edit, so do not dirty the document for it.
+          if (recalcComparable(replacement) === launchSnapshotById[t.tableId]) {
+            return t;
+          }
+          wrote = true;
+          // The replacement was built from the LAUNCH snapshot, so its confirmationStage and
+          // its `next` map are both the pre-launch ones. Keep the live values: the tick that
+          // triggered this call has since advanced the stage, and reverting that would untick
+          // Special Areas — while `next` is no longer covered by the staleness guard above,
+          // so reinstating the launch-time children would silently undo an edit made to one
+          // of them while this call was in flight.
+          return {
+            ...replacement,
+            confirmationStage: t.confirmationStage,
+            ...('next' in t ? { next: t.next } : {}),
+          };
+        };
+
         setTables((prev) =>
-          prev.map((t) => {
-            const replacement = replacementById[t.tableId];
-            if (!replacement) return t;
-            // The staleness guard: any difference OTHER than confirmationStage (see
-            // recalcComparable) means the user edited the table after this recalculation
-            // launched, so their version stands untouched.
-            if (recalcComparable(t) !== launchSnapshotById[t.tableId]) return t;
-            // A result identical to the table we already hold (the snapshot, which we have just
-            // established still matches) is not an edit, so do not dirty the document for it.
-            if (recalcComparable(replacement) === launchSnapshotById[t.tableId]) {
-              return t;
+          prev.map((top) => {
+            const root = takeReading(top);
+            const members = root.next;
+            if (!members) return root;
+            let memberChanged = false;
+            const nextMembers = {};
+            for (const [id, member] of Object.entries(members)) {
+              const taken = takeReading(member);
+              if (taken !== member) memberChanged = true;
+              nextMembers[id] = taken;
             }
-            wrote = true;
-            // The replacement was built from the LAUNCH snapshot, so its confirmationStage and
-            // its `next` map are both the pre-launch ones. Keep the live values: the tick that
-            // triggered this call has since advanced the stage, and reverting that would untick
-            // Special Areas — while `next` is no longer covered by the staleness guard above,
-            // so reinstating the launch-time children would silently undo an edit made to one
-            // of them while this call was in flight.
-            return {
-              ...replacement,
-              confirmationStage: t.confirmationStage,
-              ...('next' in t ? { next: t.next } : {}),
-            };
+            return memberChanged ? { ...root, next: nextMembers } : root;
           })
         );
         if (wrote) setDirty(true);
@@ -792,6 +942,24 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     centreMode = 'link';
   }
 
+  // One registration for all four editor screens: which one it is follows the centre mode
+  // and the pass the page editor reports through onEditorModeChange, so the pass is not a
+  // second call site of its own.
+  useScreenHelp(editorHelpScreenId(centreMode, editorMode));
+
+  // The toolbar's two pass tabs are drawn from this. Reported from here rather than from
+  // the page editor, because the pass is still the pass while a full panel stands over
+  // that editor — and this is the component that knows both.
+  useEffect(() => {
+    if (!setEditorPass) {
+      return undefined;
+    }
+
+    setEditorPass(editorMode);
+
+    return () => setEditorPass(null);
+  }, [setEditorPass, editorMode]);
+
   // Empty only once a fetch has completed and returned no pages — not during the
   // initial pre-measurement window when thumbnails is still its empty default.
   const isEmpty = thumbnailsLoaded && thumbnails.length === 0;
@@ -857,6 +1025,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
         {/* Save pinned at the top: disabled while clean or in-flight. */}
         <Box sx={{ p: 1, flexShrink: 0 }}>
           <Button
+            data-testid={'save-document'}
+            data-help-id={documentOverviewSaveHelpId()}
             variant={'contained'}
             size={'small'}
             fullWidth
@@ -868,6 +1038,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
         </Box>
         <Box sx={{ px: 1, pb: 1, flexShrink: 0 }}>
           <FormControlLabel
+            data-help-id={includeDeletedHelpId()}
             control={
               <Switch
                 size={'small'}
@@ -882,7 +1053,10 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
         <Typography sx={{ fontWeight: 700, fontSize: '0.85rem', px: 1, pb: 1 }}>
           {'Document Overview'}
         </Typography>
-        <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <Box
+          data-help-id={documentOverviewHelpId()}
+          sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+        >
           {listedTables.map((t) => {
             const nameColour = t.deleted
               ? 'var(--secondary-text)'
@@ -899,6 +1073,11 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             // button is refused until every member of the group has a place in the grid.
             // Offering Mark Ready here would be a way round that gate.
             const holdsLinked = Object.keys(t.next ?? {}).length > 0;
+            // Nothing in this table, or in the group it heads, is still flagged for the
+            // user's attention. Derived from the confidences on every read rather than
+            // stored: a re-extraction can lower one, and a stage recorded while the table
+            // was clean would outlive the fact it recorded.
+            const exportReady = isExportReady(t, highConfidence(), readyTableStage());
             const editing = linked.find((x) => x.tableId === selectedTableId) ?? null;
             return (
               <Box
@@ -907,6 +1086,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                   entryRefs.current[t.tableId] = el;
                 }}
                 data-testid={'table-entry'}
+                data-help-id={documentOverviewEntryHelpId()}
                 data-editing={editing ? 'true' : 'false'}
                 onClick={() => onTableEntryClick(t)}
                 onMouseEnter={
@@ -1065,8 +1245,16 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                     non-deleted rows: a deleted row offers no stage button and no Link
                     button, its click opening the Reinstate menu instead.
 
-                    The stage button depends on the ready mark alone: "Review" once
-                    readyTableStage() has been reached, and "Mark Ready" until then. */}
+                    The stage button: "Mark Ready" until readyTableStage() has been
+                    reached, and from then on the review button — reading "Ready for
+                    Export" once nothing in the table is still flagged, and "Review" while
+                    something is. Only the LABEL changes: looking again at a table that
+                    needs no correction must stay possible.
+
+                    The link icon is offered only on a root that holds linked tables. The
+                    Grid Editor it opens has nothing to lay out for a table holding none,
+                    and a group is built through the Layers panel's linking session rather
+                    than through this icon, so hiding it strands nobody. */}
                 {!t.deleted && (
                   <Box
                     sx={{
@@ -1079,6 +1267,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                     {(t.confirmationStage ?? 0) >= readyTableStage() ? (
                       <Button
                         data-testid={'review-table'}
+                        data-help-id={documentOverviewReviewHelpId()}
                         size={'small'}
                         variant={'outlined'}
                         sx={{ fontSize: '11px', py: 0, minWidth: 0 }}
@@ -1087,11 +1276,12 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                           handleReview(t.tableId);
                         }}
                       >
-                        {'Review'}
+                        {exportReady ? 'Ready for Export' : 'Review'}
                       </Button>
                     ) : holdsLinked ? null : (
                       <Button
                         data-testid={'mark-ready'}
+                        data-help-id={documentOverviewReviewHelpId()}
                         size={'small'}
                         variant={'outlined'}
                         sx={{ fontSize: '11px', py: 0, minWidth: 0 }}
@@ -1106,18 +1296,21 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                     {/* Spacer so the Link button sits at the right-hand end of the row
                         whether or not a stage button is present. */}
                     <Box sx={{ flexGrow: 1 }} />
-                    <IconButton
-                      data-testid={'link-table'}
-                      aria-label={'Link tables'}
-                      size={'small'}
-                      sx={{ p: 0, flexShrink: 0 }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setLinkRootId(t.tableId);
-                      }}
-                    >
-                      <Link sx={{ fontSize: 16 }} />
-                    </IconButton>
+                    {holdsLinked && (
+                      <IconButton
+                        data-testid={'link-table'}
+                        data-help-id={documentOverviewLinkHelpId()}
+                        aria-label={'Link tables'}
+                        size={'small'}
+                        sx={{ p: 0, flexShrink: 0 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLinkRootId(t.tableId);
+                        }}
+                      >
+                        <Link sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    )}
                   </Box>
                 )}
               </Box>
@@ -1125,14 +1318,28 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
           })}
         </Box>
         {/* Pinned at the foot, mirroring Save at the head: one workbook covering every table
-            still in the document, whichever one happens to be selected. */}
+            still in the document, whichever one happens to be selected.
+
+            Held back until every table it would cover is ready for export — there is no
+            point exporting a document the user has not finished with — and until there is
+            something to cover at all. */}
         <Box sx={{ p: 1, flexShrink: 0 }}>
           <Button
             data-testid={'export-document'}
+            data-help-id={documentOverviewExportHelpId()}
             variant={'contained'}
             size={'small'}
             fullWidth
-            disabled={saving || exporting || exportableTableIds(tables).length === 0}
+            disabled={
+              saving ||
+              exporting ||
+              exportableTables(tables).length === 0 ||
+              !allExportReady(
+                exportableTables(tables),
+                highConfidence(),
+                readyTableStage()
+              )
+            }
             onClick={handleExport}
           >
             {exporting ? 'Exporting…' : 'Export'}
@@ -1283,6 +1490,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
       {editorMode === 'border' && (
       <Box
         ref={rightRef}
+        data-help-id={pagesColumnHelpId()}
         sx={{
           width: '15%',
           flexShrink: 0,

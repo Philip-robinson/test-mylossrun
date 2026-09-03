@@ -8,6 +8,10 @@ import {
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PDFEditTableStructure from 'components/pdfTableViewer/PDFEditTableStructure';
+import HelpProvider, { useHelp } from 'components/help/HelpProvider';
+import EditorPassProvider, {
+  useEditorPass,
+} from 'components/EditorPassProvider';
 import { PageImageWithOverlay } from 'components/pdfTableViewer/PageImageWithOverlay';
 import {
   gridSquareBounds,
@@ -41,15 +45,27 @@ import {
 // expected style), never asserted as literals, so these tests keep passing when a
 // constant changes.
 import {
+  boundaryPassScreenId,
   confirmedTableStage,
   confirmedTickBadgeColour,
   confirmedTickBadgeSizePx,
   confirmedTickColour,
+  contentsPassScreenId,
   gridLineColour,
   highConfidence,
+  linkTablesScreenId,
   lowConfidence,
   mergeLinkRootBadgeColour,
   readyTableStage,
+  reviewTableScreenId,
+  documentOverviewEntryHelpId,
+  documentOverviewExportHelpId,
+  documentOverviewHelpId,
+  documentOverviewLinkHelpId,
+  documentOverviewReviewHelpId,
+  documentOverviewSaveHelpId,
+  includeDeletedHelpId,
+  pagesColumnHelpId,
 } from 'config';
 
 // One confidence in the middle of the ORANGE band, derived from the thresholds rather
@@ -166,6 +182,13 @@ jest.mock('react-hot-toast', () => {
   toast.dismiss = jest.fn();
   return { __esModule: true, default: toast };
 });
+
+// The help overlay is stubbed for the screen-registration tests below: what the editor
+// owes the help feature is naming the screen it is showing, not drawing it.
+jest.mock('components/help/HelpOverlay', () => ({
+  __esModule: true,
+  default: () => <div data-testid={'help-overlay'} />,
+}));
 
 // PageTableEditor is the real staged editor by default (so the existing rendering tests keep
 // exercising it). The Task 14 host-behaviour tests below install a lightweight stand-in via
@@ -4092,8 +4115,20 @@ describe('PDFEditTableStructure', () => {
   // "link-table") as a sibling of its name Box. Clicking it mounts the TableLinkageEditor
   // (mocked above) without starting an inline rename. Deleted rows never get the button.
 
-  // Two live tables and one deleted table, all on page 0 so the deleted row can be
-  // revealed with the "Include deleted" toggle.
+  // A linked member, held in a root's `next` map and so off the top-level list.
+  const linkMember = (tableId) => ({
+    tableId,
+    name: tableId,
+    pdfPage: 0,
+    tableInPage: 1,
+    bounds: { left: 0.8, top: 0.8, width: 0.1, height: 0.1 },
+    columnWidths: [{ value: 0.1, confidence: 90 }],
+    rowHeights: [{ value: 0.1, confidence: 90 }],
+  });
+
+  // Two live roots each holding a linked table, one live table holding none, and one
+  // deleted table, all on page 0 so the deleted row can be revealed with the
+  // "Include deleted" toggle.
   const linkFixture = () => ({
     tables: [
       {
@@ -4103,12 +4138,22 @@ describe('PDFEditTableStructure', () => {
         bounds: { left: 0, top: 0, width: 0.1, height: 0.1 },
         columnWidths: [{ value: 0.1, confidence: 90 }],
         rowHeights: [{ value: 0.1, confidence: 90 }],
+        next: { 'l-1-a': linkMember('l-1-a') },
       },
       {
         tableId: 'l-2',
         name: 'Root B',
         pdfPage: 0,
         bounds: { left: 0.3, top: 0.3, width: 0.1, height: 0.1 },
+        columnWidths: [{ value: 0.1, confidence: 90 }],
+        rowHeights: [{ value: 0.1, confidence: 90 }],
+        next: { 'l-2-a': linkMember('l-2-a') },
+      },
+      {
+        tableId: 'l-solo',
+        name: 'Solo',
+        pdfPage: 0,
+        bounds: { left: 0.45, top: 0.45, width: 0.1, height: 0.1 },
         columnWidths: [{ value: 0.1, confidence: 90 }],
         rowHeights: [{ value: 0.1, confidence: 90 }],
       },
@@ -4124,13 +4169,21 @@ describe('PDFEditTableStructure', () => {
     ],
   });
 
-  test('renders one Link button per non-deleted listed row', async () => {
+  // The button opens the Grid Editor, which has nothing to lay out for a table holding no
+  // linked members — and a group is built through the Layers panel's linking session, not
+  // through this icon, so hiding it strands nobody.
+  test('renders a Link button only on a row that holds linked tables', async () => {
     getMetadata.mockResolvedValue(linkFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
     await screen.findByText('Root A');
-    // Include-deleted is OFF: two non-deleted rows -> two Link buttons.
+    // Include-deleted is OFF: three non-deleted rows, but only the two roots.
     expect(screen.getAllByTestId('link-table')).toHaveLength(2);
+
+    const solo = (await screen.findByText('Solo')).closest(
+      '[data-testid="table-entry"]'
+    );
+    expect(solo.querySelector('[data-testid="link-table"]')).toBeNull();
   });
 
   test('a deleted row has no Link button', async () => {
@@ -4145,7 +4198,7 @@ describe('PDFEditTableStructure', () => {
     );
 
     // The deleted row itself carries no Link button, and the overall count is unchanged
-    // (still the two non-deleted rows).
+    // (still the two roots that hold linked tables).
     expect(
       deletedRow.querySelector('[data-testid="link-table"]')
     ).toBeNull();
@@ -4235,13 +4288,93 @@ describe('PDFEditTableStructure', () => {
     expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
   });
 
-  test('a table at the ready stage shows only Review', async () => {
+  test('a table at the ready stage shows the stage button, not Mark Ready', async () => {
     getMetadata.mockResolvedValue(stageFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
     const row = await entryFor('Ready Stage');
     expect(row.querySelector('[data-testid="review-table"]')).not.toBeNull();
     expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
+  });
+
+  // ---- The stage button's third label -----------------------------------------------
+  //
+  // Once nothing in a prepared table is still flagged for the user's attention, the same
+  // button reads "Ready for Export". Only the label changes: looking again at a table that
+  // needs no correction must stay possible.
+
+  const readValue = (confidence) => ({
+    row: 0,
+    column: 0,
+    text: 'x',
+    confidence,
+  });
+
+  const readinessFixture = (cells, extra = {}) => ({
+    tables: [
+      stageTable('r-1', 'Readiness', readyTableStage(), 0, { cells, ...extra }),
+    ],
+  });
+
+  test('a prepared table with a value below high confidence still reads Review', async () => {
+    getMetadata.mockResolvedValue(readinessFixture([readValue(90), readValue(30)]));
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Readiness');
+    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
+      'Review'
+    );
+  });
+
+  test('a prepared table read confidently throughout reads Ready for Export', async () => {
+    getMetadata.mockResolvedValue(
+      readinessFixture([readValue(90), readValue(highConfidence())])
+    );
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Readiness');
+    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
+      'Ready for Export'
+    );
+  });
+
+  // The group is what the review screen spans, so it is what readiness spans too.
+  test('a root whose linked member is still poor reads Review', async () => {
+    getMetadata.mockResolvedValue(
+      readinessFixture([readValue(99)], {
+        next: {
+          'r-1-a': {
+            tableId: 'r-1-a',
+            name: 'Readiness joined',
+            pdfPage: 0,
+            tableInPage: 1,
+            bounds: { left: 0.7, top: 0.7, width: 0.1, height: 0.1 },
+            columnWidths: [{ value: 0.1, confidence: 90 }],
+            rowHeights: [{ value: 0.1, confidence: 90 }],
+            cells: [readValue(20)],
+          },
+        },
+      })
+    );
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Readiness');
+    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
+      'Review'
+    );
+  });
+
+  test('the button still enters the review panel while it reads Ready for Export', async () => {
+    getMetadata.mockResolvedValue(readinessFixture([readValue(99)]));
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Readiness');
+    const button = row.querySelector('[data-testid="review-table"]');
+    expect(button).toHaveTextContent('Ready for Export');
+
+    await userEvent.click(button);
+
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
   });
 
   // A linked root is marked ready from the Grid Editor, whose Ready button is gated on every
@@ -4316,10 +4449,10 @@ describe('PDFEditTableStructure', () => {
   });
 
   test('the link button is not nested inside the name Box', async () => {
-    getMetadata.mockResolvedValue(stageFixture());
+    getMetadata.mockResolvedValue(linkFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
-    const row = await entryFor('Confirmed Stage');
+    const row = await entryFor('Root A');
     const name = row.querySelector('[data-testid="table-entry-name"]');
     // Present on the row, but NOT a descendant of the rename-triggering name Box.
     expect(row.querySelector('[data-testid="link-table"]')).not.toBeNull();
@@ -7069,6 +7202,43 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
           background: '#ffff00',
         },
       ]);
+    // The fixture's tables carry no cells, so a read has to be put on one before a colour
+    // edit has anything to invalidate. Adding cells that span a single square each is not
+    // itself a change the tracker classifies, so the change set is still empty afterwards.
+    const seedCells = () =>
+      onChange(
+        metadata.tables.map((t) =>
+          t.tableId === 'edit-target'
+            ? {
+                ...t,
+                cells: [
+                  {
+                    row: 0,
+                    column: 0,
+                    rowSpan: 1,
+                    columnSpan: 1,
+                    bounds: { left: 0.1, top: 0.1, width: 0.1, height: 0.1 },
+                    text: 'Read before the colour',
+                    confidence: 90,
+                  },
+                ],
+              }
+            : t
+        )
+      );
+    // A coloured-area edit as the real editor commits it (commitColouredAreas): the areas
+    // reach the host, and every value the re-flattening covers loses its confidence — which
+    // is all zeroConfidenceInRects does, the text of the old flattening staying put.
+    const colourOverCells = () => {
+      addColour();
+      onChange(
+        metadata.tables.map((t) =>
+          t.tableId === 'edit-target'
+            ? { ...t, cells: (t.cells ?? []).map((c) => ({ ...c, confidence: 0 })) }
+            : t
+        )
+      );
+    };
     const moveBoundary = () =>
       onChange(
         metadata.tables.map((t) =>
@@ -7138,6 +7308,35 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
               : t
           )
       );
+    // The Section Title Row tool used on a table that has already been JOINED into a group:
+    // the rectangle lands inside the root's `next`, on the member's own page.
+    const drawMemberSectionTitle = () =>
+      onChange(
+        metadata.tables.map((t) =>
+          t.tableId === 'edit-target'
+            ? {
+                ...t,
+                next: {
+                  beta: {
+                    ...t.next.beta,
+                    sectionTitles: [
+                      {
+                        tableRow: 1,
+                        delete: false,
+                        columnName: '~~SECTION-TITLE~~',
+                        data: {
+                          bounds: { left: 0.4, top: 0.4, width: 0.1, height: 0.02 },
+                          text: null,
+                          confidence: null,
+                        },
+                      },
+                    ],
+                  },
+                },
+              }
+            : t
+        )
+      );
     const renameChild = () =>
       onChange(
         metadata.tables.map((t) =>
@@ -7146,6 +7345,9 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
             : t
         )
       );
+    // A correction to the title's TEXT at the rectangle changeTitle already drew. Keeping
+    // the bounds is the point: moving them would be a redraw, which is read again on the
+    // spot, and this stands for the user typing a correction while a read is in flight.
     const changeTitle2 = () =>
       onChange(
         metadata.tables.map((t) =>
@@ -7153,7 +7355,7 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
             ? {
                 ...t,
                 title: {
-                  bounds: { left: 0.2, top: 0.2, width: 0.3, height: 0.06 },
+                  bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.05 },
                   text: 'Manual Edit',
                   confidence: 91,
                 },
@@ -7188,6 +7390,12 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
         <button data-testid={'mock-join'} onClick={join}>
           {'join'}
         </button>
+        <button
+          data-testid={'mock-member-section-title'}
+          onClick={drawMemberSectionTitle}
+        >
+          {'member-section-title'}
+        </button>
         <button data-testid={'mock-rename-child'} onClick={renameChild}>
           {'rename-child'}
         </button>
@@ -7208,6 +7416,12 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
         </button>
         <button data-testid={'mock-add-colour'} onClick={addColour}>
           {'add-colour'}
+        </button>
+        <button data-testid={'mock-seed-cells'} onClick={seedCells}>
+          {'seed-cells'}
+        </button>
+        <button data-testid={'mock-colour-over-cells'} onClick={colourOverCells}>
+          {'colour-over-cells'}
         </button>
         <button data-testid={'mock-section-title'} onClick={addSectionTitle}>
           {'section-title'}
@@ -7521,6 +7735,125 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     });
   });
 
+  // A title rectangle is a region the user has just asked to have read. Waiting for a page
+  // change to read it leaves an unread title — empty text, confidence 0 — sitting on the
+  // table, which flags it for review and holds the document out of Ready for Export with
+  // nothing on screen explaining why.
+  test('drawing a title reads it straight away, without waiting for a page change', async () => {
+    calculateCells.mockResolvedValue({
+      pdfPage: 0,
+      tables: [{ tableInPage: 0, cells: [], title: { text: 'READ TITLE', confidence: 93 } }],
+    });
+    await renderNav({ pageCount: 2 });
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+    );
+
+    await userEvent.click(screen.getByTestId('mock-title'));
+
+    await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+    const [sentPdfId, sentPage, , sentTables] = calculateCells.mock.calls[0];
+    expect(sentPdfId).toBe(PDF_ID);
+    expect(sentPage).toBe(0);
+    expect(sentTables).toHaveLength(1);
+    expect(sentTables[0].tableInPage).toBe(0);
+
+    // The reading lands on the table, so the title is no longer unread.
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-root-title')).toHaveTextContent('READ TITLE')
+    );
+  });
+
+  // A section-title rectangle is a drawn region exactly as a title is, and is seeded just as
+  // empty — so it must be read on the spot for the same reason.
+  test('drawing a section title reads it straight away', async () => {
+    calculateCells.mockResolvedValue({ pdfPage: 0, tables: [] });
+    await renderNav({ pageCount: 2 });
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+    );
+
+    await userEvent.click(screen.getByTestId('mock-section-title'));
+
+    // No page change: the rectangle is read where it was drawn.
+    await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+    const requestTable = calculateCells.mock.calls[0][3][0];
+    expect(requestTable.tableInPage).toBe(0);
+    // The drawn rectangle travels with it, so its text is what comes back.
+    expect(requestTable.specials).toEqual([
+      { left: 0.1, top: 0.15, width: 0.2, height: 0.04 },
+    ]);
+  });
+
+  // A joined member is off the top-level list, so nothing used to read it: a rectangle drawn
+  // on one stayed unread for ever, silently holding its root out of Ready for Export.
+  test('drawing a section title on a joined member reads it, on that member\'s page', async () => {
+    calculateCells.mockResolvedValue({
+      pdfPage: 1,
+      tables: [{ tableInPage: 0, cells: [], specials: [{ text: 'READ SECTION', confidence: 90 }] }],
+    });
+    await renderNav({ pageCount: 2 });
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+    );
+
+    await userEvent.click(screen.getByTestId('mock-join'));
+    await userEvent.click(screen.getByTestId('mock-member-section-title'));
+
+    await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+    // Beta's own page, not the root's, and beta's own rectangle.
+    expect(calculateCells.mock.calls[0][1]).toBe(1);
+    expect(calculateCells.mock.calls[0][3][0].specials).toEqual([
+      { left: 0.4, top: 0.4, width: 0.1, height: 0.02 },
+    ]);
+  });
+
+  test('the reading of a joined member is written back inside its root', async () => {
+    calculateCells.mockResolvedValue({
+      pdfPage: 1,
+      tables: [
+        {
+          tableInPage: 0,
+          cells: [],
+          specials: [{ text: 'READ SECTION', confidence: 90 }],
+        },
+      ],
+    });
+    await renderNav({ pageCount: 2 });
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+    );
+
+    await userEvent.click(screen.getByTestId('mock-join'));
+    await userEvent.click(screen.getByTestId('mock-member-section-title'));
+    await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+
+    const save = screen.getByRole('button', { name: /save/i });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    const root = saveTables.mock.calls[0][1].find(
+      (t) => t.tableId === 'edit-target'
+    );
+    expect(root.next.beta.sectionTitles[0].data).toEqual(
+      expect.objectContaining({ text: 'READ SECTION', confidence: 90 })
+    );
+  });
+
+  // Moving a boundary is not a new region to read: the existing page-exit rule covers it,
+  // and reading on every drag would be a call per gesture.
+  test('editing a boundary still waits for the page change', async () => {
+    calculateCells.mockResolvedValue({ pdfPage: 0, tables: [] });
+    await renderNav({ pageCount: 2 });
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+    );
+
+    await userEvent.click(screen.getByTestId('mock-move'));
+
+    expect(calculateCells).not.toHaveBeenCalled();
+  });
+
   test('editing a boundary adds the table to the change set; a page change recalculates it first, then clears the set', async () => {
     calculateCells.mockResolvedValue({ pdfPage: 0, tables: [] });
     await renderNav({ pageCount: 2 });
@@ -7557,6 +7890,79 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       )
     );
     expect(calculateCells).toHaveBeenCalledTimes(1);
+  });
+
+  // A coloured area decides how its region is flattened before it is read, so the values
+  // under it hold text read from a flattening that no longer exists. Colours are page-scoped
+  // and layerDataChanged returns false for them, so nothing put the table into the change set
+  // and the zeroed values sat flagged for ever with nobody coming to re-read them.
+  describe('a coloured-area edit that invalidates read values', () => {
+    async function seedThenColour() {
+      calculateCells.mockResolvedValue({ pdfPage: 0, tables: [] });
+      await renderNav({ pageCount: 2 });
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+      );
+      await userEvent.click(screen.getByTestId('mock-seed-cells'));
+      await userEvent.click(screen.getByTestId('mock-colour-over-cells'));
+    }
+
+    // The read belongs on page exit like every other edit's: a colour session commits on
+    // every add, resize and pick, so reading on the spot would fire a call per mutation.
+    test('does not read on the spot', async () => {
+      await seedThenColour();
+      expect(calculateCells).not.toHaveBeenCalled();
+    });
+
+    test('adds the table to the change set, so the page change re-reads it', async () => {
+      await seedThenColour();
+
+      await userEvent.click(screen.getByTestId('mock-next'));
+
+      await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+      const [sentPdfId, sentPage, , sentTables] = calculateCells.mock.calls[0];
+      expect(sentPdfId).toBe(PDF_ID);
+      expect(sentPage).toBe(0);
+      expect(sentTables).toHaveLength(1);
+      expect(sentTables[0].tableInPage).toBe(0);
+    });
+
+    // The re-read has to be made against the colours the user has just applied, or the back
+    // end flattens the page the old way and returns the very text that was invalidated.
+    test('sends the edited coloured areas with the re-read', async () => {
+      await seedThenColour();
+
+      await userEvent.click(screen.getByTestId('mock-next'));
+
+      await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
+      expect(calculateCells.mock.calls[0][2]).toEqual([
+        {
+          left: 0.1,
+          top: 0.1,
+          width: 0.2,
+          height: 0.1,
+          foreground: '#000000',
+          background: '#ffff00',
+        },
+      ]);
+    });
+
+    // Seeding the read on its own is not a change: only the loss of confidence is.
+    test('a table whose values kept their confidence is not re-read', async () => {
+      calculateCells.mockResolvedValue({ pdfPage: 0, tables: [] });
+      await renderNav({ pageCount: 2 });
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target')
+      );
+
+      await userEvent.click(screen.getByTestId('mock-seed-cells'));
+      await userEvent.click(screen.getByTestId('mock-next'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta')
+      );
+      expect(calculateCells).not.toHaveBeenCalled();
+    });
   });
 
   test('a page change backgrounds the recalculation: the page advances immediately without waiting for calculate-cells', async () => {
@@ -7740,12 +8146,13 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       )
     );
 
-    // Edit the title, then Next: the background recalc launches with 'My Title'.
+    // Draw the title: the read launches on the spot with 'My Title'. Next changes the page
+    // without adding a second call, the table having just been read.
     await userEvent.click(screen.getByTestId('mock-title'));
     await userEvent.click(screen.getByTestId('mock-next'));
     await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
 
-    // Before the recalc resolves, the user re-edits the same table's title.
+    // Before the read resolves, the user corrects the title's text at the same rectangle.
     await userEvent.click(screen.getByTestId('mock-title-2'));
 
     // The stale recalc resolves — it must NOT overwrite the newer manual title.
@@ -8638,7 +9045,14 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     );
   }
 
-  // 'alpha' is at the ready stage, so its left-column row offers Review; 'beta' sits on page 1
+  // A cell covering the single grid square, read confidently. Without one the editor's
+  // load path materialises a filler cell at confidence 0 (fillGridCells), which is a table
+  // nobody has extracted yet — correctly NOT ready for export, and so an Export button
+  // these tests could never reach.
+  const readCell = { row: 0, column: 0, text: 'x', confidence: 99 };
+
+  // 'alpha' is at the ready stage, so its left-column row offers the review button; it also
+  // holds a linked table, which is what puts a Link button on its row. 'beta' sits on page 1
   // and is only there to prove a mode change does not disturb the rest of the list.
   const MODE_METADATA = {
     name: 'modes.pdf',
@@ -8652,15 +9066,33 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
         bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 },
         columnWidths: [{ value: 0.2, confidence: 90 }],
         rowHeights: [{ value: 0.2, confidence: 90 }],
+        cells: [readCell],
+        next: {
+          'alpha-a': {
+            tableId: 'alpha-a',
+            name: 'Alpha joined',
+            pdfPage: 0,
+            tableInPage: 1,
+            bounds: { left: 0.5, top: 0.5, width: 0.2, height: 0.2 },
+            columnWidths: [{ value: 0.2, confidence: 90 }],
+            rowHeights: [{ value: 0.2, confidence: 90 }],
+            cells: [readCell],
+          },
+        },
       },
       {
         tableId: 'beta',
         name: 'Beta',
         pdfPage: 1,
         tableInPage: 0,
+        // Ready like alpha: the Export button waits for every listed table, so a table
+        // still to be marked ready would disable it, and these tests are about the export
+        // itself rather than the gate.
+        confirmationStage: readyTableStage(),
         bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 },
         columnWidths: [{ value: 0.2, confidence: 90 }],
         rowHeights: [{ value: 0.2, confidence: 90 }],
+        cells: [readCell],
       },
     ],
     pages: [
@@ -8702,7 +9134,12 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
   }
 
   const linkButton = () => screen.getAllByTestId('link-table')[0];
-  const reviewButton = () => screen.getByTestId('review-table');
+  // Alpha's, specifically: beta is ready too, so the list carries a stage button per row.
+  const reviewButton = () =>
+    screen
+      .getByText('Alpha')
+      .closest('[data-testid="table-entry"]')
+      .querySelector('[data-testid="review-table"]');
   const saveButton = () => screen.getByRole('button', { name: /save/i });
 
   test('the link button shows the grid editor over the whole editor and unmounts the page editor', async () => {
@@ -8805,6 +9242,62 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
       await renderModes();
 
       expect(screen.getByTestId('left-panel')).toContainElement(exportButton());
+    });
+
+    // The gate: there is no point exporting a document the user has not finished with,
+    // and none exporting an empty one.
+    describe('the gate', () => {
+      const withTables = (tables) => ({ ...MODE_METADATA, tables });
+
+      const renderWith = async (tables) => {
+        getMetadata.mockResolvedValue(withTables(tables));
+        render(<PDFEditTableStructure pdfId={PDF_ID} />);
+        await screen.findByTestId('mock-pte');
+      };
+
+      test('is open when every listed table is ready for export', async () => {
+        await renderModes();
+
+        expect(exportButton()).toBeEnabled();
+      });
+
+      test('is shut while a listed table is still to be marked ready', async () => {
+        const [alpha, beta] = MODE_METADATA.tables;
+        await renderWith([alpha, { ...beta, confirmationStage: undefined }]);
+
+        expect(exportButton()).toBeDisabled();
+      });
+
+      test('is shut while a listed table still holds a poor value', async () => {
+        const [alpha, beta] = MODE_METADATA.tables;
+        await renderWith([
+          alpha,
+          { ...beta, cells: [{ row: 0, column: 0, text: 'x', confidence: 10 }] },
+        ]);
+
+        expect(exportButton()).toBeDisabled();
+      });
+
+      // Deleted tables are excluded everywhere else in the editor, and here too: one
+      // revealed by the toggle cannot hold the export back.
+      test('ignores a deleted table that is not ready', async () => {
+        await renderWith([
+          ...MODE_METADATA.tables,
+          {
+            tableId: 'gone',
+            name: 'Gone',
+            pdfPage: 0,
+            tableInPage: 1,
+            deleted: true,
+            bounds: { left: 0.5, top: 0.5, width: 0.2, height: 0.2 },
+            columnWidths: [{ value: 0.2, confidence: 90 }],
+            rowHeights: [{ value: 0.2, confidence: 90 }],
+            cells: [{ row: 0, column: 0, text: 'x', confidence: 10 }],
+          },
+        ]);
+
+        expect(exportButton()).toBeEnabled();
+      });
     });
 
     test('saves, then posts the document, its live table ids and the workbook name', async () => {
@@ -9022,5 +9515,253 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     await screen.findByTestId('mock-pte');
     expect(screen.getByTestId('mock-page')).toHaveTextContent('1');
     expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta');
+  });
+
+  // Which screen's help the editor is on. The internal names and the users' names do not
+  // line up, and the mapping is the whole point of these four: the Grid Editor screen is
+  // centreMode 'link', NOT the contents pass — whose own internal mode is the one called
+  // 'grid'. Every expectation is read from the config function the copy module keys its
+  // screens by, so neither side carries the id as a string.
+  describe('the help screen the editor reports', () => {
+    // A stand-in that reports a mode change back up on demand, which is how the host
+    // learns which pass the centre editor is in.
+    function ModeReportingPageTableEditor({ onEditorModeChange }) {
+      return (
+        <div data-testid={'mock-pte'}>
+          <button
+            data-testid={'mock-mode-border'}
+            onClick={() => onEditorModeChange('border')}
+          >
+            {'border'}
+          </button>
+          <button
+            data-testid={'mock-mode-grid'}
+            onClick={() => onEditorModeChange('grid')}
+          >
+            {'grid'}
+          </button>
+        </div>
+      );
+    }
+
+    // Reads the registered screen out into the DOM, so what the editor reported can be
+    // asserted without reaching into the overlay.
+    function HelpScreenProbe() {
+      const { screenId } = useHelp();
+
+      return <span data-testid={'probe-screen'}>{screenId || 'none'}</span>;
+    }
+
+    beforeEach(() => {
+      global.__PTE_MOCK__ = ModeReportingPageTableEditor;
+    });
+
+    async function renderWithHelp() {
+      render(
+        <HelpProvider>
+          <HelpScreenProbe />
+          <PDFEditTableStructure pdfId={PDF_ID} />
+        </HelpProvider>
+      );
+      await screen.findByTestId('mock-pte');
+    }
+
+    const reportedScreen = () => screen.getByTestId('probe-screen');
+
+    // The toolbar's two pass tabs are drawn from the pass this component reports, which is
+    // why it reports the pass and not the page editor beneath it: the pass is still the
+    // pass while a full panel stands over that editor.
+    describe('the pass the editor reports to the toolbar', () => {
+      function EditorPassProbe() {
+        const editorPass = useEditorPass();
+
+        return (
+          <span data-testid={'probe-pass'}>{editorPass.pass || 'none'}</span>
+        );
+      }
+
+      async function renderWithPass() {
+        render(
+          <EditorPassProvider>
+            <EditorPassProbe />
+            <PDFEditTableStructure pdfId={PDF_ID} />
+          </EditorPassProvider>
+        );
+        await screen.findByTestId('mock-pte');
+      }
+
+      const reportedPass = () => screen.getByTestId('probe-pass');
+
+      test('border while the centre editor is in border mode', async () => {
+        await renderWithPass();
+
+        await waitFor(() => expect(reportedPass()).toHaveTextContent('border'));
+      });
+
+      test('grid once the centre editor reports grid mode', async () => {
+        await renderWithPass();
+
+        await userEvent.click(screen.getByTestId('mock-mode-grid'));
+
+        await waitFor(() => expect(reportedPass()).toHaveTextContent('grid'));
+      });
+
+      // The grid editor stands over the centre editor without ending the pass, so the tabs
+      // keep saying which pass is underneath it.
+      test('the pass it was in while the grid editor is open', async () => {
+        await renderWithPass();
+
+        await userEvent.click(screen.getByTestId('mock-mode-grid'));
+        await userEvent.click(linkButton());
+        await screen.findByTestId('link-dialog');
+
+        await waitFor(() => expect(reportedPass()).toHaveTextContent('grid'));
+      });
+    });
+
+    test('the boundary pass while the centre editor is in border mode', async () => {
+      await renderWithHelp();
+
+      await waitFor(() =>
+        expect(reportedScreen()).toHaveTextContent(boundaryPassScreenId())
+      );
+    });
+
+    test('the contents pass once the centre editor reports grid mode', async () => {
+      await renderWithHelp();
+
+      await userEvent.click(screen.getByTestId('mock-mode-grid'));
+
+      await waitFor(() =>
+        expect(reportedScreen()).toHaveTextContent(contentsPassScreenId())
+      );
+    });
+
+    test('the link-tables screen while the grid editor is open, whatever the pass', async () => {
+      await renderWithHelp();
+
+      // In the contents pass first, so a mapping that confused the pass called 'grid'
+      // with the screen the user calls the GRID EDITOR would answer the wrong one here.
+      await userEvent.click(screen.getByTestId('mock-mode-grid'));
+      await waitFor(() =>
+        expect(reportedScreen()).toHaveTextContent(contentsPassScreenId())
+      );
+
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+
+      await waitFor(() =>
+        expect(reportedScreen()).toHaveTextContent(linkTablesScreenId())
+      );
+    });
+
+    test('the review screen while the review panel is open', async () => {
+      await renderWithHelp();
+
+      await userEvent.click(reviewButton());
+      await screen.findByTestId('review-panel');
+
+      await waitFor(() =>
+        expect(reportedScreen()).toHaveTextContent(reviewTableScreenId())
+      );
+    });
+
+    test('the boundary pass again once the grid editor is closed', async () => {
+      await renderWithHelp();
+
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      await userEvent.click(screen.getByTestId('link-dialog-cancel'));
+
+      await screen.findByTestId('mock-pte');
+      await waitFor(() =>
+        expect(reportedScreen()).toHaveTextContent(boundaryPassScreenId())
+      );
+    });
+  });
+});
+
+// The overlay measures each tip's hole from these attributes and the copy module keys the
+// same tips by the same functions, so no id is a literal on either side. The columns are
+// pinned either side of the editor through both passes, and both passes describe them.
+describe('PDFEditTableStructure — the help anchors on its two columns', () => {
+  test('the two columns and the controls pinned to them carry their help ids', async () => {
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const entries = await screen.findAllByTestId('table-entry');
+
+    expect(entries[0]).toHaveAttribute(
+      'data-help-id',
+      documentOverviewEntryHelpId()
+    );
+    expect(screen.getByTestId('save-document')).toHaveAttribute(
+      'data-help-id',
+      documentOverviewSaveHelpId()
+    );
+    expect(
+      entries[0].closest(`[data-help-id="${documentOverviewHelpId()}"]`)
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('export-document')).toHaveAttribute(
+      'data-help-id',
+      documentOverviewExportHelpId()
+    );
+    expect(
+      document.querySelector(`[data-help-id="${includeDeletedHelpId()}"]`)
+    ).toBeInTheDocument();
+    expect(
+      screen
+        .getAllByTestId('thumbnail')[0]
+        .closest(`[data-help-id="${pagesColumnHelpId()}"]`)
+    ).toBeInTheDocument();
+  });
+
+  // One id for the stage button under both its labels: it is one button that renames
+  // itself, and the tip describes every label it can take.
+  test('the stage button carries the review help id whichever label it wears', async () => {
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    await screen.findAllByTestId('table-entry');
+    const staged = screen.queryAllByTestId('review-table');
+    const unstaged = screen.queryAllByTestId('mark-ready');
+
+    expect(staged.length + unstaged.length).toBeGreaterThan(0);
+    [...staged, ...unstaged].forEach((button) =>
+      expect(button).toHaveAttribute(
+        'data-help-id',
+        documentOverviewReviewHelpId()
+      )
+    );
+  });
+
+  test('the Link button carries the link help id', async () => {
+    getMetadata.mockResolvedValue({
+      tables: [
+        {
+          tableId: 'h-1',
+          name: 'Linked root',
+          pdfPage: 0,
+          bounds: { left: 0, top: 0, width: 0.1, height: 0.1 },
+          columnWidths: [{ value: 0.1, confidence: 90 }],
+          rowHeights: [{ value: 0.1, confidence: 90 }],
+          next: {
+            'h-1-a': {
+              tableId: 'h-1-a',
+              name: 'h-1-a',
+              pdfPage: 0,
+              tableInPage: 1,
+              bounds: { left: 0.8, top: 0.8, width: 0.1, height: 0.1 },
+              columnWidths: [{ value: 0.1, confidence: 90 }],
+              rowHeights: [{ value: 0.1, confidence: 90 }],
+            },
+          },
+        },
+      ],
+    });
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    expect(await screen.findByTestId('link-table')).toHaveAttribute(
+      'data-help-id',
+      documentOverviewLinkHelpId()
+    );
   });
 });

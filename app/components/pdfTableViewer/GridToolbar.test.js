@@ -1,5 +1,10 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import GridToolbar from 'components/pdfTableViewer/GridToolbar';
+import {
+  gridToolColumnsHelpId,
+  gridToolRowsHelpId,
+  gridToolSpecialHelpId,
+} from 'config';
 
 describe('GridToolbar', () => {
   it('renders the three captioned tools in order', () => {
@@ -39,5 +44,24 @@ describe('GridToolbar', () => {
     render(<GridToolbar onSelectTool={onSelectTool} />);
     fireEvent.click(screen.getByTestId('grid-tool-special'));
     expect(onSelectTool).toHaveBeenCalledWith('special');
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('gives each of the three buttons its own help id', () => {
+    render(<GridToolbar onSelectTool={() => {}} />);
+
+    expect(screen.getByTestId('grid-tool-rows')).toHaveAttribute(
+      'data-help-id',
+      gridToolRowsHelpId()
+    );
+    expect(screen.getByTestId('grid-tool-columns')).toHaveAttribute(
+      'data-help-id',
+      gridToolColumnsHelpId()
+    );
+    expect(screen.getByTestId('grid-tool-special')).toHaveAttribute(
+      'data-help-id',
+      gridToolSpecialHelpId()
+    );
   });
 });

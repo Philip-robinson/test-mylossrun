@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import ReviewTableTabs from 'components/pdfTableViewer/ReviewTableTabs';
+import { reviewTabsHelpId } from 'config';
 
 const tables = [{ name: 'North' }, { name: 'South' }, { name: 'East' }];
 
@@ -28,6 +29,16 @@ describe('ReviewTableTabs', () => {
 
     const selected = screen.getAllByTestId('review-tab').map((tab) => tab.getAttribute('aria-selected'));
     expect(selected).toEqual(['false', 'true', 'false']);
+  });
+
+  // The overlay measures its tip's hole from this attribute and the copy module keys the
+  // same tip by the same function, so the id is a literal on neither side.
+  it('carries the tabs help id on the strip', () => {
+    render(<ReviewTableTabs tables={tables} activeIndex={0} onChange={() => {}} />);
+
+    expect(
+      screen.getByTestId('review-tabs').closest(`[data-help-id="${reviewTabsHelpId()}"]`)
+    ).toBeInTheDocument();
   });
 
   it('draws nothing for a single table, which needs no strip', () => {

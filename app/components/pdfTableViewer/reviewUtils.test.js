@@ -8,6 +8,7 @@ import {
   confidenceLabel,
   flaggedForReviewLabel,
   lowConfidenceTitle,
+  lowConfidenceSectionTitle,
 } from 'components/pdfTableViewer/reviewUtils';
 
 describe('reviewUtils', () => {
@@ -306,5 +307,34 @@ describe('reviewUtils', () => {
       expect(confidenceLabel('90')).toBe('Confidence unknown');
       expect(confidenceLabel(NaN)).toBe('Confidence unknown');
     });
+  });
+});
+
+describe('lowConfidenceSectionTitle', () => {
+  const label = 'Section Title';
+
+  it('flags a section title read below the threshold', () => {
+    expect(
+      lowConfidenceSectionTitle({ text: 'Motor', confidence: 40 }, 80, label)
+    ).toEqual({ sectionTitle: true, label });
+  });
+
+  it('does not flag one read at or above it', () => {
+    expect(
+      lowConfidenceSectionTitle({ text: 'Motor', confidence: 80 }, 80, label)
+    ).toBeNull();
+  });
+
+  // An unsplit table has none, and neither do the rows above the first section title.
+  it('flags nothing when the table was not split on one', () => {
+    expect(lowConfidenceSectionTitle(null, 80, label)).toBeNull();
+    expect(lowConfidenceSectionTitle(undefined, 80, label)).toBeNull();
+  });
+
+  // A section title present but never read is exactly what must be flagged.
+  it('flags one that was never read', () => {
+    expect(
+      lowConfidenceSectionTitle({ text: '', confidence: 0 }, 80, label)
+    ).toEqual({ sectionTitle: true, label });
   });
 });

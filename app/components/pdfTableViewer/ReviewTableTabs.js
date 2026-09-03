@@ -7,12 +7,16 @@
 // no section titles should read exactly as it did before it could be split.
 
 import { Box, Tab, Tabs } from '@mui/material';
+import { reviewTabsHelpId } from 'config';
 
 export default function ReviewTableTabs({ tables, activeIndex, onChange }) {
   if ((tables?.length ?? 0) < 2) return null;
 
   return (
-    <Box sx={{ flexShrink: 0, borderTop: 1, borderColor: 'divider' }}>
+    <Box
+      data-help-id={reviewTabsHelpId()}
+      sx={{ flexShrink: 0, borderTop: 1, borderColor: 'divider' }}
+    >
       {/* Scrollable rather than wrapped: a loss run can carry many sections, and a strip
           that grows downwards would eat the grid it belongs to. */}
       <Tabs

@@ -14,9 +14,10 @@
 // metadata. `onEditTables` marks the document dirty and the editor's Save button stays
 // the persistence point for ordinary editing.
 //
-// Exit is the only way out: it saves through `onSave` first, because the export the
-// Document Overview offers is built from what the SERVER holds. Exporting itself lives
-// there rather than here — one workbook covers the whole document.
+// The Save button at the foot is the only way out, and it is labelled for the part that
+// can fail: it saves through `onSave` and leaves only if that worked, because the export
+// the Document Overview offers is built from what the SERVER holds. Exporting itself
+// lives there rather than here — one workbook covers the whole document.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
@@ -42,10 +43,12 @@ import {
   flaggedForReviewLabel,
   isWideText,
   looksNumeric,
+  lowConfidenceSectionTitle,
   lowConfidenceTitle,
 } from 'components/pdfTableViewer/reviewUtils';
 import {
   applyEditToGrid,
+  applyEditToSectionTitle,
   applyEditToTables,
   cellSourceKey,
   isTitleCell,
@@ -54,6 +57,12 @@ import {
 import {
   highConfidence,
   reviewCellBorderColour,
+  reviewFlaggedCountHelpId,
+  reviewGridHelpId,
+  reviewPoorCellsHelpId,
+  reviewSaveHelpId,
+  reviewSectionTitleHelpId,
+  reviewTitleHelpId,
   reviewColumnMaxWidthPx,
   reviewEditedCellConfidence,
   reviewGutterBackgroundColour,
@@ -69,6 +78,7 @@ import {
   reviewSelectedCellPaddingPx,
   reviewSelectedCellRadiusPx,
   reviewSelectedCellShadow,
+  reviewSectionTitleLabel,
   reviewTitleLabel,
   reviewWideCellMinCharacters,
 } from 'config';
@@ -131,10 +141,21 @@ const cellBodyStyle = (poor) => ({
 // the left-edge marker, and the wash is the same one `cellStyle` puts behind a flagged
 // cell. Built from those rather than restating either, so the title and the cells cannot
 // drift apart. Editable, so it carries the pointer cursor that says so.
+// The title and the section title are each drawn as a label beside their value. The label
+// sits OUTSIDE the value's box, so the wash, the selection ring and the click that opens the
+// editor all belong to the value alone.
+const labelledRowStyle = {
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 1,
+};
+
 const titleStyle = (poor) => ({
   ...cellBodyStyle(poor),
   backgroundColor: poor ? reviewLowConfidenceBackgroundColour() : undefined,
   cursor: 'pointer',
+  flexGrow: 1,
+  minWidth: 0,
 });
 
 // The ring around the selected cell, nested inside the body and still wrapping the
@@ -213,8 +234,9 @@ export default function ReviewTablePanel({
   // The `label` is what stepping matches on, so the title — which is at no coordinate —
   // takes its turn in the list alongside the cells.
   const [selected, setSelected] = useState(null);
-  // Cropped cell images, keyed by source key — one `{ raw, processed }` pair per cell,
-  // which is what the dialog takes as its `image` — and the set of keys already asked
+  // Cropped cell images, keyed by source key — one `{ raw, processed }` pair per cell, or
+  // null where the fetch failed, which is what the dialog takes as its `image` — and the
+  // set of keys already asked
   // for. Both live here rather than in the dialog, which is mounted only while a
   // cell is being edited, so re-opening a cell shows what was already fetched
   // instead of fetching it again.
@@ -227,6 +249,8 @@ export default function ReviewTablePanel({
   const cellElementsRef = useRef({});
   // The rendered title element, held for the same reason and read the same way.
   const titleElementRef = useRef(null);
+  // The rendered section-title element, likewise.
+  const sectionTitleElementRef = useRef(null);
 
   // The extraction request in flight (or settled) for one addressed table:
   // { key, promise }. Held in a ref so the effect can ADOPT an existing request instead of
@@ -297,7 +321,16 @@ export default function ReviewTablePanel({
   // Everything worth the user's attention, in reading order. The title heads the list
   // because it sits above the grid on screen. This is what the count, the Go to… list and
   // the step buttons all work from.
-  const poorEntries = titleEntry ? [titleEntry, ...poorCells] : poorCells;
+  // The section title this tab was split out on, flagged on the title's terms. It sits
+  // between them because that is where it is drawn: under the title, above the grid.
+  const sectionTitleEntry = lowConfidenceSectionTitle(
+    activeTable?.sectionTitle,
+    highConfidence(),
+    reviewSectionTitleLabel()
+  );
+  const poorEntries = [titleEntry, sectionTitleEntry, ...poorCells].filter(
+    Boolean
+  );
 
   // The title as a source reference the edit dialog and the edit helpers understand: it
   // names the table holding the title rather than a position in the grid.
@@ -310,7 +343,21 @@ export default function ReviewTablePanel({
       }
     : null;
 
+  // The section title as a source reference: it names the table holding the section titles
+  // and the index within them, which is what `reviewEditUtils` resolves a section-title cell
+  // by — so it is corrected through exactly the same path as a cell or the title.
+  const sectionTitleCell = activeTable?.sectionTitle
+    ? {
+        tableId: activeTable.sectionTitle.tableId,
+        sectionTitleIndex: activeTable.sectionTitle.sectionTitleIndex,
+        text: activeTable.sectionTitle.text,
+        confidence: activeTable.sectionTitle.confidence,
+      }
+    : null;
+
   const titleSelected = selected?.title === true;
+  const sectionTitleSelected = selected?.sectionTitle === true;
+  const sectionTitleEditing = editing?.sectionTitle === true;
   // Whether the field is in the TITLE rather than in a grid cell.
   const titleEditing = editing?.title === true;
 
@@ -363,6 +410,14 @@ export default function ReviewTablePanel({
       });
       return;
     }
+    if (target.sectionTitle) {
+      setSelected({ label: target.label, sectionTitle: true });
+      sectionTitleElementRef.current?.scrollIntoView({
+        block: 'nearest',
+        inline: 'nearest',
+      });
+      return;
+    }
     setSelected({
       label: cellCoordinate(target.rowIndex, target.columnIndex),
       rowIndex: target.rowIndex,
@@ -392,8 +447,15 @@ export default function ReviewTablePanel({
   const nextPoor = adjacentPoorCell(poorEntries, selected, 1);
 
   // Fetch one cell's two crops, at most once per source. A failure is reported and then
-  // forgotten: the image is a convenience, and losing it must not cost the user the
-  // edit, so the dialog is left with an empty image area and remains usable.
+  // recorded as "no crop": the image is a convenience, and losing it must not cost the
+  // user the edit, so the dialog is left with an empty image area and remains usable.
+  //
+  // The cache therefore holds three states at a key, which is what lets the dialog tell a
+  // crop still coming from one that is never coming:
+  //
+  //   undefined  — not asked, or asked and not yet answered
+  //   null       — asked, and there is no crop to show
+  //   { raw, processed } — asked, and answered with a crop
   const handleRequestImage = ({ key, page, bounds, width }) => {
     if (requestedRef.current.has(key)) return;
     requestedRef.current.add(key);
@@ -409,6 +471,10 @@ export default function ReviewTablePanel({
         }));
       })
       .catch((err) => {
+        // Recorded as an answer, not left as silence: the dialog spins while a key holds
+        // `undefined`, so a failure that wrote nothing would spin for ever. It is also
+        // what stops the failure being asked again on every render.
+        setImages((prev) => ({ ...prev, [key]: null }));
         toast.error(err.message);
       });
   };
@@ -457,8 +523,20 @@ export default function ReviewTablePanel({
     // carried value repeats down many rows and can now repeat across several split tables,
     // so updating only what is on screen would leave the others showing the old text until
     // the next extraction.
+    //
+    // The section title drawn above the grid is not in the grid — the placeholder column
+    // it came from is dropped when the split is made — so it is corrected alongside it.
+    // Without that the metadata takes the correction and the heading goes back to the old
+    // text the moment the field closes, which is exactly the reload disagreeing with the
+    // screen.
     const updated = mergedTables.map((merged) => ({
       ...merged,
+      sectionTitle: applyEditToSectionTitle(
+        merged.sectionTitle,
+        editing.cell,
+        text,
+        reviewEditedCellConfidence(),
+      ),
       cells: applyEditToGrid(
         merged.cells,
         editing.cell,
@@ -517,7 +595,17 @@ export default function ReviewTablePanel({
     });
   };
 
-  // Leave for the editor, saving first.
+  // What Tab in the correction field does, or undefined when it must do nothing.
+  //
+  // Tab IS the Next button — the same handler, so a correction settled by keystroke lands
+  // exactly as one settled by the click — and it is refused on exactly the terms that
+  // disable that button: a cell with no source key has nothing in the metadata to write
+  // back to. Refused by being withheld rather than by being swallowed, so the keystroke
+  // then goes back to being an ordinary Tab.
+  const handleTab =
+    editing && cellSourceKey(editing.cell) ? handleConfirmAndNext : undefined;
+
+  // Save, and leave for the editor once the save has landed.
   //
   // The save is not optional and its result is not ignored: the export the Document
   // Overview offers is built from what the SERVER holds, so leaving with edits unsent would
@@ -562,12 +650,17 @@ export default function ReviewTablePanel({
             gap: 1,
           }}
         >
-          <Typography data-testid={'review-confidence-count'} variant={'body2'}>
+          <Typography
+            data-testid={'review-confidence-count'}
+            data-help-id={reviewFlaggedCountHelpId()}
+            variant={'body2'}
+          >
             {flaggedForReviewLabel(poorEntries.length)}
           </Typography>
           {/* Everything to do with GOING somewhere, grouped so the bar stays a count on
               the left and a set of controls on the right however wide the panel is. */}
           <Box
+            data-help-id={reviewPoorCellsHelpId()}
             sx={{
               display: 'flex',
               alignItems: 'center',
@@ -650,7 +743,18 @@ export default function ReviewTablePanel({
           having to hand throughout. Drawn and flagged exactly as a cell is, and editable
           in the same dialog: the extraction misreads a heading as readily as a value. */}
       {!loading && !error && activeTable?.title && (
-        <Box sx={{ flexShrink: 0, px: 1, pt: 1 }}>
+        <Box
+          data-help-id={reviewTitleHelpId()}
+          sx={{ flexShrink: 0, px: 1, pt: 1, ...labelledRowStyle }}
+        >
+          <Typography
+            data-testid={'review-title-label'}
+            variant={'body2'}
+            color={'text.secondary'}
+            sx={{ flexShrink: 0 }}
+          >
+            {`${reviewTitleLabel()}:`}
+          </Typography>
           <Box
             data-testid={'review-title'}
             ref={titleElementRef}
@@ -678,6 +782,7 @@ export default function ReviewTablePanel({
                   <ReviewCellEditor
                     value={editing.text}
                     onChange={handleEditText}
+                    onTab={handleTab}
                   />
                 ) : (
                   activeTable.title.text
@@ -689,12 +794,71 @@ export default function ReviewTablePanel({
           </Box>
         </Box>
       )}
+      {/* The section title this tab was split out on, under the title and above the grid.
+          It is drawn here because it is nowhere else: the placeholder column it came from
+          decides how the grid is split and names the tab, and is then DROPPED from the grid,
+          so without this the value would be uncorrectable — and a misreading would silently
+          mis-section the data and misname the sheet. Flagged and edited exactly as the
+          title is. */}
+      {!loading && !error && activeTable?.sectionTitle && (
+        <Box
+          data-help-id={reviewSectionTitleHelpId()}
+          sx={{ flexShrink: 0, px: 1, pt: 1, ...labelledRowStyle }}
+        >
+          <Typography
+            data-testid={'review-section-title-label'}
+            variant={'body2'}
+            color={'text.secondary'}
+            sx={{ flexShrink: 0 }}
+          >
+            {`${reviewSectionTitleLabel()}:`}
+          </Typography>
+          <Box
+            data-testid={'review-section-title'}
+            ref={sectionTitleElementRef}
+            style={titleStyle(Boolean(sectionTitleEntry))}
+            onClick={(event) => {
+              if (sectionTitleEditing) return;
+              setSelected({
+                label: reviewSectionTitleLabel(),
+                sectionTitle: true,
+              });
+              setEditing({
+                cell: sectionTitleCell,
+                rect: event.currentTarget.getBoundingClientRect(),
+                sectionTitle: true,
+                text: activeTable.sectionTitle.text ?? '',
+              });
+            }}
+          >
+            {sectionTitleSelected ? (
+              <div
+                data-testid={'review-section-title-selection'}
+                style={cellSelectionStyle()}
+              >
+                {sectionTitleEditing ? (
+                  <ReviewCellEditor
+                    value={editing.text}
+                    onChange={handleEditText}
+                    onTab={handleTab}
+                  />
+                ) : (
+                  activeTable.sectionTitle.text
+                )}
+              </div>
+            ) : (
+              activeTable.sectionTitle.text
+            )}
+          </Box>
+        </Box>
+      )}
       {/* No padding on the ruled edges. The rulers pin to this scrollport, so padding
           here would hold them that far in from the top and left of the visible area
           rather than flush against it; the far edges keep their breathing room. The
           loading and error states pad themselves instead. */}
       <Box
         data-testid={'review-scroll'}
+        data-help-id={reviewGridHelpId()}
         sx={{ overflow: 'auto', flex: 1, minHeight: 0, pr: 1, pb: 1 }}
       >
         {loading && (
@@ -812,6 +976,7 @@ export default function ReviewTablePanel({
                                 <ReviewCellEditor
                                   value={editing.text}
                                   onChange={handleEditText}
+                                  onTab={handleTab}
                                 />
                               ) : (
                                 cell.text
@@ -848,12 +1013,13 @@ export default function ReviewTablePanel({
       >
         <Button
           data-testid={'review-exit'}
+          data-help-id={reviewSaveHelpId()}
           variant={'outlined'}
           size={'small'}
           disabled={exiting}
           onClick={handleExit}
         >
-          {'Exit'}
+          {'Save'}
         </Button>
       </Box>
       {/* The save lock. It covers the whole panel — bar, grid and buttons — because what is

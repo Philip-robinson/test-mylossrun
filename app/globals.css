@@ -207,15 +207,21 @@ code {
   cursor: pointer;
 }
 
-/* "← All Files" and "Export": active links, muted text, no underline */
+/* "← All Files" and the pass you are not on: active links, muted text, no underline */
 .toolbar-tab-link {
   color: var(--secondary-text);
   border-bottom-color: transparent;
 }
 
-/* "Validate": current page, primary text, underlined; not interactive */
+/* The pass you are on: primary text, underlined; not interactive */
 .toolbar-tab-current {
   color: var(--primary-text);
   border-bottom-color: var(--primary-text);
+  cursor: default;
+}
+
+/* A tab with nowhere to go: the pass switch is out of reach while a full panel — the grid
+   editor, a table review, a cell edit — stands over the editor. */
+.toolbar-tab[aria-disabled='true'] {
   cursor: default;
 }

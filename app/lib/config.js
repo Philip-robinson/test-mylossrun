@@ -999,12 +999,6 @@ export function cellEditorScreenId() {
 }
 
 // Export default config object
-// Extraction mechanism recorded on a table no mechanism has read: the editor knows its
-// grid but nothing has read a cell of it. Mirrors the service enum member of the same name.
-export function unknownExtractionMechanism() {
-  return 'UNKNOWN';
-}
-
 export default {
   baseUrl,
   resizeDebounceMs,
@@ -1190,5 +1184,4 @@ export default {
   specialToolColouredTableHelpId,
   specialToolColouredCellHelpId,
   specialToolColouredAreaHelpId,
-  unknownExtractionMechanism,
 };

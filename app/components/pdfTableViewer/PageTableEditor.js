@@ -772,9 +772,7 @@ export default function PageTableEditor({
           displayPage,
           returned
         );
-        // findTableById, not a top-level scan: a table joined into another table's
-        // group sits in its root's `next` map and a scan cannot see it.
-        const detected = findTableById(merged, t.tableId);
+        const detected = merged.find((x) => x.tableId === t.tableId);
         // Nothing was detected FOR THIS TABLE when no returned table overlaps its border (or
         // when the merge dropped it as a duplicate of a bigger-overlap match). Its own entry
         // then still has no grid, so there is nothing to commit.

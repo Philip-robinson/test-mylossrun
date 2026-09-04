@@ -3511,21 +3511,30 @@ describe('PDFEditTableStructure', () => {
     expect(ids.indexOf('B')).toBe(1); // B untouched at index 1
   });
 
-  test('a click too near the right edge shows "Not enough room" and creates nothing', async () => {
+  // A rectangle over an edge is TRIMMED to the page rather than refused. The finders reject
+  // a hint straying outside the unit page at all, so a stored rectangle that does could
+  // never be read — and a region that was never read is flagged for review for ever, with
+  // nothing on the review screen to correct.
+  test('a click too near the right edge trims the new table to the page', async () => {
     const middle = await renderForDrag(
       singleTable({ bounds: { left: 0, top: 0, width: 0.05, height: 0.05 } })
     );
 
-    // Click at (950, 500): L=0.95, W=0.1 -> L+W=1.05 > 1 -> off the page.
+    // Click at (950, 500): L=0.95, W=0.1 -> L+W=1.05, trimmed to a width of 0.05.
     clickEmptyArea(middle, { x: 950, y: 500 });
     await screen.findByRole('menu');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Add table' }));
 
-    // "Not enough room" is surfaced via a toast (same mechanism as the Export button).
-    await waitFor(() => expect(toast).toHaveBeenCalledWith('Not enough room'));
-    // No add, Save disabled, nothing saved. (Menu closed on failure so no hidden:true.)
-    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
-    expect(saveTables).not.toHaveBeenCalled();
+    const save = await screen.findByRole('button', { name: /save/i });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+
+    const added = saveTables.mock.calls[0][1].find((t) => t.tableId !== 't-1');
+    expect(added.bounds.left).toBeCloseTo(0.95, 6);
+    expect(added.bounds.width).toBeCloseTo(0.05, 6);
+    expect(added.columnWidths[0].value).toBeCloseTo(0.05, 6);
+    expect(toast).not.toHaveBeenCalledWith('Not enough room');
   });
 
   test('a click whose new rectangle would overlap an existing same-page table shows "Not enough room"', async () => {

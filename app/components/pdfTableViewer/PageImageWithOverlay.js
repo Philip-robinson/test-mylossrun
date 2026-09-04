@@ -52,6 +52,7 @@ import {
   clampBoundaryTarget,
   cleanupAxis,
   confidenceColour,
+  clampToUnitPage,
   cumulative,
   distanceOutsideTable,
   identityMap,
@@ -770,15 +771,27 @@ export function PageImageWithOverlay({
   // append when the page had none) and commit via onEditTables.
   const handleAddTable = () => {
     if (!menu || !menu.addTable) return;
-    const T = menu.T;
-    const L = menu.L;
-    const W = 100 / pixelWidth; // page-fraction width of the default 1 column
-    const H = 20 / pixelHeight; // page-fraction height of the default 1 row
+    // Trimmed to the page rather than refused for running over an edge. The finders reject a
+    // hint straying outside the unit page at all, so a stored rectangle that does can never
+    // be read — and a region that was never read is flagged for review for ever, with
+    // nothing on the review screen to correct. A default-sized table anchored near an edge
+    // is what the click asked for; the part of it on the page is what it can have.
+    const {
+      left: L,
+      top: T,
+      width: W,
+      height: H,
+    } = clampToUnitPage({
+      left: menu.L,
+      top: menu.T,
+      width: 100 / pixelWidth, // page-fraction width of the default 1 column
+      height: 20 / pixelHeight, // page-fraction height of the default 1 row
+    });
     const P = page; // 0-based
     const list = metadataTables ?? [];
 
-    // Room check 1: fits on the page.
-    const fitsOnPage = L >= 0 && T >= 0 && L + W <= 1 && T + H <= 1;
+    // Room check 1: something of it is left on the page.
+    const fitsOnPage = W > 0 && H > 0;
 
     // Room check 2: strict (edge-touching allowed) non-overlap with same-page tables.
     const candidate = { left: L, top: T, width: W, height: H };

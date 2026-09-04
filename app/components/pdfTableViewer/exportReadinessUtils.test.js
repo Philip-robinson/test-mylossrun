@@ -2,10 +2,13 @@ import {
   allExportReady,
   isExportReady,
   lowConfidenceValues,
+  shownSectionTitles,
 } from 'components/pdfTableViewer/exportReadinessUtils';
 
 const HIGH = 80;
 const READY = 6;
+// The name the Section Title Row tool writes, whose column the merge splits on and drops.
+const PLACEHOLDER = '~~SECTION-TITLE~~';
 
 // A table prepared far enough for the Review button to be offered, with whatever values
 // the case is about.
@@ -201,17 +204,24 @@ describe('isExportReady', () => {
   it('still counts a linked member\'s section title values', () => {
     const root = readyTable({
       cells: [cell(0, 0, 99)],
+      grid: [['t-1'], ['joined-1']],
       next: {
         'joined-1': {
           tableId: 'joined-1',
           pdfPage: 1,
-          cells: [cell(0, 0, 90)],
-          sectionTitles: [{ data: { text: 'Motor', confidence: 15 } }],
+          cells: [cell(0, 0, 90), cell(1, 0, 90)],
+          sectionTitles: [
+            {
+              tableRow: 0,
+              columnName: PLACEHOLDER,
+              data: { text: 'Motor', confidence: 15 },
+            },
+          ],
         },
       },
     });
 
-    expect(isExportReady(root, HIGH, READY)).toBe(false);
+    expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(false);
   });
 
   // A group's merged grid takes its header rows from the grid's TOP ROW and every table's
@@ -271,6 +281,163 @@ describe('isExportReady', () => {
     });
 
     expect(isExportReady(root, HIGH, READY)).toBe(false);
+  });
+
+  // The merged grid's header block is as deep as the ROOT's, so a top-row member whose own
+  // header block goes deeper keeps rows the merge draws neither as header rows nor as data
+  // rows. They are hidden exactly as a stacked member's are, and are not counted.
+  it('ignores a side-by-side member\'s header cells below the root\'s header block', () => {
+    const root = readyTable({
+      cells: [cell(0, 0, 99)],
+      headerCount: 2,
+      grid: [['t-1', 'joined-1']],
+      next: {
+        'joined-1': {
+          tableId: 'joined-1',
+          pdfPage: 1,
+          headerCount: 4,
+          cells: [cell(2, 0, 20), cell(3, 0, 30), cell(4, 0, 99)],
+        },
+      },
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(true);
+  });
+
+  // The merge splits the grid on the placeholder column and keeps ONE section title per
+  // distinct value: the one carried when that value's first row was emitted. A second
+  // section title reading the same text supplies rows to a tab that names the first, so it
+  // is drawn nowhere the reviewer could correct it. Two section titles that were never read
+  // both read as blank, which is how a stacked group of unread section titles used to stick
+  // on "Review" for ever.
+  describe('section titles the split leaves unreachable', () => {
+    // A stacked group of `texts`, one member per entry after the root, each carrying a
+    // section title on its first row and a data row below it.
+    const stackedGroup = (texts) => ({
+      tableId: 't-1',
+      confirmationStage: READY,
+      cells: [cell(0, 0, 99)],
+      grid: texts.map((_, index) => [index === 0 ? 't-1' : `joined-${index}`]),
+      next: Object.fromEntries(
+        texts.slice(1).map((text, index) => [
+          `joined-${index + 1}`,
+          {
+            tableId: `joined-${index + 1}`,
+            pdfPage: index + 1,
+            cells: [cell(0, 0, 99), cell(1, 0, 99)],
+            sectionTitles: [
+              {
+                tableRow: 0,
+                columnName: PLACEHOLDER,
+                data: { text, confidence: 10 },
+              },
+            ],
+          },
+        ])
+      ),
+    });
+
+    it('shows the first section title of each distinct value and no other', () => {
+      const shown = shownSectionTitles(
+        stackedGroup([null, 'Motor', 'Property', 'Motor']),
+        PLACEHOLDER
+      );
+
+      expect(shown.get('joined-1')).toEqual(new Set([0]));
+      expect(shown.get('joined-2')).toEqual(new Set([0]));
+      expect(shown.get('joined-3')).toBeUndefined();
+    });
+
+    it('counts the first of two section titles reading the same text', () => {
+      const root = stackedGroup([null, 'Motor', 'Motor']);
+
+      expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(false);
+    });
+
+    // Both members' section titles are unread, so both read blank; the first claims that
+    // value and the second can never be reached. With the first corrected there is nothing
+    // left on the review screen and the group is ready.
+    it('accepts a group whose only remaining values are unreachable duplicates', () => {
+      const root = stackedGroup([null, null, null]);
+      root.next['joined-1'].sectionTitles[0].data = { text: '', confidence: 99 };
+
+      expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(true);
+    });
+
+    // The rows above a group's first section title carry no value at all, so they claim the
+    // blank tab for no section title — and an unread one below can never reach it.
+    it('ignores a blank section title whose tab the rows above it already claimed', () => {
+      const root = stackedGroup([null, null]);
+      root.headerCount = 0;
+      root.cells = [cell(0, 0, 99), cell(1, 0, 99)];
+
+      expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(true);
+    });
+
+    // Only the spine carries a section-title value forward. A table joined ALONGSIDE one has
+    // its section-title rows dropped from its data rows and its value carried nowhere.
+    it('ignores a section title on a table joined alongside the spine', () => {
+      const root = {
+        tableId: 't-1',
+        confirmationStage: READY,
+        cells: [cell(0, 0, 99), cell(1, 0, 99)],
+        grid: [['t-1', 'joined-1']],
+        next: {
+          'joined-1': {
+            tableId: 'joined-1',
+            pdfPage: 0,
+            cells: [cell(0, 0, 99), cell(1, 0, 99)],
+            sectionTitles: [
+              {
+                tableRow: 0,
+                columnName: PLACEHOLDER,
+                data: { text: 'Motor', confidence: 10 },
+              },
+            ],
+          },
+        },
+      };
+
+      expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(true);
+    });
+
+    // Nothing is carried onto a row that never comes, so the value names no tab.
+    it('ignores a section title with no row below it', () => {
+      const root = {
+        tableId: 't-1',
+        confirmationStage: READY,
+        cells: [cell(0, 0, 99), cell(1, 0, 99)],
+        rowHeights: [{ value: 1 }, { value: 1 }],
+        sectionTitles: [
+          {
+            tableRow: 1,
+            columnName: PLACEHOLDER,
+            data: { text: 'Motor', confidence: 10 },
+          },
+        ],
+      };
+
+      expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(true);
+    });
+
+    // A section title named for a column of its own is not split on: that column survives
+    // into the merged grid, so its value is drawn there and stays correctable.
+    it('counts a section title named for a column of its own', () => {
+      const root = {
+        tableId: 't-1',
+        confirmationStage: READY,
+        cells: [cell(0, 0, 99), cell(1, 0, 99)],
+        sectionTitles: [
+          {
+            tableRow: 0,
+            columnName: 'Year',
+            data: { text: '2024', confidence: 10 },
+          },
+        ],
+      };
+
+      expect(isExportReady(root, HIGH, READY, PLACEHOLDER)).toBe(false);
+    });
   });
 
   // The root's own header cells are emitted as the merged grid's header rows.

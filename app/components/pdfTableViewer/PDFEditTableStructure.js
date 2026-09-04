@@ -57,6 +57,7 @@ import {
   readyTableStage,
   resizeDebounceMs,
   reviewTableScreenId,
+  sectionTitlePlaceholderColumnName,
   stagedGridEditorEnabled,
 } from 'config';
 import useScreenHelp from 'components/help/useScreenHelp';
@@ -1174,7 +1175,12 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             // user's attention. Derived from the confidences on every read rather than
             // stored: a re-extraction can lower one, and a stage recorded while the table
             // was clean would outlive the fact it recorded.
-            const exportReady = isExportReady(t, highConfidence(), readyTableStage());
+            const exportReady = isExportReady(
+              t,
+              highConfidence(),
+              readyTableStage(),
+              sectionTitlePlaceholderColumnName()
+            );
             const editing = linked.find((x) => x.tableId === selectedTableId) ?? null;
             return (
               <Box
@@ -1434,7 +1440,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
               !allExportReady(
                 exportableTables(tables),
                 highConfidence(),
-                readyTableStage()
+                readyTableStage(),
+                sectionTitlePlaceholderColumnName()
               )
             }
             onClick={handleExport}

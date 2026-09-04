@@ -8,9 +8,9 @@ jest.mock('components/help/HelpOverlay', () => ({
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
+  cellEditorScreenId,
   documentListScreenId,
   helpSeenKeyPrefix,
-  linkTablesScreenId,
   reviewTableScreenId,
 } from 'config';
 import { helpScreens } from 'app/lib/helpContent';
@@ -78,9 +78,9 @@ function Screen({ screenId, children }) {
   return <>{children}</>;
 }
 
-// The inner screen nests inside the outer one, which is how a component standing for a
-// screen appears over one that is already live. Mounting them in separate renders is
-// also how that happens: the outer one is there first and the inner appears over it.
+// The inner screen nests inside the outer one, which is how CellEditDialog sits inside
+// a live ReviewTablePanel. Mounting them in separate renders is also how that happens:
+// the panel is there first and the dialog appears over it.
 function Harness({ outerScreenId = null, innerScreenId = null }) {
   return (
     <HelpProvider>
@@ -189,7 +189,7 @@ describe('HelpProvider', () => {
   describe('the active screen', () => {
     beforeEach(() => {
       seedSeen(reviewTableScreenId(), versionOf(reviewTableScreenId()));
-      seedSeen(linkTablesScreenId(), versionOf(linkTablesScreenId()));
+      seedSeen(cellEditorScreenId(), versionOf(cellEditorScreenId()));
     });
 
     it('is the most recently registered one', () => {
@@ -202,18 +202,18 @@ describe('HelpProvider', () => {
       rerender(
         <Harness
           outerScreenId={reviewTableScreenId()}
-          innerScreenId={linkTablesScreenId()}
+          innerScreenId={cellEditorScreenId()}
         />,
       );
 
-      expect(probe('screen')).toHaveTextContent(linkTablesScreenId());
+      expect(probe('screen')).toHaveTextContent(cellEditorScreenId());
     });
 
     it('falls back to the earlier one when the later unmounts', () => {
       const { rerender } = render(
         <Harness
           outerScreenId={reviewTableScreenId()}
-          innerScreenId={linkTablesScreenId()}
+          innerScreenId={cellEditorScreenId()}
         />,
       );
 

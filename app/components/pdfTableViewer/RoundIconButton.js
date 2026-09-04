@@ -6,7 +6,7 @@
 //
 // It takes no `config` import on purpose: the colour arrives as a prop, which keeps
 // this component free of configuration and lets each caller pick its own colour from
-// config at the point of use — `helpId` arrives the same way.
+// config at the point of use.
 
 import { IconButton } from '@mui/material';
 
@@ -14,14 +14,12 @@ export default function RoundIconButton({
   colour,
   icon,
   testId,
-  helpId,
   onClick,
   disabled,
 }) {
   return (
     <IconButton
       data-testid={testId}
-      data-help-id={helpId}
       onClick={onClick}
       disabled={disabled}
       // The hover rule repeats `backgroundColor` because MUI's default hover would

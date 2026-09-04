@@ -1,9 +1,8 @@
-import { reviewEditedCellConfidence } from 'config';
+import { reviewEditedCellConfidence, unknownExtractionMechanism } from 'config';
 import {
   MERGE_ROLE_JOINED,
   MERGE_ROLE_ROOT,
   buildCalcCellsRequestTable,
-  clampToUnitPage,
   buildCalcHint,
   buildRecalcHint,
   changedColouredAreaRects,
@@ -22,6 +21,7 @@ import {
   mergedCells,
   metadataTableToThumbnailOverlay,
   overlapArea,
+  pageTableName,
   findTableById,
   reconcileAxisEdit,
   replaceTableById,
@@ -166,7 +166,7 @@ describe('mergeFindGridLines — bounds-overlap matching', () => {
     const result = mergeFindGridLines(tables, 0, [ret(0.5, 0.5, 0.2, 0.2)]);
     expect(result).toHaveLength(2);
     const added = result.find((t) => t.tableId !== 'A');
-    expect(added.name).toBe('');
+    expect(added.name).not.toBe('');
     expect(added.pdfPage).toBe(0);
     expect(added.bounds.left).toBeCloseTo(0.5, 10);
   });
@@ -202,7 +202,7 @@ describe('mergeFindGridLines — bounds-overlap matching', () => {
     const result = mergeFindGridLines(tables, 0, [ret(0, 0, 0.2, 0.2)]);
     expect(result).toHaveLength(2);
     expect(result.find((t) => t.tableId === 'A').deleted).toBe(true);
-    expect(result.find((t) => t.tableId !== 'A').name).toBe('');
+    expect(result.find((t) => t.tableId !== 'A').name).not.toBe('');
   });
 
   it('re-derives tableInPage by bounds.top then bounds.left across the page live tables', () => {
@@ -597,74 +597,7 @@ describe('calculate-cells request/merge helpers', () => {
     ...extra,
   });
 
-  // The finders refuse a hint that strays outside the unit page at all, and a drag that
-  // began a pixel off the image edge produces exactly that — a section-title area at
-  // left = -0.0059 took down every calculate-cells call its page made.
-  describe('clampToUnitPage', () => {
-    it('leaves a rectangle already inside the page alone', () => {
-      const bounds = { left: 0.1, top: 0.2, width: 0.3, height: 0.4 };
-      expect(clampToUnitPage(bounds)).toEqual(bounds);
-    });
-
-    it('trims an overhanging edge and keeps the edge that is inside', () => {
-      expect(
-        clampToUnitPage({ left: -0.006, top: 0.18, width: 0.123, height: 0.04 })
-      ).toEqual({
-        left: 0,
-        top: 0.18,
-        // The right edge stood at 0.117 and stays there: only the overhang goes.
-        width: 0.11699999999999999,
-        height: 0.04,
-      });
-    });
-
-    it('is exactly identity for a rectangle it does not have to trim', () => {
-      // Not merely equal: the same numbers. Recomputing a width from its edges loses a few
-      // ulps, and every rectangle the editor sends goes through here.
-      const bounds = { left: 0.30000000000000004, top: 0.1, width: 0.3, height: 0.4 };
-      expect(clampToUnitPage(bounds).width).toBe(0.3);
-      expect(clampToUnitPage(bounds).left).toBe(0.30000000000000004);
-    });
-
-    it('trims an overhang past the far edge too', () => {
-      expect(
-        clampToUnitPage({ left: 0.9, top: 0.9, width: 0.3, height: 0.3 })
-      ).toEqual({ left: 0.9, top: 0.9, width: 0.09999999999999998, height: 0.09999999999999998 });
-    });
-
-    it('gives a rectangle wholly outside the page no area', () => {
-      // Nothing of it is on the page, so there is nothing to read; the finders refuse a
-      // zero-area rectangle in turn, which is the right answer rather than a silent guess.
-      const clamped = clampToUnitPage({ left: -0.5, top: -0.5, width: 0.2, height: 0.2 });
-      expect(clamped.width).toBe(0);
-      expect(clamped.height).toBe(0);
-    });
-  });
-
   describe('buildCalcCellsRequestTable', () => {
-    it('trims a stored special area that strays off the page', () => {
-      // The draw path trims new rectangles, but a document saved before it did carries one
-      // for good: trimming on the way out is what stops it failing every call.
-      const request = buildCalcCellsRequestTable(
-        calcTable({
-          sectionTitles: [
-            {
-              tableRow: 1,
-              delete: false,
-              columnName: null,
-              data: {
-                bounds: { left: -0.006, top: 0.4, width: 0.3, height: 0.05 },
-                text: null,
-                confidence: null,
-              },
-            },
-          ],
-        })
-      );
-      expect(request.specials[0].left).toBe(0);
-      expect(request.specials[0].width).toBeCloseTo(0.294, 10);
-    });
-
     it('emits the table bounds, tableInPage and one entry per cell with its own bounds', () => {
       const request = buildCalcCellsRequestTable(calcTable());
       expect(request.left).toBeCloseTo(0.1, 10);
@@ -2278,5 +2211,158 @@ describe('additional tables', () => {
     it('reports no tables line for a plain table', () => {
       expect(tableSizeLabel(tbl('r', 0, 0.1, 0.1, 0.2, 0.2)).tablesLine).toBeNull();
     });
+  });
+});
+
+describe('pageTableName', () => {
+  it('renders a 0-based page and index 1-based', () => {
+    expect(pageTableName(0, 0)).toBe('Page 1 Table 1');
+  });
+
+  it('increments both page and index', () => {
+    expect(pageTableName(3, 2)).toBe('Page 4 Table 3');
+  });
+});
+
+describe('mergeFindGridLines — tables joined into another table root', () => {
+  // ROOT holds MEMBER in its `next` map, both on page 0. Joining moves a member off the
+  // top-level list, so only ROOT is passed in; MEMBER is reachable through `next` alone.
+  const grouped = () => [
+    tbl('ROOT', 0, 0, 0, 0.2, 0.2, {
+      grid: [['ROOT', 'MEMBER']],
+      next: {
+        MEMBER: tbl('MEMBER', 0, 0.5, 0.5, 0.2, 0.2, {
+          headerCount: 2,
+          title: { bounds: { left: 0.5, top: 0.45, width: 0.2, height: 0.04 }, text: 'M', confidence: 90 },
+          sectionTitles: [{ tableRow: 1, text: 's', confidence: 70 }],
+          footer: null,
+          confirmationStage: 3,
+          extractionMechanism: 'COMBINED_LOCAL',
+          cells: [],
+        }),
+      },
+    }),
+  ];
+
+  const memberOf = (result) => result[0].next.MEMBER;
+
+  it('updates the joined member in place instead of appending a new table', () => {
+    const result = mergeFindGridLines(grouped(), 0, [ret(0.5, 0.5, 0.4, 0.4)]);
+
+    expect(result).toHaveLength(1);
+    const member = memberOf(result);
+    expect(member.bounds.left).toBeCloseTo(0.5, 10);
+    expect(member.bounds.width).toBeCloseTo(0.4, 10);
+    expect(member.columnWidths[0].value).toBeCloseTo(0.4, 10);
+  });
+
+  it('keeps the member identity and its place in the group', () => {
+    const result = mergeFindGridLines(grouped(), 0, [ret(0.5, 0.5, 0.4, 0.4)]);
+    const member = memberOf(result);
+
+    expect(member.tableId).toBe('MEMBER');
+    expect(member.name).toBe('MEMBER');
+    expect(member.title.text).toBe('M');
+    expect(member.headerCount).toBe(2);
+    expect(member.sectionTitles).toHaveLength(1);
+    expect(member.confirmationStage).toBe(3);
+    expect(member.extractionMechanism).toBe('COMBINED_LOCAL');
+    expect(Object.keys(result[0].next)).toEqual(['MEMBER']);
+    expect(result[0].grid).toEqual([['ROOT', 'MEMBER']]);
+  });
+
+  it('leaves the page holding the same number of tables', () => {
+    const before = tablesOnPage(grouped(), 0).length;
+    const after = tablesOnPage(mergeFindGridLines(grouped(), 0, [ret(0.5, 0.5, 0.4, 0.4)]), 0).length;
+    expect(after).toBe(before);
+  });
+
+  it('never hard-deletes a member, while a top-level neighbour still is', () => {
+    // One returned rect covering ROOT, MEMBER and top-level NEIGHBOUR. ROOT has the largest
+    // overlap and is matched; NEIGHBOUR is a spurious duplicate and goes; MEMBER stays.
+    const tables = [...grouped(), tbl('NEIGHBOUR', 0, 0.5, 0.5, 0.1, 0.1)];
+    const result = mergeFindGridLines(tables, 0, [ret(0, 0, 0.9, 0.9)]);
+
+    expect(result.map((t) => t.tableId)).toEqual(['ROOT']);
+    expect(result[0].next.MEMBER).toBeDefined();
+  });
+
+  it('re-derives tableInPage across top-level and nested tables together', () => {
+    const result = mergeFindGridLines(grouped(), 0, [ret(0.5, 0.5, 0.4, 0.4)]);
+    const positions = tablesOnPage(result, 0).map((t) => t.tableInPage);
+
+    expect(new Set(positions).size).toBe(positions.length);
+    expect(positions.every((p) => Number.isInteger(p))).toBe(true);
+  });
+
+  it('fills cells for a member it changed and does not reach one it did not', () => {
+    const changed = memberOf(mergeFindGridLines(grouped(), 0, [ret(0.5, 0.5, 0.4, 0.4)]));
+    expect(changed.cells).toHaveLength(1);
+
+    // The returned rect covers ROOT alone, so MEMBER is not matched. The closing
+    // normalise/fill pass must not reach it: repairing members nobody edited is exactly
+    // what this merge does not do.
+    const untouched = memberOf(mergeFindGridLines(grouped(), 0, [ret(0, 0, 0.2, 0.2)]));
+    expect(untouched.cells).toHaveLength(0);
+    expect(untouched.bounds).toEqual({ left: 0.5, top: 0.5, width: 0.2, height: 0.2 });
+  });
+});
+
+describe('mergeFindGridLines — an appended table is a whole table', () => {
+  // The detector split one hinted rectangle into two stacked grids. The upper half claims
+  // the hinted table; the fragment below carries no hint identity and is appended.
+  const split = () => [tbl('A', 0, 0, 0, 0.4, 0.4)];
+  const upper = ret(0, 0, 0.4, 0.2);
+  const fragment = ret(0, 0.2, 0.4, 0.2);
+
+  it('updates the hinted table from the upper half and appends the fragment', () => {
+    const result = mergeFindGridLines(split(), 0, [upper, fragment]);
+
+    expect(result).toHaveLength(2);
+    const a = result.find((t) => t.tableId === 'A');
+    expect(a.bounds.height).toBeCloseTo(0.2, 10);
+    const added = result.find((t) => t.tableId !== 'A');
+    expect(added.bounds.top).toBeCloseTo(0.2, 10);
+  });
+
+  it('names the appended table in the editor form and records UNKNOWN', () => {
+    const added = mergeFindGridLines(split(), 0, [upper, fragment]).find(
+      (t) => t.tableId !== 'A'
+    );
+
+    expect(added.name).toBe(pageTableName(0, 1));
+    expect(added.extractionMechanism).toBe(unknownExtractionMechanism());
+  });
+
+  it('gives the appended table the field set a drawn table has, and cells for its grid', () => {
+    const added = mergeFindGridLines(split(), 0, [upper, fragment]).find(
+      (t) => t.tableId !== 'A'
+    );
+
+    expect(added).toMatchObject({
+      next: null,
+      pdfPage: 0,
+      headerCount: 0,
+      confidence: 100,
+      title: null,
+      sectionTitles: null,
+      footer: null,
+      confirmationStage: null,
+    });
+    expect(added.tableId).toEqual(expect.any(String));
+    expect(added.cells.length).toBeGreaterThan(0);
+  });
+
+  it('never returns a table named with the empty string', () => {
+    const cases = [
+      [split(), [upper, fragment]],
+      [[tbl('A', 0, 0, 0, 0.1, 0.1)], [ret(0.5, 0.5, 0.2, 0.2)]],
+      [[], [ret(0.5, 0.5, 0.2, 0.2)]],
+    ];
+    for (const [tables, response] of cases) {
+      for (const t of mergeFindGridLines(tables, 0, response)) {
+        expect(t.name).not.toBe('');
+      }
+    }
   });
 });

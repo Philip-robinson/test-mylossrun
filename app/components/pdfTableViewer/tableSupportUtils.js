@@ -8,6 +8,7 @@ import {
   highConfidence,
   lowConfidence,
   reviewEditedCellConfidence,
+  unknownExtractionMechanism,
 } from 'config';
 import {
   comesAfter,
@@ -709,28 +710,43 @@ export function retainMergedCells(prevTable, geometry) {
     });
 }
 
+// The display name for a table at `index` on `page`. Both arguments are 0-based and both
+// are shown 1-based. The one form for every table name the editor creates.
+export function pageTableName(page, index) {
+  return `Page ${page + 1} Table ${index + 1}`;
+}
+
 // Merge a find-grid-lines response into the full metadata tables list. The response carries
 // only the current `page`'s tables, each ({ bounds, columnWidths, rowHeights }) describing the
 // detected grid for one table.
 //
-// Matching is by BOUNDS OVERLAP, not `tableInPage` (which is an unreliable positional index):
-// for each returned table the same-page, non-soft-deleted metadata table with the LARGEST
-// overlap area has its bounds/columnWidths/rowHeights replaced (id, name, title, stage are
-// kept, and so are its cells — re-seated onto the new grid by retainMergedCells, which drops
-// the ones the new grid has no square for). The other non-soft-deleted tables the returned
-// table also overlaps are spurious
-// duplicates and are HARD-deleted (removed from the list); this is distinct from the soft
-// `deleted` flag, which records a deliberate manual deselection and is therefore never matched,
-// resurrected, or hard-deleted here. A returned table that overlaps no live table is APPENDED as
-// a fresh table (new tableId, empty title/cells).
+// The candidate pool is THE PAGE, not the top-level list: a table joined into another
+// table's group lives in its root's `next` map, and it is a table of the page like any other.
 //
-// `tableInPage` is then re-derived for the page's live tables by ordering on bounds.top (with
-// bounds.left as the tie-break). Finally the idempotent normaliseTableBounds + fillGridCells
-// passes run so the I1/I2 geometry invariant holds and every drawn grid square has a cell.
+// Matching is by BOUNDS OVERLAP, not `tableInPage` (which is an unreliable positional index):
+// for each returned table the same-page, non-soft-deleted table with the LARGEST overlap area
+// has its bounds/columnWidths/rowHeights replaced WHERE IT LIVES (id, name, title, stage and
+// group membership are kept, and so are its cells — re-seated onto the new grid by
+// retainMergedCells, which drops the ones the new grid has no square for). The other
+// non-soft-deleted tables the returned table also overlaps are spurious duplicates and are
+// HARD-deleted, but only at the top level — see the guard below. This is distinct from the
+// soft `deleted` flag, which records a deliberate manual deselection and is therefore never
+// matched, resurrected, or hard-deleted here. A returned table that overlaps nothing on the
+// page is APPENDED.
+//
+// `tableInPage` is then re-derived for the page's live tables — nested ones included — by
+// ordering on bounds.top (with bounds.left as the tie-break). Finally the idempotent
+// normaliseTableBounds + fillGridCells passes run over every top-level table and over any
+// nested table this merge changed, so the I1/I2 geometry invariant holds and every drawn
+// grid square has a cell.
 export function mergeFindGridLines(tables, page, responseTables) {
   let list = [...(tables ?? [])];
+  // Which ids sit on the TOP-LEVEL list. A joined member is not among them, and that is what
+  // gates the hard-delete below. Ids never move between levels here, so one capture holds.
+  const topLevelIds = new Set(list.map((t) => t.tableId));
   const claimed = new Set(); // tableIds already matched to a returned table
   const toDelete = new Set(); // tableIds to hard-remove (spurious overlappers)
+  const touched = new Set(); // tableIds this merge changed, matched or appended
   const appended = [];
 
   for (const returned of responseTables ?? []) {
@@ -739,22 +755,33 @@ export function mergeFindGridLines(tables, page, responseTables) {
       columnWidths: returned.columnWidths,
       rowHeights: returned.rowHeights,
     };
-    const overlappers = list.filter(
+    const overlappers = tablesOnPage(list, page).filter(
       (t) =>
-        t.pdfPage === page &&
-        !t.deleted &&
         !claimed.has(t.tableId) &&
         !toDelete.has(t.tableId) &&
         overlapArea(t.bounds, returned.bounds) > 0
     );
     if (overlappers.length === 0) {
+      // Nothing on the page accounts for this grid. The way that happens in practice is a
+      // detector split: one hinted rectangle spanning two stacked tables comes back as two,
+      // the upper half claims the hinted table, and the fragment below — which carries no
+      // hint identity — lands here. It is a real table, so it is built like one the user
+      // drew rather than as a shell. `name` is never '': every fallback that would supply
+      // one tests for absence, and an empty string is present, so '' is nameless for ever.
       appended.push({
         tableId: newUUID(),
-        name: '',
+        name: pageTableName(page, tablesOnPage(list, page).length + appended.length),
+        next: null,
         pdfPage: page,
         tableInPage: 0, // re-derived below
+        headerCount: 0,
+        confidence: 100,
         title: null,
-        cells: [],
+        sectionTitles: null,
+        footer: null,
+        cells: [], // filled for the detected grid by the closing pass
+        extractionMechanism: unknownExtractionMechanism(),
+        confirmationStage: null,
         ...geometry,
       });
       continue;
@@ -765,21 +792,30 @@ export function mergeFindGridLines(tables, page, responseTables) {
         : best
     );
     claimed.add(match.tableId);
-    list = list.map((t) =>
-      t.tableId === match.tableId
-        ? { ...t, ...geometry, cells: retainMergedCells(t, geometry) }
-        : t
-    );
+    touched.add(match.tableId);
+    // replaceTableById, not a top-level map: it descends into the owning root's `next` when
+    // the match is nested, so a member is updated inside its group rather than lost.
+    list = replaceTableById(list, match.tableId, {
+      ...match,
+      ...geometry,
+      cells: retainMergedCells(match, geometry),
+    });
     for (const o of overlappers) {
-      if (o.tableId !== match.tableId) toDelete.add(o.tableId);
+      // A joined member is never pulled out of its group by a re-detection. Only a top-level
+      // neighbour can be a spurious duplicate: a left-behind duplicate is visible and
+      // removable, a dissolved group is neither.
+      if (o.tableId !== match.tableId && topLevelIds.has(o.tableId)) toDelete.add(o.tableId);
     }
   }
 
   let result = list.filter((t) => !toDelete.has(t.tableId)).concat(appended);
+  for (const table of appended) touched.add(table.tableId);
+  const resultTopLevelIds = new Set(result.map((t) => t.tableId));
 
-  // Re-derive tableInPage for this page's live tables by position (top, then left).
-  const ranked = result
-    .filter((t) => t.pdfPage === page && !t.deleted)
+  // Re-derive tableInPage for this page's live tables by position (top, then left), nested
+  // tables included: the position is used as an identity key elsewhere, so two tables on one
+  // page must never share one.
+  const ranked = tablesOnPage(result, page)
     .slice()
     .sort(
       (a, b) =>
@@ -787,11 +823,19 @@ export function mergeFindGridLines(tables, page, responseTables) {
         (a.bounds?.left ?? 0) - (b.bounds?.left ?? 0)
     );
   const rankById = new Map(ranked.map((t, i) => [t.tableId, i]));
-  result = result.map((t) =>
-    rankById.has(t.tableId) ? { ...t, tableInPage: rankById.get(t.tableId) } : t
+  result = mapAllTables(result, (t) =>
+    rankById.has(t.tableId) && t.tableInPage !== rankById.get(t.tableId)
+      ? { ...t, tableInPage: rankById.get(t.tableId) }
+      : t
   );
 
-  return result.map(normaliseTableBounds).map(fillGridCells);
+  // Every top-level table as before, plus any nested table this merge changed. Not wider:
+  // repairing members nobody edited is not this function's job.
+  return mapAllTables(result, (t) =>
+    resultTopLevelIds.has(t.tableId) || touched.has(t.tableId)
+      ? fillGridCells(normaliseTableBounds(t))
+      : t
+  );
 }
 
 // Structural equality for a PDFBoundedText-shaped title (bounds + text + confidence), or null.
@@ -939,35 +983,12 @@ export function recalcShortfallMessage(requestedHints, returnedTables) {
 // The four page-fraction fields of a rectangle, stripped of anything else a metadata
 // BoundingRectangle carries (the per-edge border widths). The request DTOs are plain
 // Rectangles, so sending the extras would be noise.
-// A rectangle trimmed to the unit page, keeping whichever edges are already inside it.
-// The finders refuse a hint that strays outside the page at all (see
-// find_tables_common._validate_rectangle_in_unit_page) — no tolerance, not even for the
-// fraction of a pixel a drag that began just off the image produces — and a rectangle drawn
-// over the edge is asking for the part of the page that exists, so trimming is what it meant.
-// A rectangle lying wholly outside comes back with no area, which the finders refuse in turn:
-// there is genuinely nothing there to read.
-// One axis of it. Exactly identity for an axis already inside 0..1: recomputing an extent as
-// `end - start` does not round-trip in binary floating point, so trimming unconditionally
-// would perturb every rectangle the editor sends by a few ulps for the sake of the rare one
-// that needs it — and an axis is trimmed on its own, so a horizontal overhang cannot move a
-// rectangle's height.
-const clampAxis = (start, extent) => {
-  if (start >= 0 && start + extent <= 1) return [start, extent];
-  const newStart = Math.min(Math.max(start, 0), 1);
-  const end = Math.min(Math.max(start + extent, newStart), 1);
-  return [newStart, end - newStart];
-};
-
-export const clampToUnitPage = (bounds) => {
-  const [left, width] = clampAxis(bounds.left, bounds.width);
-  const [top, height] = clampAxis(bounds.top, bounds.height);
-  return { left, top, width, height };
-};
-
-// Trimmed to the unit page on the way out, so a document already carrying a rectangle that
-// strays over an edge — drawn before the draw path trimmed them — can still be read rather
-// than failing every calculate-cells call the page makes for as long as it exists.
-const plainRect = (bounds) => clampToUnitPage(bounds);
+const plainRect = (bounds) => ({
+  left: bounds.left,
+  top: bounds.top,
+  width: bounds.width,
+  height: bounds.height,
+});
 
 // The ordered special areas of a table, and the SINGLE source of that order: the request
 // builder emits them in this order and the merge reads the response's positional `specials`

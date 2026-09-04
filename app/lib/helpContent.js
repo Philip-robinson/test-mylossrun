@@ -17,11 +17,7 @@ import {
   boundaryCreateTableHelpId,
   boundaryDeleteTableHelpId,
   boundaryPassScreenId,
-  cellEditCancelHelpId,
-  cellEditConfidenceHelpId,
-  cellEditConfirmHelpId,
-  cellEditImageHelpId,
-  cellEditNextHelpId,
+  cellEditorScreenId,
   contentsPassScreenId,
   documentListCountsHelpId,
   documentListScreenId,
@@ -283,9 +279,9 @@ function documentOverviewTips() {
       helpId: documentOverviewExportHelpId(),
       title: 'Export button',
       body: [
-        'This is only enabled if all non-deleted tables are ',
-        { bold: 'Ready for Review' },
-        '. Clicking it will create an Excel Workbook from the accumulated data.',
+        'Clicking it will create an Excel Workbook from the accumulated data of every non-deleted table. It does not wait for the tables to be ',
+        { bold: 'Ready for Export' },
+        ', so a document part way through review can be exported as it stands.',
       ],
     },
   ];
@@ -860,7 +856,7 @@ export function helpScreens() {
       ],
     },
     [reviewTableScreenId()]: {
-      version: 4,
+      version: 3,
       name: 'Extraction review',
       summary: [
         'This is the data that will be written out to the workbook. Every cell is editable — ',
@@ -920,43 +916,6 @@ export function helpScreens() {
           ],
         },
         {
-          helpId: cellEditImageHelpId(),
-          title: 'Raw Image',
-          body: [
-            'This is the image of this cell in the original document so you can see ',
-            'what it originally said.',
-          ],
-        },
-        {
-          helpId: cellEditCancelHelpId(),
-          title: 'Close',
-          body: ['Close the cell editor without saving the changes made.'],
-        },
-        {
-          helpId: cellEditConfirmHelpId(),
-          title: 'Save',
-          body: [
-            'Any text just entered is saved, confidence in that cell is set to 100% ',
-            'and the cell editor is closed.',
-          ],
-        },
-        {
-          helpId: cellEditNextHelpId(),
-          title: 'Save and Next',
-          body: [
-            'This saves any edits, sets confidence to 100% and moves the editor to the ',
-            'next low quality cell if there is one.',
-          ],
-        },
-        {
-          helpId: cellEditConfidenceHelpId(),
-          title: 'Confidence',
-          body: [
-            'This is the confidence rating given to this cell, 100% is full confidence ',
-            'less than 80% is considered low confidence.',
-          ],
-        },
-        {
           helpId: reviewTabsHelpId(),
           title: 'Sub table selection tabs',
           body: [
@@ -975,6 +934,16 @@ export function helpScreens() {
         },
         ...toolbarValidateTips(),
       ],
+    },
+    [cellEditorScreenId()]: {
+      version: 2,
+      name: 'Correcting a cell',
+      summary: [
+        'The picture of the cell as it appears in the PDF, beside the text that was read ',
+        'from it. Change the text, then press Tab to save it and move on to the next ',
+        'low-confidence cell.',
+      ],
+      tips: [...toolbarValidateTips()],
     },
   };
 }

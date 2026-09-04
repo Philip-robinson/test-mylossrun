@@ -105,16 +105,7 @@ export default function PageTableEditor({
   onEditorModeChange = () => {},
   // Saves the document, resolving to whether the save reached the server. "Validate Tables"
   // persists the boundary pass through it before the contents pass begins.
-  //
-  // Takes what the flush reported, because a flush and the save that follows it happen in one
-  // handler: the flush's setTables has not re-rendered the host yet, so a save reading its own
-  // closure would send the list from BEFORE the edit. See `flushPending`.
   onSave = async () => true,
-  // Registers `leaveFor` with the host, so a page change the host drives — a thumbnail, the
-  // Document Overview list — settles this page the same way the editor's own Next/Previous
-  // does. Without it those routes reach the page-change effect below with a border move still
-  // held, and it discards it.
-  onRegisterLeave = () => {},
 }) {
   const staged = stagedGridEditorEnabled();
 
@@ -386,18 +377,10 @@ export default function PageTableEditor({
   //
   // Called on the way out of a table, a page or the boundary pass, and nowhere else: this is
   // the one place a border move or a coloured-area edit reaches the document.
-  // Returns what it reported, as `{ tables, colouredAreaPage }`. React has not re-rendered
-  // the host by the time the caller's next statement runs, so a save made in the same handler
-  // cannot read the flushed values off the host's state — it has to be handed them.
   const flushPending = useCallback(
     (tables = normalisedTables) => {
-      let colouredAreaPage = null;
       if (pendingColouredAreas?.page === displayPage) {
         onColouredAreasChange(displayPage, pendingColouredAreas.areas);
-        colouredAreaPage = {
-          page: displayPage,
-          areas: pendingColouredAreas.areas,
-        };
       }
       if (
         tables.length !== metadataTables.length ||
@@ -407,7 +390,6 @@ export default function PageTableEditor({
       }
       setPendingTables(null);
       setPendingColouredAreas(null);
-      return { tables, colouredAreaPage };
     },
     [
       pendingColouredAreas,
@@ -790,7 +772,9 @@ export default function PageTableEditor({
           displayPage,
           returned
         );
-        const detected = merged.find((x) => x.tableId === t.tableId);
+        // findTableById, not a top-level scan: a table joined into another table's
+        // group sits in its root's `next` map and a scan cannot see it.
+        const detected = findTableById(merged, t.tableId);
         // Nothing was detected FOR THIS TABLE when no returned table overlaps its border (or
         // when the merge dropped it as a duplicate of a bigger-overlap match). Its own entry
         // then still has no grid, so there is nothing to commit.
@@ -850,7 +834,7 @@ export default function PageTableEditor({
         // Reported through the flush rather than as a bare commit: what was held provisionally
         // travels with what the detector returned, as ONE write, and only now — a failed call
         // reports nothing and leaves it held for the next attempt.
-        const flushed = flushPending(
+        flushPending(
           mergeFindGridLines(normalisedTables, displayPage, response?.tables ?? [])
         );
         // The detected grid now reflects every moved border, so nothing is outstanding. Inside
@@ -858,7 +842,7 @@ export default function PageTableEditor({
         // leave Borders retries rather than silently skipping.
         changedBoundsRef.current = new Set();
         // Only now — after the geometry whatever comes next draws from has merged — move on.
-        after(flushed);
+        after();
       } catch (err) {
         toast.error(err.message);
       } finally {
@@ -903,8 +887,6 @@ export default function PageTableEditor({
   // The rebuild is chosen and started against the list that INCLUDES what was held, since it is
   // that geometry the detector is being asked about; the flush merely puts the same edits on the
   // document, so the merge it commits afterwards carries them either way.
-  // `move` receives what the flush reported, so a move that saves can send the flushed list
-  // rather than the host's not-yet-updated state.
   const leaveFor = useCallback(
     (move) => {
       const rebuild = owedRebuild();
@@ -912,17 +894,11 @@ export default function PageTableEditor({
         rebuild(move);
         return;
       }
-      move(flushPending());
+      flushPending();
+      move();
     },
     [owedRebuild, flushPending]
   );
-
-  // Hand `leaveFor` to the host. A ref on the host's side, so re-registering never re-renders
-  // it; re-registered whenever `leaveFor` changes so the host never holds a stale closure.
-  useEffect(() => {
-    onRegisterLeave(leaveFor);
-    return () => onRegisterLeave(null);
-  }, [onRegisterLeave, leaveFor]);
 
   // Cancel a just-created table: remove it from the list and clear the selection/flag.
   const cancelCreated = useCallback(() => {
@@ -1052,8 +1028,8 @@ export default function PageTableEditor({
   // switch — the toast the host raised is the user's feedback, the document stays dirty, and
   // the user stays in borderMode to retry.
   const handleValidateTables = useCallback(() => {
-    leaveFor(async (flushed) => {
-      const saved = await onSave(flushed);
+    leaveFor(async () => {
+      const saved = await onSave();
       if (!saved) return;
       setEditorMode('grid');
       setTool(null);
@@ -1076,8 +1052,8 @@ export default function PageTableEditor({
   // with none chosen; the boundary pass is about the page, so the table the user was just
   // working on is still a sensible thing to have selected.
   const handleValidateBorders = useCallback(() => {
-    leaveFor(async (flushed) => {
-      const saved = await onSave(flushed);
+    leaveFor(async () => {
+      const saved = await onSave();
       if (!saved) return;
       setEditorMode('border');
       setTool(null);

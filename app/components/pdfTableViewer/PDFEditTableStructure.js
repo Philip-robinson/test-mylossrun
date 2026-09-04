@@ -36,10 +36,7 @@ import {
   exportableTables,
   saveBlob,
 } from 'components/pdfTableViewer/exportUtils';
-import {
-  allExportReady,
-  isExportReady,
-} from 'components/pdfTableViewer/exportReadinessUtils';
+import { isExportReady } from 'components/pdfTableViewer/exportReadinessUtils';
 import {
   boundaryPassScreenId,
   confirmedTableStage,
@@ -57,7 +54,6 @@ import {
   readyTableStage,
   resizeDebounceMs,
   reviewTableScreenId,
-  sectionTitlePlaceholderColumnName,
   stagedGridEditorEnabled,
 } from 'config';
 import useScreenHelp from 'components/help/useScreenHelp';
@@ -278,12 +274,6 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // Per-entry refs keyed by tableId so the selected entry can be scrolled into
   // the left panel's scroll area.
   const entryRefs = useRef({});
-  // The centre editor's `leaveFor`, registered by it. Null while the editor is not mounted
-  // (the review and linking panels), in which case there is nothing held to settle.
-  const leaveEditorRef = useRef(null);
-  const registerLeave = useCallback((fn) => {
-    leaveEditorRef.current = fn;
-  }, []);
   const rightRef = useRef(null);
   const [rightWidth, setRightWidth] = useState(0);
 
@@ -436,65 +426,22 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     }
   }, [selectedPage, tables, selectedTableId]);
 
-  // Ask for a save once React has applied whatever the caller just changed. A save called
-  // directly from a handler reads the state of the render it was created in, so a flush's
-  // setTables — or a recalculation's write-back — would not be in it. Bumping this counter is
-  // batched with those updates, so the effect below runs in a render that has them all.
-  const [saveRequest, setSaveRequest] = useState(0);
-  const requestSave = useCallback(() => setSaveRequest((n) => n + 1), []);
-
-  useEffect(() => {
-    if (saveRequest === 0) return;
-    handleSave();
-    // handleSave is redefined every render; depending on it would save on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveRequest]);
-
-  // Closing, reloading or navigating away from the tab discards everything unsaved, and no
-  // handler here can prevent that: the browser allows only a synchronous prompt, not a save.
-  // Warning is therefore the most that can be done, and it is worth doing — every other exit
-  // now saves, so an unsaved document at this point means the tab is being closed on work
-  // that would otherwise have been kept.
-  useEffect(() => {
-    if (!dirty) return undefined;
-    const warn = (event) => {
-      event.preventDefault();
-      // Set for the browsers that still read it; modern ones show their own wording.
-      event.returnValue = '';
-      return '';
-    };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
-
   // Persist the current table list. On success the edit state is clean again; on
   // failure the error is surfaced and dirty is left set so the user can retry.
   //
   // Returns whether the save reached the server. The top Save button ignores that (a failure
   // is already a toast, and dirty is left set), but handleReview must not open the review
   // panel on a document the worker cannot see — hence the boolean rather than a bare void.
-  //
-  // `flushed` is what a flush made in the SAME handler reported ({ tables, colouredAreaPage }).
-  // Its setState has not re-rendered this component yet, so `tables`/`pages` here still hold the
-  // pre-flush values and the save would drop the very edit that prompted it. Given the flush's
-  // own values, they are used instead. A save with nothing flushed passes nothing.
-  const handleSave = async (flushed) => {
+  const handleSave = async () => {
     setSaving(true);
     try {
-      const tablesToSave = flushed?.tables ?? tables;
       // Send every page that carries a coloured-areas array (including an empty one,
       // so clearing a page's areas is persisted). Pages that never had the field are
       // omitted and left untouched server-side.
-      const flushedPage = flushed?.colouredAreaPage ?? null;
       const colouredAreas = (pages || [])
-        .map((p) =>
-          flushedPage && p.page === flushedPage.page
-            ? { ...p, colouredAreas: flushedPage.areas }
-            : p
-        )
         .filter((p) => Array.isArray(p.colouredAreas))
         .map((p) => ({ pdfPage: p.page, colouredAreas: p.colouredAreas }));
-      await saveTables(pdfId, tablesToSave, colouredAreas);
+      await saveTables(pdfId, tables, colouredAreas);
       setDirty(false);
       setChangedTableIds({});
       // The save scatters the edited tables into page.tables server-side and stores the
@@ -751,17 +698,6 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
           })
         );
         if (wrote) setDirty(true);
-        // The page exit that launched this has already saved what leaving settled; this
-        // reading arrived afterwards, so it needs a save of its own or it is held only in
-        // the browser until the next one.
-        //
-        // Asked for unconditionally rather than under `wrote`. That flag is assigned inside
-        // the setTables updater above, and React only runs an updater eagerly while the fiber
-        // has no update pending — which the save this page exit already asked for makes false.
-        // Reading it here would therefore see `false` whether or not anything was written. A
-        // save with nothing to send is one wasted PUT; a reading silently left unsaved is
-        // the defect this whole change is about.
-        requestSave();
       } catch (err) {
         toast.error(err.message);
       }
@@ -775,26 +711,11 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     const recalcPage = selectedPage;
     const changedIds = Object.keys(changedTableIds);
 
-    // Settle the page being left before anything else: what the centre editor holds
-    // provisionally — a moved border, a coloured area — reaches the document, and any
-    // grid-lines rebuild the boundary pass owes is made and merged first. Without this the
-    // page-change effect in PageTableEditor discards the held move, which is why a boundary
-    // set and then left by thumbnail never took effect.
-    const settle = leaveEditorRef.current ?? ((move) => move(null));
+    // Advance immediately, clearing the change set for the page we are leaving.
+    setChangedTableIds({});
+    setSelectedPage(nextPage);
 
-    settle(() => {
-      // Advance immediately, clearing the change set for the page we are leaving. The page
-      // moves before the save so navigation is never blocked on the round trip.
-      setChangedTableIds({});
-      setSelectedPage(nextPage);
-
-      recalcPageTables(recalcPage, changedIds);
-      // Persist what leaving settled. Requested rather than called, so the flush above is in
-      // the saved list; the recalculation asks for its own save when its write-back lands,
-      // since that arrives long after this handler has returned. A failed save raises its own
-      // toast and leaves `dirty` set, and the user is already on the next page.
-      requestSave();
-    });
+    recalcPageTables(recalcPage, changedIds);
   };
 
   // Layers-panel Previous/Next reaching the end of a page. The document itself wraps: past
@@ -856,18 +777,6 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     );
   };
 
-  // Leaving the editor for the PDF list unmounts everything, and the document's state goes
-  // with it. Settle and save first, for the same reason a page change does; the move is made
-  // whether or not the save succeeded, because the failed save has raised its own toast and
-  // refusing to navigate would trap the user in the editor.
-  const handleAllFiles = () => {
-    const settle = leaveEditorRef.current ?? ((move) => move(null));
-    settle(async (flushed) => {
-      await handleSave(flushed);
-      onAllFiles();
-    });
-  };
-
   // Review the extracted output of a ready table: SAVE FIRST, then hand the middle panel over
   // to the review panel, which dispatches the extraction and polls for the merged table.
   //
@@ -876,18 +785,12 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // stage advance the Mark Ready button just made — would be invisible to it. A failed save
   // therefore aborts: the toast handleSave raised is the user's feedback and the editor stays
   // put. Re-entrancy is guarded on `saving`, so a double click cannot fire two PUTs.
-  const handleReview = (tableId) => {
+  const handleReview = async (tableId) => {
     if (saving) return;
-    // Settle before saving: the review panel replaces the centre editor, so anything it still
-    // holds provisionally would be discarded on the way out and the worker would read a
-    // document without it.
-    const settle = leaveEditorRef.current ?? ((move) => move(null));
-    settle(async (flushed) => {
-      const saved = await handleSave(flushed);
-      if (!saved) return;
-      setLinkRootId(null);
-      setReviewTableId(tableId);
-    });
+    const saved = await handleSave();
+    if (!saved) return;
+    setLinkRootId(null);
+    setReviewTableId(tableId);
   };
 
   // Export the whole document: SAVE FIRST, then build one workbook covering every table
@@ -905,11 +808,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     if (saving || exporting) return;
     setExporting(true);
     try {
-      // Settle first, for the reason handleReview does: the workbook is built from stored
-      // metadata, so a held border move would be missing from it.
-      const settle = leaveEditorRef.current ?? ((move) => move(null));
-      const flushed = await new Promise((resolve) => settle(resolve));
-      const saved = await handleSave(flushed);
+      const saved = await handleSave();
       if (!saved) return;
       const filename = excelFilename(pdfName);
       const workbook = await tableToExcel({
@@ -1175,12 +1074,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             // user's attention. Derived from the confidences on every read rather than
             // stored: a re-extraction can lower one, and a stage recorded while the table
             // was clean would outlive the fact it recorded.
-            const exportReady = isExportReady(
-              t,
-              highConfidence(),
-              readyTableStage(),
-              sectionTitlePlaceholderColumnName()
-            );
+            const exportReady = isExportReady(t, highConfidence(), readyTableStage());
             const editing = linked.find((x) => x.tableId === selectedTableId) ?? null;
             return (
               <Box
@@ -1423,9 +1317,10 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
         {/* Pinned at the foot, mirroring Save at the head: one workbook covering every table
             still in the document, whichever one happens to be selected.
 
-            Held back until every table it would cover is ready for export — there is no
-            point exporting a document the user has not finished with — and until there is
-            something to cover at all. */}
+            Offered whatever state the tables are in: export is not a declaration that the
+            document is finished, and a user who wants the workbook of a part-reviewed
+            document is entitled to it. Held back only while a save or an export is already
+            in flight, and while there is nothing to cover at all. */}
         <Box sx={{ p: 1, flexShrink: 0 }}>
           <Button
             data-testid={'export-document'}
@@ -1434,15 +1329,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             size={'small'}
             fullWidth
             disabled={
-              saving ||
-              exporting ||
-              exportableTables(tables).length === 0 ||
-              !allExportReady(
-                exportableTables(tables),
-                highConfidence(),
-                readyTableStage(),
-                sectionTitlePlaceholderColumnName()
-              )
+              saving || exporting || exportableTables(tables).length === 0
             }
             onClick={handleExport}
           >
@@ -1548,7 +1435,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                   <button
                     type={'button'}
                     className={'toolbar-tab toolbar-tab-link'}
-                    onClick={handleAllFiles}
+                    onClick={onAllFiles}
                   >
                     {'← All Files'}
                   </button>
@@ -1580,7 +1467,6 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             linkingRootId={linkingRootId}
             onToggleLinking={setLinkingRootId}
             onEditorModeChange={handleEditorModeChange}
-            onRegisterLeave={registerLeave}
             deletedPreview={
               tables.find(
                 (t) => t.tableId === hoveredDeletedTableId && t.deleted

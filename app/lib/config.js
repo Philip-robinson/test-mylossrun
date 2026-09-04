@@ -948,30 +948,6 @@ export function reviewSaveHelpId() {
   return 'review-save';
 }
 
-// The cell-edit dialog's ids: the crop of the cell as the document has it, the three
-// buttons that end the edit and the confidence the value was read with. They belong to
-// the review screen's tips, the dialog being part of that screen rather than one of its
-// own.
-export function cellEditImageHelpId() {
-  return 'cell-edit-image';
-}
-
-export function cellEditCancelHelpId() {
-  return 'cell-edit-cancel';
-}
-
-export function cellEditConfirmHelpId() {
-  return 'cell-edit-confirm';
-}
-
-export function cellEditNextHelpId() {
-  return 'cell-edit-confirm-next';
-}
-
-export function cellEditConfidenceHelpId() {
-  return 'cell-edit-confidence';
-}
-
 export function specialToolColouredRowsHelpId() {
   return 'special-tool-coloured-rows';
 }
@@ -1018,7 +994,17 @@ export function reviewTableScreenId() {
   return 'reviewTable';
 }
 
+export function cellEditorScreenId() {
+  return 'cellEditor';
+}
+
 // Export default config object
+// Extraction mechanism recorded on a table no mechanism has read: the editor knows its
+// grid but nothing has read a cell of it. Mirrors the service enum member of the same name.
+export function unknownExtractionMechanism() {
+  return 'UNKNOWN';
+}
+
 export default {
   baseUrl,
   resizeDebounceMs,
@@ -1145,6 +1131,7 @@ export default {
   contentsPassScreenId,
   linkTablesScreenId,
   reviewTableScreenId,
+  cellEditorScreenId,
   dropBoxHelpId,
   documentListCountsHelpId,
   documentListTableHelpId,
@@ -1198,14 +1185,10 @@ export default {
   reviewGridHelpId,
   reviewTabsHelpId,
   reviewSaveHelpId,
-  cellEditImageHelpId,
-  cellEditCancelHelpId,
-  cellEditConfirmHelpId,
-  cellEditNextHelpId,
-  cellEditConfidenceHelpId,
   specialToolColouredRowsHelpId,
   specialToolColouredColumnsHelpId,
   specialToolColouredTableHelpId,
   specialToolColouredCellHelpId,
   specialToolColouredAreaHelpId,
+  unknownExtractionMechanism,
 };

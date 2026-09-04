@@ -1,10 +1,5 @@
 import {
   boundaryPassScreenId,
-  cellEditCancelHelpId,
-  cellEditConfidenceHelpId,
-  cellEditConfirmHelpId,
-  cellEditImageHelpId,
-  cellEditNextHelpId,
   contentsPassScreenId,
   documentOverviewEntryHelpId,
   documentOverviewExportHelpId,
@@ -20,7 +15,6 @@ import {
   documentListScreenId,
   layersNextHelpId,
   layersPreviousHelpId,
-  reviewTableScreenId,
   toolbarValidateBordersHelpId,
   toolbarValidateTablesHelpId,
   validateBordersHelpId,
@@ -247,37 +241,5 @@ describe('the toolbar pass tabs', () => {
     expect(tabTables.body).toEqual(panelTables.body);
     expect(tabBorders.title).toEqual(panelBorders.title);
     expect(tabBorders.body).toEqual(panelBorders.body);
-  });
-});
-
-// The cell-edit dialog is part of the review screen rather than a screen of its own, so
-// it is the review screen that describes the dialog's parts — and no other screen does,
-// the dialog being reachable from nowhere else.
-describe('the cell-edit dialog', () => {
-  const dialogIds = [
-    cellEditImageHelpId(),
-    cellEditCancelHelpId(),
-    cellEditConfirmHelpId(),
-    cellEditNextHelpId(),
-    cellEditConfidenceHelpId(),
-  ];
-
-  const dialogTips = (screenId) =>
-    helpScreens()[screenId].tips.filter((tip) => dialogIds.includes(tip.helpId));
-
-  it('is described by the review screen, every part of it', () => {
-    expect(dialogTips(reviewTableScreenId()).map((tip) => tip.helpId)).toEqual(
-      dialogIds,
-    );
-  });
-
-  it('is described by no other screen', () => {
-    for (const screenId of Object.keys(helpScreens())) {
-      if (screenId === reviewTableScreenId()) {
-        continue;
-      }
-
-      expect(dialogTips(screenId)).toEqual([]);
-    }
   });
 });

@@ -47,13 +47,13 @@ import {
   mergeRolesByTableId,
   moveDivider,
   overlaps,
+  pageTableName,
   reconcileAxisEdit,
   replaceTableById,
   resizeBoundary,
   splitEntryAt,
   splitMap,
   tablesOnPage,
-  clampToUnitPage,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   cellBounds,
@@ -105,20 +105,15 @@ const COLOUR_SAMPLE_MAX_PIXELS = 4000;
 
 // Build a fresh manually-created 1×1 table anchored at page-fraction bounds `b`
 // ({left, top, width, height}), spliced into `list` just after the last same-page table.
-// Returns { table, list } on success or null when nothing of the rectangle lies on the page,
-// or it overlaps an existing same-page table (edge-touching allowed). tableInPage is
-// interpolated from where the new top falls among every same-page table's top (including
-// deleted and nested `next` tables), matching the existing editor's handleAddTable.
-//
-// A rectangle running over an edge is TRIMMED to the page rather than refused. The finders
-// reject a hint straying outside the unit page at all, so a stored rectangle that does can
-// never be read — and a region that was never read is flagged for review for ever, with
-// nothing on the review screen to correct. Trimming is also what the drag meant: the part of
-// the page that exists. Only a rectangle with nothing left on the page is refused, since
-// there is then genuinely nothing to read.
+// Returns { table, list } on success or null when it does not fit the page or overlaps an
+// existing same-page table (edge-touching allowed). tableInPage is interpolated from where
+// the new top falls among every same-page table's top (including deleted and nested `next`
+// tables), matching the existing editor's handleAddTable.
 function buildManualTable(list, page, b, pixelWidth, pixelHeight) {
-  const { left: L, top: T, width: W, height: H } = clampToUnitPage(b);
+  const { left: L, top: T, width: W, height: H } = b;
   if (W <= 0 || H <= 0) return null;
+  const fitsOnPage = L >= 0 && T >= 0 && L + W <= 1 && T + H <= 1;
+  if (!fitsOnPage) return null;
 
   const candidate = { left: L, top: T, width: W, height: H };
   const overlapsExisting = (list ?? [])
@@ -161,7 +156,7 @@ function buildManualTable(list, page, b, pixelWidth, pixelHeight) {
   const bounds = { top: T, left: L, width: W, height: H };
   const table = {
     tableId: newUUID(),
-    name: `Page ${page + 1} Table ${tabs + 1}`,
+    name: pageTableName(page, tabs),
     next: null,
     pdfPage: page,
     tableInPage,
@@ -888,10 +883,9 @@ export function StagedPageGridEditor({
       pixelWidth,
       pixelHeight
     );
-    // buildManualTable trims a rectangle that runs over an edge, and refuses only one with
-    // nothing left on the page or one overlapping a live same-page table. Say so: a
-    // successful create is visible at once, so a silent refusal would be the only way to
-    // draw a rectangle and see nothing happen.
+    // buildManualTable refuses a rectangle that runs off the page or overlaps a live
+    // same-page table. Say so: a successful create is visible at once, so a silent refusal
+    // would be the only way to draw a rectangle and see nothing happen.
     if (!built) {
       toast('Not enough room to create a table there');
       return;
@@ -953,16 +947,12 @@ export function StagedPageGridEditor({
     setTimeout(() => {
       suppressNextClickRef.current = false;
     }, 0);
-    // Trimmed to the page: a drag that begins or ends beyond the image edge gives
-    // `eventToFraction` a fraction outside 0..1, and every consumer of this rectangle — the
-    // coloured area, the title and the section-title area alike — is sent to a finder that
-    // refuses a hint straying outside the unit page at all.
-    const bounds = clampToUnitPage({
+    const bounds = {
       left: Math.min(c.startX, c.curX),
       top: Math.min(c.startY, c.curY),
       width: Math.abs(c.curX - c.startX),
       height: Math.abs(c.curY - c.startY),
-    });
+    };
     if (bounds.width <= 0 || bounds.height <= 0) return;
     // The Coloured Area tool's drag picks a free-form rectangle to colour; nothing is
     // written until Submit.

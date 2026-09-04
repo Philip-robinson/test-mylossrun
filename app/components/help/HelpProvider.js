@@ -6,10 +6,10 @@
 // whose screens are state — so screens report themselves. Each mounted component that
 // stands for a screen registers under a token of its own, and the most recently
 // registered live entry is the screen help is about. The registrations are ordered and
-// keyed by token for two reasons: a component standing for a screen can be mounted over
-// one that is already live, so two screens are registered at once and the innermost must
-// win and then hand back when it goes; and a single slot would let one component's
-// cleanup clear another's registration.
+// keyed by token for two reasons: CellEditDialog is mounted over a live
+// ReviewTablePanel, so two screens are registered at once and the innermost must win
+// and then hand back when it goes; and a single slot would let one component's cleanup
+// clear another's registration.
 //
 // Arriving at a screen consults the seen record and does one of three things — open the
 // hints, flag that there is something new, or nothing — and a screen is opened unasked

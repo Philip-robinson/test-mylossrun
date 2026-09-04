@@ -19,6 +19,36 @@ describe('RoundIconButton', () => {
     expect(screen.getByText('ICON')).toBeInTheDocument();
   });
 
+  it('carries the help id it is given, and none when it is given none', () => {
+    const { rerender } = render(
+      <RoundIconButton
+        colour={'rebeccapurple'}
+        icon={<span>{'ICON'}</span>}
+        testId={'round-icon-button'}
+        helpId={'the-help-id'}
+        onClick={() => {}}
+      />
+    );
+
+    expect(screen.getByTestId('round-icon-button')).toHaveAttribute(
+      'data-help-id',
+      'the-help-id'
+    );
+
+    rerender(
+      <RoundIconButton
+        colour={'rebeccapurple'}
+        icon={<span>{'ICON'}</span>}
+        testId={'round-icon-button'}
+        onClick={() => {}}
+      />
+    );
+
+    expect(screen.getByTestId('round-icon-button')).not.toHaveAttribute(
+      'data-help-id'
+    );
+  });
+
   it('calls onClick once when clicked', async () => {
     const onClick = jest.fn();
     render(

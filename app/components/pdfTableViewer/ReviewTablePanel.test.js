@@ -62,11 +62,7 @@ jest.mock('services/images', () => ({
 // the dialog is a real collaborator and reads them at render.
 jest.mock('config', () => ({
   __esModule: true,
-  // Not a sentinel: the dialog reports which help screen it is, and reads the id of that
-  // screen from here, so the real function passes through. No assertion in this suite
-  // touches it, and a sentinel would only be a second place for the id to live.
-  cellEditorScreenId: jest.requireActual('config').cellEditorScreenId,
-  // The help ids the panel's own elements carry, for the same reason: the copy module
+  // The help ids the panel's own elements carry are not sentinels: the copy module
   // keys this screen's tips by these very functions, so the real ones pass through and
   // the id is a literal on neither side.
   reviewFlaggedCountHelpId: jest.requireActual('config').reviewFlaggedCountHelpId,
@@ -77,6 +73,12 @@ jest.mock('config', () => ({
   reviewSaveHelpId: jest.requireActual('config').reviewSaveHelpId,
   // Read by ReviewTableTabs, a real collaborator here.
   reviewTabsHelpId: jest.requireActual('config').reviewTabsHelpId,
+  // Read by CellEditDialog, whose parts this screen's tips describe.
+  cellEditImageHelpId: jest.requireActual('config').cellEditImageHelpId,
+  cellEditCancelHelpId: jest.requireActual('config').cellEditCancelHelpId,
+  cellEditConfirmHelpId: jest.requireActual('config').cellEditConfirmHelpId,
+  cellEditNextHelpId: jest.requireActual('config').cellEditNextHelpId,
+  cellEditConfidenceHelpId: jest.requireActual('config').cellEditConfidenceHelpId,
   lowConfidence: jest.fn(() => 50),
   mediumConfidence: jest.fn(() => 80),
   highConfidence: jest.fn(() => 90),

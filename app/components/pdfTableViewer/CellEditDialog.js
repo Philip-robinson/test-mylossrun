@@ -21,6 +21,12 @@
 // crop is rendered defensively: the image is a convenience, and nothing about it is worth
 // taking the dialog down for.
 //
+// The dialog registers no help screen of its own: it is part of the review screen, so
+// the crop, the three buttons and the confidence carry `data-help-id`s that the review
+// screen's tips describe. A tip whose element is not mounted — which is the dialog for
+// as long as no cell is being edited — simply shows its words in the middle of the
+// viewport, so the tips are harmless while the dialog is closed.
+//
 // A cell whose source reference is blank (`cellSourceKey` is null) has nothing in the
 // metadata to write back to, so there is no rectangle to crop and no correction worth
 // taking: the dialog still opens and still shows the confidence, but confirm is disabled
@@ -43,14 +49,17 @@ import {
 import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 import {
   cancelColour,
+  cellEditCancelHelpId,
+  cellEditConfidenceHelpId,
+  cellEditConfirmHelpId,
+  cellEditImageHelpId,
   cellEditImageLoadingHeightPx,
   cellEditImageSpinnerSizePx,
-  cellEditorScreenId,
+  cellEditNextHelpId,
   confirmColour,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
 } from 'config';
-import useScreenHelp from 'components/help/useScreenHelp';
 
 export default function CellEditDialog({
   pdfId,
@@ -64,10 +73,6 @@ export default function CellEditDialog({
   onConfirm,
   onConfirmAndNext,
 }) {
-  // Mounting is opening, so being mounted is what puts the user on the cell-editor screen.
-  // It registers over the review panel's own screen and hands back when it goes.
-  useScreenHelp(cellEditorScreenId());
-
   const dialogRef = useRef(null);
   // The dialog's own height decides where its bottom edge can be put, so it is measured
   // rather than assumed; 0 until the first measurement, which simply means the first
@@ -228,8 +233,12 @@ export default function CellEditDialog({
       >
         <DragHandleIcon fontSize={'small'} />
       </Box>
-      {/* The crop, which has the dialog's full interior width to itself. */}
+      {/* The crop, which has the dialog's full interior width to itself. The help id is
+          on the pane rather than on the img, so the tip has something to point at while
+          the crop is still on its way and where the cell has no crop at all. */}
       <Box
+        data-testid={'cell-edit-image-pane'}
+        data-help-id={cellEditImageHelpId()}
         sx={{
           // Deliberately NOT a flex container while it holds the crop. As a flex item the
           // crop was squashed on both axes: `align-items: stretch` compressed it to the
@@ -290,12 +299,14 @@ export default function CellEditDialog({
           colour={cancelColour()}
           icon={<CloseIcon />}
           testId={'cell-edit-cancel'}
+          helpId={cellEditCancelHelpId()}
           onClick={onCancel}
         />
         <RoundIconButton
           colour={confirmColour()}
           icon={<CheckIcon />}
           testId={'cell-edit-confirm'}
+          helpId={cellEditConfirmHelpId()}
           onClick={onConfirm}
           disabled={!key}
         />
@@ -307,6 +318,7 @@ export default function CellEditDialog({
             followed by anything. */}
         <Button
           data-testid={'cell-edit-confirm-next'}
+          data-help-id={cellEditNextHelpId()}
           size={'small'}
           variant={'contained'}
           startIcon={<CheckIcon />}
@@ -324,6 +336,7 @@ export default function CellEditDialog({
           cell is worth looking at, and the crop above is what that claim is about. */}
       <Typography
         data-testid={'cell-edit-confidence'}
+        data-help-id={cellEditConfidenceHelpId()}
         variant={'body2'}
         color={'text.secondary'}
       >

@@ -56,7 +56,6 @@ import {
   linkTablesScreenId,
   lowConfidence,
   mergeLinkRootBadgeColour,
-  readyTableStage,
   reviewTableScreenId,
   documentOverviewEntryHelpId,
   documentOverviewExportHelpId,
@@ -72,6 +71,12 @@ import {
 // than pinned to a number: the band is [lowConfidence(), highConfidence()), so a
 // retuned threshold moves this with it instead of silently recolouring the fixture.
 const orangeConfidence = Math.floor((lowConfidence() + highConfidence()) / 2);
+
+// A confirmationStage above the five-row Layers ladder's maximum. Nothing writes one any
+// more — the buttons that did have gone — but a document saved by an earlier version can
+// still carry it, and everything that tests `>= confirmedTableStage()` must go on treating
+// it as completed.
+const aboveConfirmedStage = confirmedTableStage() + 1;
 import {
   getImage,
   getThumbnails,
@@ -3511,21 +3516,30 @@ describe('PDFEditTableStructure', () => {
     expect(ids.indexOf('B')).toBe(1); // B untouched at index 1
   });
 
-  test('a click too near the right edge shows "Not enough room" and creates nothing', async () => {
+  // A rectangle over an edge is TRIMMED to the page rather than refused. The finders reject
+  // a hint straying outside the unit page at all, so a stored rectangle that does could
+  // never be read — and a region that was never read is flagged for review for ever, with
+  // nothing on the review screen to correct.
+  test('a click too near the right edge trims the new table to the page', async () => {
     const middle = await renderForDrag(
       singleTable({ bounds: { left: 0, top: 0, width: 0.05, height: 0.05 } })
     );
 
-    // Click at (950, 500): L=0.95, W=0.1 -> L+W=1.05 > 1 -> off the page.
+    // Click at (950, 500): L=0.95, W=0.1 -> L+W=1.05, trimmed to a width of 0.05.
     clickEmptyArea(middle, { x: 950, y: 500 });
     await screen.findByRole('menu');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Add table' }));
 
-    // "Not enough room" is surfaced via a toast (same mechanism as the Export button).
-    await waitFor(() => expect(toast).toHaveBeenCalledWith('Not enough room'));
-    // No add, Save disabled, nothing saved. (Menu closed on failure so no hidden:true.)
-    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
-    expect(saveTables).not.toHaveBeenCalled();
+    const save = await screen.findByRole('button', { name: /save/i });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+
+    const added = saveTables.mock.calls[0][1].find((t) => t.tableId !== 't-1');
+    expect(added.bounds.left).toBeCloseTo(0.95, 6);
+    expect(added.bounds.width).toBeCloseTo(0.05, 6);
+    expect(added.columnWidths[0].value).toBeCloseTo(0.05, 6);
+    expect(toast).not.toHaveBeenCalledWith('Not enough room');
   });
 
   test('a click whose new rectangle would overlap an existing same-page table shows "Not enough room"', async () => {
@@ -4231,12 +4245,11 @@ describe('PDFEditTableStructure', () => {
     );
   });
 
-  // ---- Task 15: left-column stage buttons + the link button's new home --------------
+  // ---- Task 15: left-column review button + the link button's new home --------------
   //
-  // Every non-deleted entry gains a button row BELOW the title / size / tables lines. What
-  // it holds depends on the table's confirmationStage (a missing or null stage counts as 0):
-  // below the confirmed stage, no stage button; exactly at it, "Mark Ready"; at or above the
-  // ready stage, "Review". The Link button lives at the right-hand end of that row (still a
+  // Every non-deleted entry gains a button row BELOW the title / size / tables lines. It
+  // holds the Review button, on every table whatever its confirmationStage, and always
+  // under that one label. The Link button lives at the right-hand end of that row (still a
   // sibling of the name Box, never nested inside it — the name Box's onClick starts the
   // inline rename). The stages are only ever used as INPUTS here, never asserted as literals.
 
@@ -4257,7 +4270,7 @@ describe('PDFEditTableStructure', () => {
     tables: [
       stageTable('s-below', 'Below Stage', confirmedTableStage() - 1, 0),
       stageTable('s-confirmed', 'Confirmed Stage', confirmedTableStage(), 0.2),
-      stageTable('s-ready', 'Ready Stage', readyTableStage(), 0.4),
+      stageTable('s-ready', 'Ready Stage', aboveConfirmedStage, 0.4),
       stageTable('s-del', 'Deleted Stage', confirmedTableStage(), 0.6, {
         deleted: true,
       }),
@@ -4268,145 +4281,59 @@ describe('PDFEditTableStructure', () => {
   const entryFor = async (name) =>
     (await screen.findByText(name)).closest('[data-testid="table-entry"]');
 
-  // The gate depends on the ready mark alone now: nothing writes the confirmed stage, so a
-  // table below it is simply one that has not been marked ready yet.
-  test('a table below the ready stage shows Mark Ready', async () => {
+  // The stage no longer gates anything in this row: reviewing is a look at the extracted
+  // values, not a declaration that the table is finished.
+  test.each([
+    ['Below Stage'],
+    ['Confirmed Stage'],
+    ['Ready Stage'],
+  ])('%s shows the Review button', async (name) => {
     getMetadata.mockResolvedValue(stageFixture());
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor(name);
+    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
+      'Review'
+    );
+  });
+
+  // The label is now constant. A table read confidently throughout is the case that used to
+  // rename the button, and it must still read "Review".
+  test('a table read confidently throughout still reads Review', async () => {
+    getMetadata.mockResolvedValue({
+      tables: [
+        stageTable('r-1', 'Readiness', aboveConfirmedStage, 0, {
+          cells: [{ row: 0, column: 0, text: 'x', confidence: 100 }],
+        }),
+      ],
+    });
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+
+    const row = await entryFor('Readiness');
+    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
+      'Review'
+    );
+  });
+
+  // A linked root takes the button from the start, laid-out grid or not: the merge takes the
+  // root and whichever members the grid already holds.
+  const linkedBelowStage = () => {
+    const [below] = stageFixture().tables;
+    const child = stageTable('s-child', 'Child', 0, 0.8);
+    return { tables: [{ ...below, next: { 's-child': child } }] };
+  };
+
+  test('the review button of a linked root with no grid enters the review panel', async () => {
+    getMetadata.mockResolvedValue(linkedBelowStage());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
     const row = await entryFor('Below Stage');
-    expect(row.querySelector('[data-testid="mark-ready"]')).not.toBeNull();
-    expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
-  });
-
-  test('a table at the old confirmed stage still shows only Mark Ready', async () => {
-    getMetadata.mockResolvedValue(stageFixture());
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Confirmed Stage');
-    expect(row.querySelector('[data-testid="mark-ready"]')).not.toBeNull();
-    expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
-  });
-
-  test('a table at the ready stage shows the stage button, not Mark Ready', async () => {
-    getMetadata.mockResolvedValue(stageFixture());
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Ready Stage');
-    expect(row.querySelector('[data-testid="review-table"]')).not.toBeNull();
-    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
-  });
-
-  // ---- The stage button's third label -----------------------------------------------
-  //
-  // Once nothing in a prepared table is still flagged for the user's attention, the same
-  // button reads "Ready for Export". Only the label changes: looking again at a table that
-  // needs no correction must stay possible.
-
-  const readValue = (confidence) => ({
-    row: 0,
-    column: 0,
-    text: 'x',
-    confidence,
-  });
-
-  const readinessFixture = (cells, extra = {}) => ({
-    tables: [
-      stageTable('r-1', 'Readiness', readyTableStage(), 0, { cells, ...extra }),
-    ],
-  });
-
-  test('a prepared table with a value below high confidence still reads Review', async () => {
-    getMetadata.mockResolvedValue(readinessFixture([readValue(90), readValue(30)]));
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Readiness');
-    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
-      'Review'
-    );
-  });
-
-  test('a prepared table read confidently throughout reads Ready for Export', async () => {
-    getMetadata.mockResolvedValue(
-      readinessFixture([readValue(90), readValue(highConfidence())])
-    );
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Readiness');
-    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
-      'Ready for Export'
-    );
-  });
-
-  // The group is what the review screen spans, so it is what readiness spans too.
-  test('a root whose linked member is still poor reads Review', async () => {
-    getMetadata.mockResolvedValue(
-      readinessFixture([readValue(99)], {
-        next: {
-          'r-1-a': {
-            tableId: 'r-1-a',
-            name: 'Readiness joined',
-            pdfPage: 0,
-            tableInPage: 1,
-            bounds: { left: 0.7, top: 0.7, width: 0.1, height: 0.1 },
-            columnWidths: [{ value: 0.1, confidence: 90 }],
-            rowHeights: [{ value: 0.1, confidence: 90 }],
-            cells: [readValue(20)],
-          },
-        },
-      })
-    );
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Readiness');
-    expect(row.querySelector('[data-testid="review-table"]')).toHaveTextContent(
-      'Review'
-    );
-  });
-
-  test('the button still enters the review panel while it reads Ready for Export', async () => {
-    getMetadata.mockResolvedValue(readinessFixture([readValue(99)]));
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Readiness');
-    const button = row.querySelector('[data-testid="review-table"]');
-    expect(button).toHaveTextContent('Ready for Export');
-
-    await userEvent.click(button);
+    await userEvent.click(row.querySelector('[data-testid="review-table"]'));
 
     await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
   });
 
-  // A linked root is marked ready from the Grid Editor, whose Ready button is gated on every
-  // member of the group having a place in the grid. Offering Mark Ready here would be an
-  // ungated way round that gate.
-  test('a table holding linked tables shows no Mark Ready', async () => {
-    const [below] = stageFixture().tables;
-    const child = stageTable('s-child', 'Child', 0, 0.8);
-    getMetadata.mockResolvedValue({
-      tables: [{ ...below, next: { 's-child': child } }],
-    });
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Below Stage');
-    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
-    expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
-  });
-
-  test('a linked root already at the ready stage still shows Review', async () => {
-    const ready = stageFixture().tables[2];
-    const child = stageTable('s-child', 'Child', 0, 0.8);
-    getMetadata.mockResolvedValue({
-      tables: [{ ...ready, next: { 's-child': child } }],
-    });
-    render(<PDFEditTableStructure pdfId={PDF_ID} />);
-
-    const row = await entryFor('Ready Stage');
-    expect(row.querySelector('[data-testid="review-table"]')).not.toBeNull();
-    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
-  });
-
-  test('a deleted row shows no stage button even at the confirmed stage', async () => {
+  test('a deleted row shows no review button even at the confirmed stage', async () => {
     getMetadata.mockResolvedValue(stageFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
@@ -4414,37 +4341,24 @@ describe('PDFEditTableStructure', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Include deleted' }));
 
     const row = await entryFor('Deleted Stage');
-    expect(row.querySelector('[data-testid="mark-ready"]')).toBeNull();
     expect(row.querySelector('[data-testid="review-table"]')).toBeNull();
   });
 
-  test('Mark Ready advances only that table to the ready stage and dirties the document', async () => {
+  // The button opens the review; it writes no stage of its own, so the document is still
+  // clean apart from the save the review itself performs.
+  test('the review button advances no table stage', async () => {
     getMetadata.mockResolvedValue(stageFixture());
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
     const row = await entryFor('Confirmed Stage');
-    const save = screen.getByRole('button', { name: /save/i });
-    expect(save).toBeDisabled();
+    await userEvent.click(row.querySelector('[data-testid="review-table"]'));
 
-    fireEvent.click(row.querySelector('[data-testid="mark-ready"]'));
-
-    // The document is dirty (Save enabled) but nothing has been PUT.
-    await waitFor(() => expect(save).toBeEnabled());
-    expect(saveTables).not.toHaveBeenCalled();
-
-    // The entry now offers Review instead of Mark Ready.
-    const after = await entryFor('Confirmed Stage');
-    expect(after.querySelector('[data-testid="review-table"]')).not.toBeNull();
-    expect(after.querySelector('[data-testid="mark-ready"]')).toBeNull();
-
-    // Saving shows the stage advanced on that table alone.
-    fireEvent.click(save);
     await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
     const saved = saveTables.mock.calls[0][1];
     const byId = Object.fromEntries(saved.map((t) => [t.tableId, t]));
-    expect(byId['s-confirmed'].confirmationStage).toBe(readyTableStage());
+    expect(byId['s-confirmed'].confirmationStage).toBe(confirmedTableStage());
     expect(byId['s-below'].confirmationStage).toBe(confirmedTableStage() - 1);
-    expect(byId['s-ready'].confirmationStage).toBe(readyTableStage());
+    expect(byId['s-ready'].confirmationStage).toBe(aboveConfirmedStage);
     expect(byId['s-del'].confirmationStage).toBe(confirmedTableStage());
   });
 
@@ -6697,11 +6611,11 @@ describe('right-column page headings', () => {
     );
   });
 
-  test('a table at the ready stage still counts as completed', async () => {
-    // The ready stage sits ABOVE the confirmed stage, so the summary's `>=` test must keep
-    // treating a marked-ready table as completed rather than as still to process.
+  test('a table above the confirmed stage still counts as completed', async () => {
+    // A stage above the ladder's maximum must go on reading as completed rather than as
+    // still to process: the summary's test is `>=`, not `===`.
     await renderCounts([
-      countTable('ready', 0, { confirmationStage: readyTableStage() }),
+      countTable('ready', 0, { confirmationStage: aboveConfirmedStage }),
       countTable('confirmed', 1, {
         confirmationStage: confirmedTableStage(),
       }),
@@ -7634,6 +7548,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
   });
 
   // The row's own buttons keep their actions: the click never reaches the entry.
+  //
+  // The Review button hands the middle panel to the review panel, so the page editor's
+  // selection cannot be read while the panel is open. Exiting it remounts the editor, and
+  // what it comes back on is what the click left behind.
   test('clicking a row button does not select its table', async () => {
     const [root, other] = NAV_METADATA.tables;
     getMetadata.mockResolvedValue({
@@ -7651,9 +7569,18 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       )
     );
 
-    await userEvent.click(within(entryFor('Beta')).getByTestId('mark-ready'));
+    await userEvent.click(within(entryFor('Beta')).getByTestId('review-table'));
 
-    // Mark Ready did its job, and the selection and the page stayed where they were.
+    // The button did its job: the review panel opened on Beta.
+    expect(await screen.findByTestId('review-panel')).toHaveAttribute(
+      'data-tableid',
+      'beta'
+    );
+
+    await userEvent.click(screen.getByTestId('review-panel-exit'));
+    await screen.findByTestId('mock-pte');
+
+    // The selection and the page stayed where they were.
     expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target');
     expect(screen.getByTestId('mock-hasprev')).toHaveTextContent('false');
   });
@@ -7828,9 +7755,9 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     await userEvent.click(screen.getByTestId('mock-member-section-title'));
     await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
 
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
+    // A drawn region is read where it is drawn rather than on the way off the page, so no
+    // page exit saves here: the write-back's own save is the only one, and it carries the
+    // reading.
     await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
     const root = saveTables.mock.calls[0][1].find(
       (t) => t.tableId === 'edit-target'
@@ -8032,12 +7959,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     await waitFor(() =>
       expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta')
     );
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
-
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const sentTables = saveTables.mock.calls[0][1];
+    // Leaving the page saves what leaving settled, and the recalculation saves again when its
+    // write-back lands, so the reading reaches the server without the user asking for it.
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(2));
+    const sentTables = saveTables.mock.calls[1][1];
     const savedTarget = sentTables.find((t) => t.tableId === 'edit-target');
     expect(savedTarget.title.text).toBe('Returned Title');
     expect(savedTarget.title.bounds).toEqual({
@@ -8073,12 +7998,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta')
     );
 
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
-
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const sentTables = saveTables.mock.calls[0][1];
+    // Leaving the page saves what leaving settled, and the recalculation saves again when its
+    // write-back lands, so the reading reaches the server without the user asking for it.
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(2));
+    const sentTables = saveTables.mock.calls[1][1];
     const savedTarget = sentTables.find((t) => t.tableId === 'edit-target');
     // The text the recalculation read, not the pre-call placeholder.
     expect(savedTarget.title.text).toBe('Returned Title');
@@ -8160,11 +8083,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       resolveCalc();
     });
 
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const savedTarget = saveTables.mock.calls[0][1].find(
+    // Leaving the page saved, and the stale reading asked for a save of its own when it
+    // landed; neither carries the reading, because the newer manual title stands.
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(2));
+    const savedTarget = saveTables.mock.calls[1][1].find(
       (t) => t.tableId === 'edit-target'
     );
     expect(savedTarget.title).toEqual(
@@ -8459,6 +8381,20 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
 
   const thumbnail = (index) => screen.getAllByTestId('thumbnail')[index];
   const saveButton = () => screen.getByRole('button', { name: /save/i });
+
+  // The table list of the most recent PUT. Leaving a page saves what leaving settled, and the
+  // recalculation saves again when its write-back lands, so what a test wants to inspect is
+  // the last save rather than one the user asked for.
+  const lastSavedTables = () =>
+    saveTables.mock.calls[saveTables.mock.calls.length - 1][1];
+
+  // Wait for `times` automatic saves. Leaving a page saves what leaving settled, and the
+  // recalculation asks for a second save when its write-back changed something — so the count
+  // says which of those two happened, and waiting on it is what makes reading the last payload
+  // deterministic. Waiting for the document to go clean instead would race: it is clean
+  // between the two saves as well as after them.
+  const savedTimes = (times) =>
+    waitFor(() => expect(saveTables).toHaveBeenCalledTimes(times));
 
   // The request tables of the single calculate-cells call, by tableInPage — the only identity
   // the request carries (it has no `name`).
@@ -8814,11 +8750,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const sent = saveTables.mock.calls[0][1];
+    const sent = lastSavedTables();
     const target = sent.find((t) => t.tableId === 't-d');
     expect(target.name).toBe('Delta');
     // The user's own edited border (left moved 0.1 -> 0.15) stands.
@@ -8846,11 +8780,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     // The grid survived: 2 columns and 2 rows, as the editor held them.
     expect(target.columnWidths).toHaveLength(2);
     expect(target.rowHeights).toHaveLength(2);
@@ -8876,11 +8808,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-move-a'));
     await clickAndSettle(screen.getByTestId('mock-next'));
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     expect(target.title.text).toBe('Read Title');
     expect(target.title.bounds).toEqual({
       left: 0.1,
@@ -8905,11 +8835,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-d');
+    const target = lastSavedTables().find((t) => t.tableId === 't-d');
     // The text landed…
     expect(target.cells.find((c) => c.row === 0 && c.column === 0).text).toBe(
       'Fresh'
@@ -8918,6 +8846,8 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(target.confirmationStage).toBe(3);
   });
 
+  // The one page exit here that saves ONCE: the response matches no requested table, so the
+  // recalculation returns without writing anything back and never asks for its own save.
   test('a returned table whose tableInPage matches nothing changes nothing', async () => {
     calculateCells.mockResolvedValue({
       pdfPage: 0,
@@ -8929,11 +8859,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(1);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     // Still the user's own edited table (left moved 0.1 -> 0.15), untouched by the response.
     expect(target.name).toBe('Alpha');
     expect(target.bounds.left).toBeCloseTo(0.15);
@@ -8966,11 +8894,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     // cells, and not (partially) its title.
     await settle(resolveCalc);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     expect(target.name).toBe('Alpha');
     expect(target.bounds.left).toBeCloseTo(0.2);
     expect(target.bounds.width).toBeCloseTo(0.2);
@@ -8978,7 +8904,7 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(target.cells.every((c) => c.text !== 'Fresh')).toBe(true);
   });
 
-  test('dirty is set when the write-back changed something and not when the response changed nothing', async () => {
+  test('a write-back that changed something is saved, and one that changed nothing is not', async () => {
     let resolveCalc;
     calculateCells.mockImplementation(
       () =>
@@ -8988,28 +8914,30 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     );
     await renderRecalc();
 
-    // Edit, navigate (launching the call), then save while it is still in flight so the
-    // document is CLEAN when the response lands.
+    // Edit and navigate, launching the call. Leaving saves what leaving settled — one PUT,
+    // and the document is clean while the response is still in flight.
     await clickAndSettle(screen.getByTestId('mock-move-a'));
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
+    await savedTimes(1);
     await waitFor(() => expect(saveButton()).toBeDisabled());
 
-    // A response that matches nothing leaves the document clean.
+    // A response matching no requested table writes nothing back, so the recalculation
+    // returns before asking for a save: still one PUT, and the document stays clean.
     await settle(() => resolveCalc([readAlpha({ tableInPage: 7 })]));
+    await savedTimes(1);
     expect(saveButton()).toBeDisabled();
 
-    // A response that does write text back dirties it again. We are on page 1 now, so edit
-    // that page's table and navigate back — t-c is tableInPage 0 on page 1.
+    // A response that does write text back saves itself, so the reading is persisted without
+    // the user asking. We are on page 1 now, so edit that page's table and navigate back —
+    // t-c is tableInPage 0 on page 1.
     await clickAndSettle(screen.getByTestId('mock-move-c'));
     await clickAndSettle(screen.getByTestId('mock-prev'));
     expect(calculateCells).toHaveBeenCalledTimes(2);
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveButton()).toBeDisabled());
     await settle(() => resolveCalc([readAlpha()]));
-    await waitFor(() => expect(saveButton()).toBeEnabled());
+    // The second page exit, then the write-back it launched.
+    await savedTimes(3);
+    await waitFor(() => expect(saveButton()).toBeDisabled());
   });
 
   test('a thumbnail click is not blocked by the call: the page moves before it resolves', async () => {
@@ -9047,7 +8975,7 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(screen.getByTestId('mock-selected')).toHaveTextContent('t-c');
     await clickAndSettle(saveButton());
     await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     expect(target.bounds.left).toBeCloseTo(0.15);
   });
 });
@@ -9079,9 +9007,9 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
   // these tests could never reach.
   const readCell = { row: 0, column: 0, text: 'x', confidence: 99 };
 
-  // 'alpha' is at the ready stage, so its left-column row offers the review button; it also
-  // holds a linked table, which is what puts a Link button on its row. 'beta' sits on page 1
-  // and is only there to prove a mode change does not disturb the rest of the list.
+  // 'alpha' holds a linked table, which is what puts a Link button on its row alongside the
+  // review button every row carries. 'beta' sits on page 1 and is only there to prove a mode
+  // change does not disturb the rest of the list.
   const MODE_METADATA = {
     name: 'modes.pdf',
     tables: [
@@ -9090,7 +9018,7 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
         name: 'Alpha',
         pdfPage: 0,
         tableInPage: 0,
-        confirmationStage: readyTableStage(),
+        confirmationStage: aboveConfirmedStage,
         bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 },
         columnWidths: [{ value: 0.2, confidence: 90 }],
         rowHeights: [{ value: 0.2, confidence: 90 }],
@@ -9113,10 +9041,9 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
         name: 'Beta',
         pdfPage: 1,
         tableInPage: 0,
-        // Ready like alpha: the Export button waits for every listed table, so a table
-        // still to be marked ready would disable it, and these tests are about the export
-        // itself rather than the gate.
-        confirmationStage: readyTableStage(),
+        // At the same stage as alpha, so neither table is the odd one out of a list these
+        // tests are not about.
+        confirmationStage: aboveConfirmedStage,
         bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 },
         columnWidths: [{ value: 0.2, confidence: 90 }],
         rowHeights: [{ value: 0.2, confidence: 90 }],
@@ -9723,17 +9650,14 @@ describe('PDFEditTableStructure — the help anchors on its two columns', () => 
     ).toBeInTheDocument();
   });
 
-  // One id for the stage button under both its labels: it is one button that renames
-  // itself, and the tip describes every label it can take.
-  test('the stage button carries the review help id whichever label it wears', async () => {
+  test('the Review button carries the review help id', async () => {
     render(<PDFEditTableStructure pdfId={PDF_ID} />);
 
     await screen.findAllByTestId('table-entry');
-    const staged = screen.queryAllByTestId('review-table');
-    const unstaged = screen.queryAllByTestId('mark-ready');
+    const buttons = screen.queryAllByTestId('review-table');
 
-    expect(staged.length + unstaged.length).toBeGreaterThan(0);
-    [...staged, ...unstaged].forEach((button) =>
+    expect(buttons.length).toBeGreaterThan(0);
+    buttons.forEach((button) =>
       expect(button).toHaveAttribute(
         'data-help-id',
         documentOverviewReviewHelpId()

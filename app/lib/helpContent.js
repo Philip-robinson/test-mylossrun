@@ -17,7 +17,11 @@ import {
   boundaryCreateTableHelpId,
   boundaryDeleteTableHelpId,
   boundaryPassScreenId,
-  cellEditorScreenId,
+  cellEditCancelHelpId,
+  cellEditConfidenceHelpId,
+  cellEditConfirmHelpId,
+  cellEditImageHelpId,
+  cellEditNextHelpId,
   contentsPassScreenId,
   documentListCountsHelpId,
   documentListScreenId,
@@ -49,7 +53,6 @@ import {
   linkAvailableTablesHelpId,
   linkCancelHelpId,
   linkLinkedTablesHelpId,
-  linkReadyHelpId,
   linkSaveHelpId,
   linkTablesScreenId,
   linkUnlinkHelpId,
@@ -77,7 +80,7 @@ import {
   toolbarValidateBordersHelpId,
   toolbarValidateTablesHelpId,
   validateBordersHelpId,
-  validateTablesHelpId,
+  validateTablesHelpId, emphasiseLowQualityCells,
 } from 'config';
 
 // Rendered under the screen summary on every entry card.
@@ -234,11 +237,18 @@ function documentOverviewTips() {
             'At the top is the table name; clicking on the name allows it to be edited.',
             "Below, if one has been selected, is the table's title.",
             'Below this is the size of the table in rows and columns.',
-            'If the table is a linked group of tables, ',
-            [
-                'Either the number of tables incorporated into this one table or, ',
-                'if they have been linked together, the layout of those tables, rows x columns of tables.',
-            ]
+            ['If the table is a linked group of tables, then grid arrangement of ',
+              'tables is displayed as C x R.',
+              {
+                list: [
+                  "C is the number of columns.",
+                  "R is the number of rows.",
+                  "Clicking on this rows will list the embedded tables"
+               ]
+              }
+            ],
+            ["The ", {bold: "Review"}, " button invokes the review screen to examine and edit cell values"],
+            "The link (-) icon invokes the table link grid editor to modify how linked tables as aranged",
           ],
         },
       ],
@@ -248,40 +258,27 @@ function documentOverviewTips() {
       title: 'Link review button',
       body: [
         'This button is only present if the table is a linked group of tables, ',
-        'and invokes the table linking editor; ',
-        'this is necessary to mark the table ready for review.',
+        'and invokes the table linking editor, where the tables of the group are laid out. ',
+        'There is a default layout of all the tables in a group being one on top of another ',
+        'in PDF page order, if this is adequate there is no need to invoke this editor.'
       ],
     },
     {
       helpId: documentOverviewReviewHelpId(),
       title: 'Review button',
       body: [
-        'This button is present as:',
-        {
-          list: [
-            [
-              { bold: 'Mark Ready' },
-              ' for a single table so it can be marked for review.',
-            ],
-            [
-              { bold: 'Review' },
-              ' when the table is ready for review, that is a final check of cell values.',
-            ],
-            [
-              { bold: 'Ready for Export' },
-              ' if review has been completed and there are no low confidence cells.',
-            ],
-          ],
-        },
+        'This button opens the Review page for this table, this allows cell values to ',
+        'be examined and modified if necessary.',
       ],
     },
     {
       helpId: documentOverviewExportHelpId(),
       title: 'Export button',
       body: [
-        'Clicking it will create an Excel Workbook from the accumulated data of every non-deleted table. It does not wait for the tables to be ',
-        { bold: 'Ready for Export' },
-        ', so a document part way through review can be exported as it stands.',
+        'Clicking it will create an Excel Workbook from the ',
+        'accumulated data of every non-deleted table. ',
+        'It does not wait for the tables to have been reviewed, so a document part way through ',
+        'review can be exported as it stands.',
       ],
     },
   ];
@@ -307,10 +304,9 @@ export function helpScreens() {
           helpId: dropBoxHelpId(),
           title: 'Add a loss run',
           body: [
-            'Drop a PDF here, or click anywhere in the panel to choose one. ',
-            'PDFs only, up to 50MB. Extraction starts as soon as the upload finishes: ',
-            'the document appears in the list straight away and you do not have to wait ',
-            'on this screen.',
+            'Drop a PDF here, or click anywhere in the panel to choose one from you file system. ',
+            'PDFs only, up to 50MB. Upload and data extraction begins immediately but in the background ',
+            'so you need not stay on this page.'
           ],
         },
         {
@@ -354,19 +350,26 @@ export function helpScreens() {
       ],
     },
     [boundaryPassScreenId()]: {
-      version: 5,
-      name: 'Table boundaries',
+      version: 6,
+      name: 'Table Borders',
       summary: [
         "This pass is about where the tables are on the page and how they inter-relate. ",
-        "Correct any boundary that is wrong, link tables together to form larger tables, ",
-        "then Validate Tables saves the document and moves on to the tables' contents.",
+        { list:[
+          "Correct the borders of any table by dragging.",
+          "Link tables together to form larger tables.",
+          ["Validate Table grids from the ",
+            {bold: "Validate Tables"},
+            " button.",
+          ]
+        ]}
       ],
       tips: [
         {
           helpId: boundaryDeleteTableHelpId(),
           title: 'Delete the current table',
           body: [
-            'Clicking this button will delete the currently selected table, and its grid will be removed from the screen. It can be reinstated from the ',
+            'Clicking this button will delete the currently selected table, ',
+            'and its grid will be removed from the screen. It can be reinstated from the ',
             { bold: 'Document Overview' },
             ' column.',
           ],
@@ -445,7 +448,7 @@ export function helpScreens() {
       ],
     },
     [contentsPassScreenId()]: {
-      version: 9,
+      version: 11,
       name: 'Table contents',
       summary: [
         'This pass is about the inside of one table — its rows, ',
@@ -767,7 +770,7 @@ export function helpScreens() {
       ],
     },
     [linkTablesScreenId()]: {
-      version: 3,
+      version: 4,
       name: 'Grid Editor',
       summary: [
         'For grouped tables examine if they can form a single table and arrange the ',
@@ -837,31 +840,22 @@ export function helpScreens() {
         {
           helpId: linkSaveHelpId(),
           title: 'Save button',
-          body: [
-            'Exit this screen saving the current state without marking the table as ',
-            'ready for review.',
-          ],
-        },
-        {
-          helpId: linkReadyHelpId(),
-          title: 'Ready button',
-          body: [
-            'Exit this screen saving the current state and mark the table as ready for ',
-            'review, this is only available if the ',
-            { bold: 'Available tables' },
-            ' list is empty.',
-          ],
+          body: ['Exit this screen saving the current state.'],
         },
         ...toolbarValidateTips(),
       ],
     },
     [reviewTableScreenId()]: {
-      version: 3,
+      version: 4,
       name: 'Extraction review',
-      summary: [
+      summary: emphasiseLowQualityCells()?[
         'This is the data that will be written out to the workbook. Every cell is editable — ',
-        'click one to edit it. The coloured cells are the ones we think are most likely ',
-        'to be wrong, but any cell can be wrong, so please look for problems in all of them.',
+        'click one to edit it.',
+        'The coloured cells are the ones we think are most likely ',
+        'to be wrong, but any cell can be wrong, so please look for problems in all of them.'
+      ]:[
+        'This is the data that will be written out to the workbook. Every cell is editable — ',
+        'click one to edit it.',
       ],
       tips: [
         {
@@ -896,16 +890,17 @@ export function helpScreens() {
           helpId: reviewSectionTitleHelpId(),
           title: 'Section Title',
           body: [
-            'When provided this is a title of a section, it will be the spreadsheet ',
-            'name which then becomes the value in the tab for this table, this can be ',
-            'edited. If both this and a title are provided then the tab name will be ',
+            'This is not always present but when it is it is a title of a section, ',
+            'it will be the spreadsheet name which then becomes the value in the tab ',
+            'for this table, this can be edited. ',
+            'If both this and a title are provided then the tab name will be ',
             'this value followed by a title.',
           ],
         },
         {
           helpId: reviewGridHelpId(),
           title: 'Data entry grid',
-          body: [
+          body: emphasiseLowQualityCells()?[
             'This shows the read cells as would be written to the output file, all ',
             'cells are editable by clicking on them, particularly low quality cells ',
             'are emphasised by having a pale brown background and a brown bar to the ',
@@ -913,6 +908,46 @@ export function helpScreens() {
             { bold: 'NOTE THAT' },
             ' not emphasising a cell does not guarantee the data is correct, all cells ',
             'should be viewed and updated if they are wrong.',
+          ]:[
+            'This shows the read cells as would be written to the output file, all ',
+            'cells are editable by clicking on them',
+          ],
+        },
+        {
+          helpId: cellEditImageHelpId(),
+          title: 'Raw Image',
+          body: [
+            'This is the image of this cell in the original document so you can see ',
+            'what it originally said.',
+          ],
+        },
+        {
+          helpId: cellEditCancelHelpId(),
+          title: 'Close',
+          body: ['Close the cell editor without saving the changes made.'],
+        },
+        {
+          helpId: cellEditConfirmHelpId(),
+          title: 'Save',
+          body: [
+            'Any text just entered is saved, confidence in that cell is set to 100% ',
+            'and the cell editor is closed.',
+          ],
+        },
+        {
+          helpId: cellEditNextHelpId(),
+          title: 'Save and Next',
+          body: [
+            'This saves any edits, sets confidence to 100% and moves the editor to the ',
+            'next low quality cell if there is one.',
+          ],
+        },
+        {
+          helpId: cellEditConfidenceHelpId(),
+          title: 'Confidence',
+          body: [
+            'This is the confidence rating given to this cell, 100% is full confidence ',
+            'less than 80% is considered low confidence.',
           ],
         },
         {
@@ -934,16 +969,6 @@ export function helpScreens() {
         },
         ...toolbarValidateTips(),
       ],
-    },
-    [cellEditorScreenId()]: {
-      version: 2,
-      name: 'Correcting a cell',
-      summary: [
-        'The picture of the cell as it appears in the PDF, beside the text that was read ',
-        'from it. Change the text, then press Tab to save it and move on to the next ',
-        'low-confidence cell.',
-      ],
-      tips: [...toolbarValidateTips()],
     },
   };
 }

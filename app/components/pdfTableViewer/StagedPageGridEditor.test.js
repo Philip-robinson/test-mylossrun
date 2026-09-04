@@ -584,6 +584,73 @@ describe('StagedPageGridEditor', () => {
       expect(toast).not.toHaveBeenCalled();
     });
 
+    // The finders refuse a hint straying outside the unit page at all, so a rectangle
+    // stored with an edge over the page could never be read — and an unread region is
+    // flagged for review for ever with nothing on the review screen to correct it.
+    it('trims a rubber-band drag that runs off the page rather than refusing it', async () => {
+      const onEditTables = jest.fn();
+      const onCreatedTable = jest.fn();
+      let triggerCreate;
+      const { container } = await renderLoaded(
+        baseProps({
+          selectedTableId: 't1',
+          onEditTables,
+          onCreatedTable,
+          onRequestCreate: (fn) => {
+            triggerCreate = fn;
+          },
+        })
+      );
+      act(() => {
+        triggerCreate();
+      });
+      // 0.6,0.6 to 1.2,1.2 — over the right and bottom edges, clear of alpha and beta.
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 600, clientY: 600 });
+      fireEvent.mouseMove(window, { clientX: 1200, clientY: 1200 });
+      fireEvent.mouseUp(window, { clientX: 1200, clientY: 1200 });
+
+      const created = lastList(onEditTables).find(
+        (t) => t.tableId === onCreatedTable.mock.calls[0][0]
+      );
+      expect(created.bounds.left).toBeCloseTo(0.6, 6);
+      expect(created.bounds.top).toBeCloseTo(0.6, 6);
+      expect(created.bounds.width).toBeCloseTo(0.4, 6);
+      expect(created.bounds.height).toBeCloseTo(0.4, 6);
+      // The axis sums are rebuilt from the trimmed rectangle, not the drawn one.
+      expect(created.columnWidths[0].value).toBeCloseTo(0.4, 6);
+      expect(created.rowHeights[0].value).toBeCloseTo(0.4, 6);
+      expect(toast).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a rubber-band drag lying wholly off the page', async () => {
+      const onEditTables = jest.fn();
+      const onCreatedTable = jest.fn();
+      let triggerCreate;
+      const { container } = await renderLoaded(
+        baseProps({
+          selectedTableId: 't1',
+          onEditTables,
+          onCreatedTable,
+          onRequestCreate: (fn) => {
+            triggerCreate = fn;
+          },
+        })
+      );
+      act(() => {
+        triggerCreate();
+      });
+      // Entirely past the right edge: trimming leaves it no width at all.
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 1100, clientY: 600 });
+      fireEvent.mouseMove(window, { clientX: 1300, clientY: 700 });
+      fireEvent.mouseUp(window, { clientX: 1300, clientY: 700 });
+
+      expect(onEditTables).not.toHaveBeenCalled();
+      expect(onCreatedTable).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledTimes(1);
+    });
+
     it('reports a rejected rubber-band drag rather than failing silently', async () => {
       const onEditTables = jest.fn();
       const onCreatedTable = jest.fn();

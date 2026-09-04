@@ -191,20 +191,6 @@ export const autoPopulateGrid = (root, candidateList) => {
 export const linkedMembers = (root) =>
   sortByOrder(Object.values(root?.next ?? {}));
 
-// Every member of `next` that the grid holds. A group is ready to extract only when that is
-// all of them; a root with no links has nothing outstanding and is ready by default.
-export const allLinkedPlaced = (root, grid) => {
-  const ids = Object.keys(root?.next ?? {});
-  if (ids.length === 0) return true;
-  const placed = new Set();
-  (grid ?? []).forEach((row) =>
-    (row ?? []).forEach((cell) => {
-      if (cell) placed.add(cell.tableId);
-    }),
-  );
-  return ids.every((id) => placed.has(id));
-};
-
 export const buildInitialState = (root) => {
   const members = linkedMembers(root);
   if (hasSavedGrid(root)) {

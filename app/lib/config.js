@@ -351,14 +351,6 @@ export function confirmedTableStage() {
   return 5;
 }
 
-// The `confirmationStage` a table reaches when the user marks it ready for
-// extraction — one above confirmedTableStage(), which stays the five-row ladder's
-// maximum. A ready table is still "completed" everywhere that tests
-// `>= confirmedTableStage()`.
-export function readyTableStage() {
-  return 6;
-}
-
 // Fill colour of the small square badge drawn on a page thumbnail to mark a fully
 // confirmed table.
 export function confirmedTickBadgeColour() {
@@ -916,10 +908,6 @@ export function linkSaveHelpId() {
   return 'link-save';
 }
 
-export function linkReadyHelpId() {
-  return 'link-ready';
-}
-
 export function reviewTitleHelpId() {
   return 'review-title-row';
 }
@@ -946,6 +934,30 @@ export function reviewTabsHelpId() {
 
 export function reviewSaveHelpId() {
   return 'review-save';
+}
+
+// The cell-edit dialog's ids: the crop of the cell as the document has it, the three
+// buttons that end the edit and the confidence the value was read with. They belong to
+// the review screen's tips, the dialog being part of that screen rather than one of its
+// own.
+export function cellEditImageHelpId() {
+  return 'cell-edit-image';
+}
+
+export function cellEditCancelHelpId() {
+  return 'cell-edit-cancel';
+}
+
+export function cellEditConfirmHelpId() {
+  return 'cell-edit-confirm';
+}
+
+export function cellEditNextHelpId() {
+  return 'cell-edit-confirm-next';
+}
+
+export function cellEditConfidenceHelpId() {
+  return 'cell-edit-confidence';
 }
 
 export function specialToolColouredRowsHelpId() {
@@ -994,18 +1006,15 @@ export function reviewTableScreenId() {
   return 'reviewTable';
 }
 
-export function cellEditorScreenId() {
-  return 'cellEditor';
-}
-
-// Export default config object
-// Extraction mechanism recorded on a table no mechanism has read: the editor knows its
-// grid but nothing has read a cell of it. Mirrors the service enum member of the same name.
 export function unknownExtractionMechanism() {
   return 'UNKNOWN';
 }
 
-export default {
+export function emphasiseLowQualityCells() {
+  return false;
+}
+
+const default_export = {
   baseUrl,
   resizeDebounceMs,
   nameTruncateLength,
@@ -1066,7 +1075,6 @@ export default {
   sectionTitleMarkerDash,
   selectedSectionTitleHighlight,
   confirmedTableStage,
-  readyTableStage,
   confirmedTickBadgeColour,
   confirmedTickColour,
   confirmedTickBadgeSizePx,
@@ -1131,7 +1139,6 @@ export default {
   contentsPassScreenId,
   linkTablesScreenId,
   reviewTableScreenId,
-  cellEditorScreenId,
   dropBoxHelpId,
   documentListCountsHelpId,
   documentListTableHelpId,
@@ -1177,7 +1184,6 @@ export default {
   linkUnlinkHelpId,
   linkCancelHelpId,
   linkSaveHelpId,
-  linkReadyHelpId,
   reviewTitleHelpId,
   reviewSectionTitleHelpId,
   reviewFlaggedCountHelpId,
@@ -1185,10 +1191,18 @@ export default {
   reviewGridHelpId,
   reviewTabsHelpId,
   reviewSaveHelpId,
+  cellEditImageHelpId,
+  cellEditCancelHelpId,
+  cellEditConfirmHelpId,
+  cellEditNextHelpId,
+  cellEditConfidenceHelpId,
   specialToolColouredRowsHelpId,
   specialToolColouredColumnsHelpId,
   specialToolColouredTableHelpId,
   specialToolColouredCellHelpId,
   specialToolColouredAreaHelpId,
   unknownExtractionMechanism,
+  emphasiseLowQualityCells
 };
+
+export default default_export;

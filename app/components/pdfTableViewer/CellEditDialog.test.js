@@ -1,10 +1,3 @@
-// The overlay is stubbed: the dialog's part in the help feature is reporting which
-// screen it is, not what the overlay then draws.
-jest.mock('components/help/HelpOverlay', () => ({
-  __esModule: true,
-  default: () => <div data-testid={'help-overlay'} />,
-}));
-
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CellEditDialog from 'components/pdfTableViewer/CellEditDialog';
@@ -22,20 +15,22 @@ import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 // mocked accessor rather than by naming a literal, so a change to a real constant
 // can never fail a test here.
 import {
+  cellEditCancelHelpId,
+  cellEditConfidenceHelpId,
+  cellEditConfirmHelpId,
+  cellEditImageHelpId,
   cellEditImageLoadingHeightPx,
   cellEditImageSpinnerSizePx,
-  cellEditorScreenId,
+  cellEditNextHelpId,
   confirmColour,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
 } from 'config';
-import HelpProvider, { useHelp } from 'components/help/HelpProvider';
 
 jest.mock('config', () => ({
   __esModule: true,
-  // Real apart from the six sentinels below: the help provider the registration test
-  // mounts the dialog inside reads constants of its own from config, and a mock that
-  // named only this suite's values would leave those undefined.
+  // Real apart from the six sentinels below, so that any other constant the dialog or
+  // its real collaborators read is the real one rather than undefined.
   ...jest.requireActual('config'),
   cancelColour: jest.fn(() => 'rgb(9, 0, 0)'),
   confirmColour: jest.fn(() => 'rgb(0, 9, 0)'),
@@ -45,6 +40,9 @@ jest.mock('config', () => ({
   maxCellEditorImageHeight: jest.fn(() => 66),
   cellEditImageSpinnerSizePx: jest.fn(() => 18),
   cellEditImageLoadingHeightPx: jest.fn(() => 33),
+  // The dialog states a cell's confidence and offers the next-poor-cell step only while
+  // the low-quality emphasis is on, and that is the dialog these tests describe.
+  emphasiseLowQualityCells: jest.fn(() => true),
 }));
 
 // jsdom implements no PointerEvent, so fireEvent falls back to a bare Event whose
@@ -162,15 +160,7 @@ let onCancel;
 let onConfirm;
 let onConfirmAndNext;
 
-// Reads the registered help screen out into the DOM, so what the dialog reported can be
-// asserted without reaching into the overlay.
-function HelpScreenProbe() {
-  const { screenId } = useHelp();
-
-  return <span data-testid={'probe-screen'}>{screenId || 'none'}</span>;
-}
-
-const renderDialog = (props = {}, options = undefined) =>
+const renderDialog = (props = {}) =>
   render(
     <CellEditDialog
       pdfId={'pdf-1'}
@@ -183,8 +173,7 @@ const renderDialog = (props = {}, options = undefined) =>
       onConfirm={onConfirm}
       onConfirmAndNext={onConfirmAndNext}
       {...props}
-    />,
-    options
+    />
   );
 
 beforeEach(() => {
@@ -713,24 +702,34 @@ describe('CellEditDialog', () => {
     });
   });
 
-  // Mounting IS opening for this dialog, so its being mounted is what says the user is on
-  // the cell-editor screen; the id comes from config, which is also where the copy module
-  // takes the key of the screen it describes.
-  it('reports itself to the help overlay as the cell-editor screen', () => {
-    renderDialog(
-      {},
-      {
-        wrapper: ({ children }) => (
-          <HelpProvider>
-            <HelpScreenProbe />
-            {children}
-          </HelpProvider>
-        ),
-      }
-    );
+  // The dialog reports no help screen of its own; what it does for help is annotate its
+  // parts, which the review screen's tips then describe. The ids come from config, which
+  // is where the copy module takes them too, so a literal appears on neither side.
+  describe('what help can point at', () => {
+    it.each([
+      ['cell-edit-image-pane', cellEditImageHelpId],
+      ['cell-edit-cancel', cellEditCancelHelpId],
+      ['cell-edit-confirm', cellEditConfirmHelpId],
+      ['cell-edit-confirm-next', cellEditNextHelpId],
+      ['cell-edit-confidence', cellEditConfidenceHelpId],
+    ])('annotates %s', (testId, helpId) => {
+      renderDialog({ image: bothImages });
 
-    expect(screen.getByTestId('probe-screen')).toHaveTextContent(
-      cellEditorScreenId()
-    );
+      expect(screen.getByTestId(testId)).toHaveAttribute(
+        'data-help-id',
+        helpId()
+      );
+    });
+
+    // The crop pane is annotated rather than the img, so a cell whose crop has not
+    // arrived — or that never had one — still has something for the tip to point at.
+    it('annotates the crop pane even where there is no crop', () => {
+      renderDialog({ cell: sourcelessCell });
+
+      expect(screen.getByTestId('cell-edit-image-pane')).toHaveAttribute(
+        'data-help-id',
+        cellEditImageHelpId()
+      );
+    });
   });
 });

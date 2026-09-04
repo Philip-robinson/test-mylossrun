@@ -8,6 +8,8 @@
 // A plain number, optionally money: one leading currency symbol (with optional
 // spaces after it), an optional minus, then digits either ungrouped or in
 // thousands groups, and at most one decimal point.
+import {emphasiseLowQualityCells} from "config";
+
 const NUMERIC_PATTERN = /^[£$€]?\s*-?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$/;
 
 // True when `text` reads as a number and so should be right-aligned. Anything
@@ -122,6 +124,8 @@ export const adjacentPoorCell = (poorCells, selected, step) => {
 // carries no confidence at all reads "Confidence unknown" rather than "0%", which
 // would claim a bad reading where in fact there was no reading.
 export const confidenceLabel = (confidence) =>
-  typeof confidence === 'number' && Number.isFinite(confidence)
+  emphasiseLowQualityCells() &&
+  typeof confidence === 'number' &&
+  Number.isFinite(confidence)
     ? `Confidence ${Math.round(confidence)}%`
     : 'Confidence unknown';

@@ -19,14 +19,11 @@ import {
   linkAvailableTablesHelpId,
   linkCancelHelpId,
   linkLinkedTablesHelpId,
-  linkReadyHelpId,
   linkSaveHelpId,
   linkTableCellWidth,
   linkUnlinkHelpId,
-  readyTableStage,
 } from 'config';
 import {
-  allLinkedPlaced,
   buildInitialState,
   buildSaveTables,
   dropCandidates,
@@ -283,8 +280,8 @@ export default function TableLinkageEditor({
   // to the Available column, in document order like the rest of that list. It does NOT
   // dissolve the group — membership lives in the root's `next` map, which the linking flow
   // owns and this panel never writes — so every table it moves is still a member and is still
-  // offered for placing. A LOCAL edit, exactly like dragging each table out by hand: Save or
-  // Ready persists the cleared layout and Cancel abandons it.
+  // offered for placing. A LOCAL edit, exactly like dragging each table out by hand: Save
+  // persists the cleared layout and Cancel abandons it.
   //
   // The tables returned are the ones ON SCREEN, not a reconstruction from `rootTable.next`:
   // the grid may hold tables placed but not yet saved, which going back to the saved state
@@ -304,14 +301,14 @@ export default function TableLinkageEditor({
   // confirmedTableStage() when this save REMOVES its links.
   //
   // The ready stage says "this linked group is ready to be extracted"; once the links are
-  // gone that claim no longer holds, so it is withdrawn. Three deliberate limits:
+  // gone that claim no longer holds, so it is withdrawn. Nothing writes the ready stage any
+  // more, so this only ever meets a root that reached it before, but the withdrawal still
+  // has to happen. Two deliberate limits:
   //
   //  * it CAPS, never sets — a root part-way up the Layers ladder (or with no stage at all)
   //    must not be promoted to confirmed just by being unlinked;
   //  * it needs links to have actually gone, so opening this panel on a never-linked table
-  //    that was marked ready from the left column and pressing Save does not demote it;
-  //  * "Ready" applies afterwards and therefore wins — a single unlinked table can still be
-  //    marked ready, and asking for that explicitly is not undone by the same click.
+  //    that carries the ready stage and pressing Save does not demote it.
   const savedTables = () => {
     const saved = buildSaveTables(rootTable, grid, tables);
     const hadLinks =
@@ -324,27 +321,6 @@ export default function TableLinkageEditor({
         ? entry
         : { ...entry, confirmationStage: Math.min(stage, confirmedTableStage()) };
     });
-  };
-
-  // A group is ready to extract only once every table in it has a place in the grid: a member
-  // left in the Available column would be silently dropped from the extraction.
-  const readyEnabled = allLinkedPlaced(rootTable, grid);
-
-  // "Ready" is the same local save as "Save", with the root table additionally
-  // promoted to the ready stage. The save list is built first, then the root's
-  // entry is replaced immutably.
-  //
-  // Deliberately UNGATED: this promotes the root from whatever stage it is on. Going
-  // straight to extraction is intended behaviour, not an oversight — do not add a stage
-  // check here.
-  const handleReady = () => {
-    onSave(
-      savedTables().map((entry) =>
-        entry.tableId === rootTable.tableId
-          ? { ...entry, confirmationStage: readyTableStage() }
-          : entry,
-      ),
-    );
   };
 
   return (
@@ -518,15 +494,6 @@ export default function TableLinkageEditor({
             onClick={() => onSave(savedTables())}
           >
             {'Save'}
-          </Button>
-          <Button
-            data-testid={'link-ready'}
-            data-help-id={linkReadyHelpId()}
-            variant={'contained'}
-            disabled={!readyEnabled}
-            onClick={handleReady}
-          >
-            {'Ready'}
           </Button>
         </Box>
       </Box>

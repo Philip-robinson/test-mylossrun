@@ -80,7 +80,7 @@ import {
   reviewSelectedCellShadow,
   reviewSectionTitleLabel,
   reviewTitleLabel,
-  reviewWideCellMinCharacters,
+  reviewWideCellMinCharacters, emphasiseLowQualityCells,
 } from 'config';
 
 // Columns are content-sized but capped, and over-long content wraps at word boundaries
@@ -152,7 +152,7 @@ const labelledRowStyle = {
 
 const titleStyle = (poor) => ({
   ...cellBodyStyle(poor),
-  backgroundColor: poor ? reviewLowConfidenceBackgroundColour() : undefined,
+  backgroundColor: emphasiseLowQualityCells() && poor ? reviewLowConfidenceBackgroundColour() : undefined,
   cursor: 'pointer',
   flexGrow: 1,
   minWidth: 0,
@@ -637,7 +637,7 @@ export default function ReviewTablePanel({
           reading it. Outside the scrolling region, so the number stays in view while
           the grid moves under it, and derived from the DISPLAYED grid, so it falls as
           corrections are confirmed. */}
-      {!loading && !error && (
+      { emphasiseLowQualityCells() && !loading && !error && (
         <Box
           data-testid={'review-bar'}
           sx={{
@@ -698,13 +698,6 @@ export default function ReviewTablePanel({
             >
               <ChevronLeftIcon fontSize={'small'} />
             </IconButton>
-            {/* A native select rather than MUI's popup list: the list is a plain jump
-                target, and a native control stays usable with the keyboard and however
-                long the list gets. The value is not held in state — picking the same
-                coordinate twice should scroll to it twice, which a controlled value
-                pinned to the last choice would swallow — so it resets to the placeholder
-                after each jump. The label is pinned shrunk because a native select always
-                shows its current option, which an unshrunk label would sit on top of. */}
             <TextField
               select
               size={'small'}
@@ -738,10 +731,6 @@ export default function ReviewTablePanel({
           </Box>
         </Box>
       )}
-      {/* The table's own title, above the grid and OUTSIDE the scroller so it stays in
-          view while the grid moves under it — it names what is being read, which is worth
-          having to hand throughout. Drawn and flagged exactly as a cell is, and editable
-          in the same dialog: the extraction misreads a heading as readily as a value. */}
       {!loading && !error && activeTable?.title && (
         <Box
           data-help-id={reviewTitleHelpId()}
@@ -920,7 +909,7 @@ export default function ReviewTablePanel({
                     // on a sourceless position: a blank nothing ever read is not a poor
                     // reading. `poorCells` already applies both, so ask it rather than
                     // re-deriving the test here and risking the two drifting apart.
-                    const poor = poorCells.some(
+                    const poor = emphasiseLowQualityCells() && poorCells.some(
                       (candidate) =>
                         candidate.rowIndex === rowIndex &&
                         candidate.columnIndex === columnIndex

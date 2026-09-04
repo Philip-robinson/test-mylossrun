@@ -1,3 +1,9 @@
+jest.mock('config', () => ({
+  __esModule: true,
+  ...jest.requireActual('config'),
+  emphasiseLowQualityCells: jest.fn(() => true),
+}));
+
 import {
   looksNumeric,
   isWideText,

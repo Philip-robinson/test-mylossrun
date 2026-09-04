@@ -3,6 +3,7 @@ import {
   MERGE_ROLE_JOINED,
   MERGE_ROLE_ROOT,
   buildCalcCellsRequestTable,
+  clampToUnitPage,
   buildCalcHint,
   buildRecalcHint,
   changedColouredAreaRects,
@@ -597,7 +598,74 @@ describe('calculate-cells request/merge helpers', () => {
     ...extra,
   });
 
+  // The finders refuse a hint that strays outside the unit page at all, and a drag that
+  // began a pixel off the image edge produces exactly that — a section-title area at
+  // left = -0.0059 took down every calculate-cells call its page made.
+  describe('clampToUnitPage', () => {
+    it('leaves a rectangle already inside the page alone', () => {
+      const bounds = { left: 0.1, top: 0.2, width: 0.3, height: 0.4 };
+      expect(clampToUnitPage(bounds)).toEqual(bounds);
+    });
+
+    it('trims an overhanging edge and keeps the edge that is inside', () => {
+      expect(
+        clampToUnitPage({ left: -0.006, top: 0.18, width: 0.123, height: 0.04 })
+      ).toEqual({
+        left: 0,
+        top: 0.18,
+        // The right edge stood at 0.117 and stays there: only the overhang goes.
+        width: 0.11699999999999999,
+        height: 0.04,
+      });
+    });
+
+    it('is exactly identity for a rectangle it does not have to trim', () => {
+      // Not merely equal: the same numbers. Recomputing a width from its edges loses a few
+      // ulps, and every rectangle the editor sends goes through here.
+      const bounds = { left: 0.30000000000000004, top: 0.1, width: 0.3, height: 0.4 };
+      expect(clampToUnitPage(bounds).width).toBe(0.3);
+      expect(clampToUnitPage(bounds).left).toBe(0.30000000000000004);
+    });
+
+    it('trims an overhang past the far edge too', () => {
+      expect(
+        clampToUnitPage({ left: 0.9, top: 0.9, width: 0.3, height: 0.3 })
+      ).toEqual({ left: 0.9, top: 0.9, width: 0.09999999999999998, height: 0.09999999999999998 });
+    });
+
+    it('gives a rectangle wholly outside the page no area', () => {
+      // Nothing of it is on the page, so there is nothing to read; the finders refuse a
+      // zero-area rectangle in turn, which is the right answer rather than a silent guess.
+      const clamped = clampToUnitPage({ left: -0.5, top: -0.5, width: 0.2, height: 0.2 });
+      expect(clamped.width).toBe(0);
+      expect(clamped.height).toBe(0);
+    });
+  });
+
   describe('buildCalcCellsRequestTable', () => {
+    it('trims a stored special area that strays off the page', () => {
+      // The draw path trims new rectangles, but a document saved before it did carries one
+      // for good: trimming on the way out is what stops it failing every call.
+      const request = buildCalcCellsRequestTable(
+        calcTable({
+          sectionTitles: [
+            {
+              tableRow: 1,
+              delete: false,
+              columnName: null,
+              data: {
+                bounds: { left: -0.006, top: 0.4, width: 0.3, height: 0.05 },
+                text: null,
+                confidence: null,
+              },
+            },
+          ],
+        })
+      );
+      expect(request.specials[0].left).toBe(0);
+      expect(request.specials[0].width).toBeCloseTo(0.294, 10);
+    });
+
     it('emits the table bounds, tableInPage and one entry per cell with its own bounds', () => {
       const request = buildCalcCellsRequestTable(calcTable());
       expect(request.left).toBeCloseTo(0.1, 10);

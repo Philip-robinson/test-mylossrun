@@ -14,7 +14,6 @@ import {
   isAmalgamated,
   reconstructGrid,
   autoPopulateGrid,
-  allLinkedPlaced,
   buildInitialState,
   buildSaveTables,
   singleColumnGrid,
@@ -36,22 +35,17 @@ import {
   linkAvailableTablesHelpId,
   linkCancelHelpId,
   linkLinkedTablesHelpId,
-  linkReadyHelpId,
   linkSaveHelpId,
   linkTableCellWidth,
   linkUnlinkHelpId,
-  readyTableStage,
 } from 'config';
 
 jest.mock('services/images', () => ({ getTableImages: jest.fn() }));
 
-// Config is mocked (rather than read directly) so no assertion here can ever depend
-// on a configured value: the real values pass through, and `readyTableStage` is
-// overridden with a sentinel so the Ready test asserts the mock, not the constant.
-jest.mock('config', () => {
-  const actual = jest.requireActual('config');
-  return { __esModule: true, ...actual, readyTableStage: () => 99 };
-});
+// A confirmationStage above the five-row Layers ladder's maximum. Nothing writes one any
+// more — the buttons that did have gone — but a document saved by an earlier version can
+// still carry it, which is what the unlink demotion has to cope with.
+const aboveConfirmedStage = confirmedTableStage() + 1;
 
 jest.mock('react-hot-toast', () => {
   const toast = jest.fn();
@@ -612,32 +606,6 @@ describe('buildInitialState', () => {
     });
     const { select } = buildInitialState(root);
     expect(select.map((t) => t.tableId)).toEqual(['early', 'late']);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// allLinkedPlaced
-// ---------------------------------------------------------------------------
-
-describe('allLinkedPlaced', () => {
-  const a = mkTable({ tableId: 'a', pdfPage: 1 });
-  const b = mkTable({ tableId: 'b', pdfPage: 2 });
-  const root = mkTable({ tableId: 'root', pdfPage: 0, next: { a, b } });
-
-  it('is false while a member of next is still unplaced', () => {
-    expect(allLinkedPlaced(root, [[root, a]])).toBe(false);
-  });
-
-  it('is true once every member of next is in the grid', () => {
-    expect(allLinkedPlaced(root, [[root, a], [b, null]])).toBe(true);
-  });
-
-  it('is true for a root with no links at all', () => {
-    expect(allLinkedPlaced(mkTable({ tableId: 'solo' }), [[root]])).toBe(true);
-  });
-
-  it('tolerates a missing grid', () => {
-    expect(allLinkedPlaced(root, null)).toBe(false);
   });
 });
 
@@ -1351,7 +1319,6 @@ describe('TableLinkageEditor component', () => {
       ['link-unlink', linkUnlinkHelpId()],
       ['link-cancel', linkCancelHelpId()],
       ['link-save', linkSaveHelpId()],
-      ['link-ready', linkReadyHelpId()],
     ];
 
     for (const [testId, helpId] of anchors) {
@@ -1359,8 +1326,9 @@ describe('TableLinkageEditor component', () => {
     }
   });
 
-  // A group is ready to extract only once every table in it has a place in the grid.
-  it('disables Ready while a member of next is still unplaced', async () => {
+  // Save stands whatever the layout: a part-laid-out group is still worth keeping. Nothing
+  // in this panel is gated on every member of the group having a place in the grid any more.
+  it('leaves Save enabled while a member of next is still unplaced', async () => {
     const { root, tables } = buildFixture();
     getTableImages.mockResolvedValue({ images: {} });
     render(
@@ -1376,91 +1344,7 @@ describe('TableLinkageEditor component', () => {
 
     // The fixture auto-places `a` on the spine and leaves `x` in Available.
     expect(screen.getByTestId('select-column').querySelector('[data-tableid="x"]')).not.toBeNull();
-    expect(screen.getByTestId('link-ready')).toBeDisabled();
-    // Save is always available: a part-laid-out group is still worth keeping.
     expect(screen.getByTestId('link-save')).toBeEnabled();
-  });
-
-  it('enables Ready once every member of next is placed', async () => {
-    const a = withBounds(
-      mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }),
-      2,
-    );
-    const root = withBounds(
-      mkTable({
-        tableId: 'root',
-        name: 'Root',
-        pdfPage: 0,
-        cols: 2,
-        rows: 3,
-        next: { a },
-      }),
-      1,
-    );
-    getTableImages.mockResolvedValue({ images: {} });
-    render(
-      <TableLinkageEditor
-        pdfId={'pdf-1'}
-        rootTable={root}
-        tables={[root]}
-        onCancel={jest.fn()}
-        onSave={jest.fn()}
-      />,
-    );
-    await waitFor(() => expect(getTableImages).toHaveBeenCalled());
-
-    expect(screen.getByTestId('select-column').querySelector('[data-tableid]')).toBeNull();
-    expect(screen.getByTestId('link-ready')).toBeEnabled();
-  });
-
-  it('enables Ready for a root with no links at all', async () => {
-    const root = withBounds(
-      mkTable({ tableId: 'root', name: 'Root', pdfPage: 0, cols: 2, rows: 3 }),
-      1,
-    );
-    getTableImages.mockResolvedValue({ images: {} });
-    render(
-      <TableLinkageEditor
-        pdfId={'pdf-1'}
-        rootTable={root}
-        tables={[root]}
-        onCancel={jest.fn()}
-        onSave={jest.fn()}
-      />,
-    );
-    await waitFor(() => expect(screen.getByTestId('link-ready')).toBeEnabled());
-  });
-
-  it('disables Ready again once a placed table is dragged back out', async () => {
-    const a = withBounds(
-      mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }),
-      2,
-    );
-    const root = withBounds(
-      mkTable({
-        tableId: 'root',
-        name: 'Root',
-        pdfPage: 0,
-        cols: 2,
-        rows: 3,
-        next: { a },
-      }),
-      1,
-    );
-    getTableImages.mockResolvedValue({ images: {} });
-    render(
-      <TableLinkageEditor
-        pdfId={'pdf-1'}
-        rootTable={root}
-        tables={[root]}
-        onCancel={jest.fn()}
-        onSave={jest.fn()}
-      />,
-    );
-    await waitFor(() => expect(screen.getByTestId('link-ready')).toBeEnabled());
-
-    fireEvent.click(screen.getByTestId('link-unlink'));
-    expect(screen.getByTestId('link-ready')).toBeDisabled();
   });
 
   it('renders nothing when rootTable is undefined', () => {
@@ -1598,14 +1482,13 @@ describe('TableLinkageEditor component', () => {
     expect(container.querySelector('[data-testid="linked-panel"]')).not.toBeNull();
     expect(screen.getByTestId('link-cancel')).toBeInTheDocument();
     expect(screen.getByTestId('link-save')).toBeInTheDocument();
-    expect(screen.getByTestId('link-ready')).toBeInTheDocument();
+    expect(screen.queryByTestId('link-ready')).toBeNull();
   });
 
-  it('Ready saves exactly what Save would, except the root is marked ready', async () => {
+  // Save is the only way out of this panel that persists anything, and it moves no stage of
+  // its own: the group it lays out arrives at whatever stage it already had.
+  it('Save leaves every stage alone when the links are still there', async () => {
     const fixture = buildFixture();
-    // Ready is gated on every member of next being placed, so this group holds only the
-    // table the auto-placement puts on the spine. `x` stays a plain top-level table with a
-    // stage of its own, to show that no other table's stage moves.
     const root = {
       ...fixture.root,
       confirmationStage: 2,
@@ -1627,20 +1510,15 @@ describe('TableLinkageEditor component', () => {
     );
 
     await waitFor(() => expect(getTableImages).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByTestId('link-ready'));
+    fireEvent.click(screen.getByTestId('link-save'));
     expect(onSave).toHaveBeenCalledTimes(1);
 
     const { grid } = buildInitialState(root);
-    const expected = buildSaveTables(root, grid, tables).map((t) =>
-      t.tableId === root.tableId
-        ? { ...t, confirmationStage: readyTableStage() }
-        : t,
-    );
     const actual = onSave.mock.calls[0][0];
-    expect(actual).toEqual(expected);
+    expect(actual).toEqual(buildSaveTables(root, grid, tables));
 
     const newRoot = actual.find((t) => t.tableId === 'root');
-    expect(newRoot.confirmationStage).toBe(readyTableStage());
+    expect(newRoot.confirmationStage).toBe(2);
     expect(newRoot.grid).toEqual([['root'], ['a']]);
     // No other table's stage moved, and nothing was mutated in place.
     expect(actual.find((t) => t.tableId === 'x').confirmationStage).toBe(3);
@@ -2014,12 +1892,7 @@ describe('TableLinkageEditor component', () => {
     const order = Array.from(container.querySelectorAll('button[data-testid]')).map(
       (el) => el.getAttribute('data-testid'),
     );
-    expect(order).toEqual([
-      'link-unlink',
-      'link-cancel',
-      'link-save',
-      'link-ready',
-    ]);
+    expect(order).toEqual(['link-unlink', 'link-cancel', 'link-save']);
   });
 
   it('Unlink returns every linked table to Available and leaves Root alone in the grid', async () => {
@@ -2138,8 +2011,8 @@ describe('TableLinkageEditor component', () => {
   const savedRootFrom = (onSave) =>
     onSave.mock.calls[0][0].find((t) => t.tableId === 'root');
 
-  it('Unlink then Save returns a ready root to the confirmed stage', async () => {
-    const { linkedRoot, tables } = linkedFixture(readyTableStage());
+  it('Unlink then Save caps a root above the confirmed stage', async () => {
+    const { linkedRoot, tables } = linkedFixture(aboveConfirmedStage);
     const onSave = jest.fn();
     await renderForStage(linkedRoot, tables, onSave);
 
@@ -2172,30 +2045,17 @@ describe('TableLinkageEditor component', () => {
     expect(savedRootFrom(onSave).confirmationStage).toBeNull();
   });
 
-  // Ready is refused while any member of the group is unplaced, and clearing the grid
-  // unplaces all of them — so the promotion cannot be made from there.
-  it('Ready is refused after the grid is cleared, while members remain in the group', async () => {
-    const { linkedRoot, tables } = linkedFixture(readyTableStage());
-    const onSave = jest.fn();
-    await renderForStage(linkedRoot, tables, onSave);
-
-    fireEvent.click(screen.getByTestId('link-unlink'));
-
-    expect(screen.getByTestId('link-ready')).toBeDisabled();
-    fireEvent.click(screen.getByTestId('link-ready'));
-    expect(onSave).not.toHaveBeenCalled();
-  });
-
   it('saving a root that never had links leaves its stage alone', async () => {
-    // Marked ready from the left column, never linked: Save here must not demote it.
+    // Carries a stage above the ladder from an earlier version, never linked: Save must not
+    // demote it — the cap needs links to have actually gone.
     const { root, x } = buildFixture();
-    const readyRoot = { ...root, confirmationStage: readyTableStage() };
+    const readyRoot = { ...root, confirmationStage: aboveConfirmedStage };
     const onSave = jest.fn();
     await renderForStage(readyRoot, [readyRoot, x], onSave);
 
     fireEvent.click(screen.getByTestId('link-save'));
 
-    expect(savedRootFrom(onSave).confirmationStage).toBe(readyTableStage());
+    expect(savedRootFrom(onSave).confirmationStage).toBe(aboveConfirmedStage);
   });
 });
 

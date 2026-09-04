@@ -7828,9 +7828,9 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     await userEvent.click(screen.getByTestId('mock-member-section-title'));
     await waitFor(() => expect(calculateCells).toHaveBeenCalledTimes(1));
 
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
+    // A drawn region is read where it is drawn rather than on the way off the page, so no
+    // page exit saves here: the write-back's own save is the only one, and it carries the
+    // reading.
     await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
     const root = saveTables.mock.calls[0][1].find(
       (t) => t.tableId === 'edit-target'
@@ -8032,12 +8032,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
     await waitFor(() =>
       expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta')
     );
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
-
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const sentTables = saveTables.mock.calls[0][1];
+    // Leaving the page saves what leaving settled, and the recalculation saves again when its
+    // write-back lands, so the reading reaches the server without the user asking for it.
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(2));
+    const sentTables = saveTables.mock.calls[1][1];
     const savedTarget = sentTables.find((t) => t.tableId === 'edit-target');
     expect(savedTarget.title.text).toBe('Returned Title');
     expect(savedTarget.title.bounds).toEqual({
@@ -8073,12 +8071,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta')
     );
 
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
-
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const sentTables = saveTables.mock.calls[0][1];
+    // Leaving the page saves what leaving settled, and the recalculation saves again when its
+    // write-back lands, so the reading reaches the server without the user asking for it.
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(2));
+    const sentTables = saveTables.mock.calls[1][1];
     const savedTarget = sentTables.find((t) => t.tableId === 'edit-target');
     // The text the recalculation read, not the pre-call placeholder.
     expect(savedTarget.title.text).toBe('Returned Title');
@@ -8160,11 +8156,10 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       resolveCalc();
     });
 
-    const save = screen.getByRole('button', { name: /save/i });
-    await waitFor(() => expect(save).toBeEnabled());
-    await userEvent.click(save);
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const savedTarget = saveTables.mock.calls[0][1].find(
+    // Leaving the page saved, and the stale reading asked for a save of its own when it
+    // landed; neither carries the reading, because the newer manual title stands.
+    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(2));
+    const savedTarget = saveTables.mock.calls[1][1].find(
       (t) => t.tableId === 'edit-target'
     );
     expect(savedTarget.title).toEqual(
@@ -8459,6 +8454,20 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
 
   const thumbnail = (index) => screen.getAllByTestId('thumbnail')[index];
   const saveButton = () => screen.getByRole('button', { name: /save/i });
+
+  // The table list of the most recent PUT. Leaving a page saves what leaving settled, and the
+  // recalculation saves again when its write-back lands, so what a test wants to inspect is
+  // the last save rather than one the user asked for.
+  const lastSavedTables = () =>
+    saveTables.mock.calls[saveTables.mock.calls.length - 1][1];
+
+  // Wait for `times` automatic saves. Leaving a page saves what leaving settled, and the
+  // recalculation asks for a second save when its write-back changed something — so the count
+  // says which of those two happened, and waiting on it is what makes reading the last payload
+  // deterministic. Waiting for the document to go clean instead would race: it is clean
+  // between the two saves as well as after them.
+  const savedTimes = (times) =>
+    waitFor(() => expect(saveTables).toHaveBeenCalledTimes(times));
 
   // The request tables of the single calculate-cells call, by tableInPage — the only identity
   // the request carries (it has no `name`).
@@ -8786,11 +8795,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const sent = saveTables.mock.calls[0][1];
+    const sent = lastSavedTables();
     const target = sent.find((t) => t.tableId === 't-d');
     expect(target.name).toBe('Delta');
     // The user's own edited border (left moved 0.1 -> 0.15) stands.
@@ -8818,11 +8825,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     // The grid survived: 2 columns and 2 rows, as the editor held them.
     expect(target.columnWidths).toHaveLength(2);
     expect(target.rowHeights).toHaveLength(2);
@@ -8848,11 +8853,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-move-a'));
     await clickAndSettle(screen.getByTestId('mock-next'));
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     expect(target.title.text).toBe('Read Title');
     expect(target.title.bounds).toEqual({
       left: 0.1,
@@ -8877,11 +8880,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-d');
+    const target = lastSavedTables().find((t) => t.tableId === 't-d');
     // The text landed…
     expect(target.cells.find((c) => c.row === 0 && c.column === 0).text).toBe(
       'Fresh'
@@ -8890,6 +8891,8 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(target.confirmationStage).toBe(3);
   });
 
+  // The one page exit here that saves ONCE: the response matches no requested table, so the
+  // recalculation returns without writing anything back and never asks for its own save.
   test('a returned table whose tableInPage matches nothing changes nothing', async () => {
     calculateCells.mockResolvedValue({
       pdfPage: 0,
@@ -8901,11 +8904,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(1);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     // Still the user's own edited table (left moved 0.1 -> 0.15), untouched by the response.
     expect(target.name).toBe('Alpha');
     expect(target.bounds.left).toBeCloseTo(0.15);
@@ -8938,11 +8939,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     // cells, and not (partially) its title.
     await settle(resolveCalc);
 
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
+    await savedTimes(2);
 
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     expect(target.name).toBe('Alpha');
     expect(target.bounds.left).toBeCloseTo(0.2);
     expect(target.bounds.width).toBeCloseTo(0.2);
@@ -8950,7 +8949,7 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(target.cells.every((c) => c.text !== 'Fresh')).toBe(true);
   });
 
-  test('dirty is set when the write-back changed something and not when the response changed nothing', async () => {
+  test('a write-back that changed something is saved, and one that changed nothing is not', async () => {
     let resolveCalc;
     calculateCells.mockImplementation(
       () =>
@@ -8960,28 +8959,30 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     );
     await renderRecalc();
 
-    // Edit, navigate (launching the call), then save while it is still in flight so the
-    // document is CLEAN when the response lands.
+    // Edit and navigate, launching the call. Leaving saves what leaving settled — one PUT,
+    // and the document is clean while the response is still in flight.
     await clickAndSettle(screen.getByTestId('mock-move-a'));
     await clickAndSettle(screen.getByTestId('mock-next'));
     expect(calculateCells).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(saveButton()).toBeEnabled());
-    await clickAndSettle(saveButton());
+    await savedTimes(1);
     await waitFor(() => expect(saveButton()).toBeDisabled());
 
-    // A response that matches nothing leaves the document clean.
+    // A response matching no requested table writes nothing back, so the recalculation
+    // returns before asking for a save: still one PUT, and the document stays clean.
     await settle(() => resolveCalc([readAlpha({ tableInPage: 7 })]));
+    await savedTimes(1);
     expect(saveButton()).toBeDisabled();
 
-    // A response that does write text back dirties it again. We are on page 1 now, so edit
-    // that page's table and navigate back — t-c is tableInPage 0 on page 1.
+    // A response that does write text back saves itself, so the reading is persisted without
+    // the user asking. We are on page 1 now, so edit that page's table and navigate back —
+    // t-c is tableInPage 0 on page 1.
     await clickAndSettle(screen.getByTestId('mock-move-c'));
     await clickAndSettle(screen.getByTestId('mock-prev'));
     expect(calculateCells).toHaveBeenCalledTimes(2);
-    await clickAndSettle(saveButton());
-    await waitFor(() => expect(saveButton()).toBeDisabled());
     await settle(() => resolveCalc([readAlpha()]));
-    await waitFor(() => expect(saveButton()).toBeEnabled());
+    // The second page exit, then the write-back it launched.
+    await savedTimes(3);
+    await waitFor(() => expect(saveButton()).toBeDisabled());
   });
 
   test('a thumbnail click is not blocked by the call: the page moves before it resolves', async () => {
@@ -9019,7 +9020,7 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
     expect(screen.getByTestId('mock-selected')).toHaveTextContent('t-c');
     await clickAndSettle(saveButton());
     await waitFor(() => expect(saveTables).toHaveBeenCalledTimes(1));
-    const target = saveTables.mock.calls[0][1].find((t) => t.tableId === 't-a');
+    const target = lastSavedTables().find((t) => t.tableId === 't-a');
     expect(target.bounds.left).toBeCloseTo(0.15);
   });
 });

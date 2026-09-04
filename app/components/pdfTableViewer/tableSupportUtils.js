@@ -939,12 +939,35 @@ export function recalcShortfallMessage(requestedHints, returnedTables) {
 // The four page-fraction fields of a rectangle, stripped of anything else a metadata
 // BoundingRectangle carries (the per-edge border widths). The request DTOs are plain
 // Rectangles, so sending the extras would be noise.
-const plainRect = (bounds) => ({
-  left: bounds.left,
-  top: bounds.top,
-  width: bounds.width,
-  height: bounds.height,
-});
+// A rectangle trimmed to the unit page, keeping whichever edges are already inside it.
+// The finders refuse a hint that strays outside the page at all (see
+// find_tables_common._validate_rectangle_in_unit_page) — no tolerance, not even for the
+// fraction of a pixel a drag that began just off the image produces — and a rectangle drawn
+// over the edge is asking for the part of the page that exists, so trimming is what it meant.
+// A rectangle lying wholly outside comes back with no area, which the finders refuse in turn:
+// there is genuinely nothing there to read.
+// One axis of it. Exactly identity for an axis already inside 0..1: recomputing an extent as
+// `end - start` does not round-trip in binary floating point, so trimming unconditionally
+// would perturb every rectangle the editor sends by a few ulps for the sake of the rare one
+// that needs it — and an axis is trimmed on its own, so a horizontal overhang cannot move a
+// rectangle's height.
+const clampAxis = (start, extent) => {
+  if (start >= 0 && start + extent <= 1) return [start, extent];
+  const newStart = Math.min(Math.max(start, 0), 1);
+  const end = Math.min(Math.max(start + extent, newStart), 1);
+  return [newStart, end - newStart];
+};
+
+export const clampToUnitPage = (bounds) => {
+  const [left, width] = clampAxis(bounds.left, bounds.width);
+  const [top, height] = clampAxis(bounds.top, bounds.height);
+  return { left, top, width, height };
+};
+
+// Trimmed to the unit page on the way out, so a document already carrying a rectangle that
+// strays over an edge — drawn before the draw path trimmed them — can still be read rather
+// than failing every calculate-cells call the page makes for as long as it exists.
+const plainRect = (bounds) => clampToUnitPage(bounds);
 
 // The ordered special areas of a table, and the SINGLE source of that order: the request
 // builder emits them in this order and the merge reads the response's positional `specials`

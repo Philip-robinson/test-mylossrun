@@ -53,6 +53,7 @@ import {
   splitEntryAt,
   splitMap,
   tablesOnPage,
+  clampToUnitPage,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   cellBounds,
@@ -946,12 +947,16 @@ export function StagedPageGridEditor({
     setTimeout(() => {
       suppressNextClickRef.current = false;
     }, 0);
-    const bounds = {
+    // Trimmed to the page: a drag that begins or ends beyond the image edge gives
+    // `eventToFraction` a fraction outside 0..1, and every consumer of this rectangle — the
+    // coloured area, the title and the section-title area alike — is sent to a finder that
+    // refuses a hint straying outside the unit page at all.
+    const bounds = clampToUnitPage({
       left: Math.min(c.startX, c.curX),
       top: Math.min(c.startY, c.curY),
       width: Math.abs(c.curX - c.startX),
       height: Math.abs(c.curY - c.startY),
-    };
+    });
     if (bounds.width <= 0 || bounds.height <= 0) return;
     // The Coloured Area tool's drag picks a free-form rectangle to colour; nothing is
     // written until Submit.

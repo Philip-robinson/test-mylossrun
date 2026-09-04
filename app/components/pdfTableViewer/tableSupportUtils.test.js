@@ -2110,7 +2110,7 @@ describe('removeFromLinkGroup', () => {
     expect(out.find((t) => t.tableId === 'r').next).toBeNull();
   });
 
-  it('drops the root grid whole, not just the removed cell', () => {
+  it('rebuilds the root grid as one column over the members that remain', () => {
     const before = list({
       grid: [
         ['r', 'm1'],
@@ -2118,6 +2118,18 @@ describe('removeFromLinkGroup', () => {
       ],
     });
     const out = removeFromLinkGroup(before, 'r', 'm1');
+    // Rebuilt, not patched: the laid-out grid no longer describes the membership, and a grid
+    // that still named m1 would keep it in the extraction.
+    expect(out.find((t) => t.tableId === 'r').grid).toEqual([['r'], ['m2']]);
+  });
+
+  it('nulls the root grid once the last member leaves', () => {
+    const one = [
+      above,
+      { ...root(), next: { m1: member1 }, grid: [['r'], ['m1']] },
+      below,
+    ];
+    const out = removeFromLinkGroup(one, 'r', 'm1');
     expect(out.find((t) => t.tableId === 'r').grid).toBeNull();
   });
 

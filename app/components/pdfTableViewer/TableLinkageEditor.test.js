@@ -17,6 +17,7 @@ import {
   allLinkedPlaced,
   buildInitialState,
   buildSaveTables,
+  singleColumnGrid,
   padForDisplay,
   insertSorted,
   canDropSelectToGrid,
@@ -731,6 +732,44 @@ describe('buildSaveTables', () => {
       ['b', ''],
     ]);
     expect(Object.keys(newRoot.next).sort()).toEqual(['b', 'c']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// singleColumnGrid
+// ---------------------------------------------------------------------------
+
+describe('singleColumnGrid', () => {
+  const root = mkTable({ tableId: 'root', pdfPage: 0, tableInPage: 1 });
+
+  it('stacks the members under the root in the first column, in document order', () => {
+    const later = mkTable({ tableId: 'later', pdfPage: 2 });
+    const samePage = mkTable({ tableId: 'same', pdfPage: 0, tableInPage: 2 });
+    const nextPage = mkTable({ tableId: 'next', pdfPage: 1 });
+    expect(singleColumnGrid(root, [later, samePage, nextPage])).toEqual([
+      ['root'],
+      ['same'],
+      ['next'],
+      ['later'],
+    ]);
+  });
+
+  it('is null for a group with no members', () => {
+    expect(singleColumnGrid(root, [])).toBeNull();
+    expect(singleColumnGrid(root, null)).toBeNull();
+  });
+
+  it('never lists the root as a member of its own column', () => {
+    const b = mkTable({ tableId: 'b', pdfPage: 1 });
+    expect(singleColumnGrid(root, [root, b])).toEqual([['root'], ['b']]);
+  });
+
+  it('leaves its inputs alone', () => {
+    const b = mkTable({ tableId: 'b', pdfPage: 2 });
+    const a = mkTable({ tableId: 'a', pdfPage: 1 });
+    const members = [b, a];
+    singleColumnGrid(root, members);
+    expect(members.map((t) => t.tableId)).toEqual(['b', 'a']);
   });
 });
 

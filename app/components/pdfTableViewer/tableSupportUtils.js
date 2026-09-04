@@ -14,6 +14,7 @@ import {
   comesAfter,
   hasSavedGrid,
   isAmalgamated,
+  singleColumnGrid,
   sortByOrder,
 } from 'components/pdfTableViewer/gridUtilities';
 import { collectColumnNames } from 'components/pdfTableViewer/layerUtils';
@@ -506,10 +507,11 @@ export function canJoinLinkGroup(table, root, roles) {
 // top-level list, placed in document order among the tables already there rather than
 // appended, so the Document Overview still reads down the document.
 //
-// The root's saved grid is dropped WHOLE, not just the removed table's cell: it was laid out
-// over a membership that no longer holds, and a grid still naming the table that just left
-// would keep it in the extraction. `next` goes to null once the last member leaves, so the
-// root stops reading as amalgamated.
+// The root's saved grid is REBUILT whole, not patched: it was laid out over a membership that
+// no longer holds, and a grid still naming the table that just left would keep it in the
+// extraction. The rebuild is the same single column the join writes, over the members that
+// remain, so the group the extraction walks still holds all of them. `next` and the grid both
+// go to null once the last member leaves, so the root stops reading as amalgamated.
 //
 // Only a DIRECT member is removable: `rootId` must name a top-level table and `tableId` a key
 // of its own `next` map. Anything else — an unknown id, a member of another group, a table
@@ -525,7 +527,11 @@ export function removeFromLinkGroup(tables, rootId, tableId) {
   );
   const withoutMember = list.map((t) =>
     t.tableId === rootId
-      ? { ...t, next: Object.keys(rest).length > 0 ? rest : null, grid: null }
+      ? {
+          ...t,
+          next: Object.keys(rest).length > 0 ? rest : null,
+          grid: singleColumnGrid(t, Object.values(rest)),
+        }
       : t
   );
 

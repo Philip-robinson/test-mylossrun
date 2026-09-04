@@ -58,7 +58,10 @@ import {
 } from 'config';
 import useScreenHelp from 'components/help/useScreenHelp';
 import { useEditorPass } from 'components/EditorPassProvider';
-import { linkedMembers } from 'components/pdfTableViewer/gridUtilities';
+import {
+  linkedMembers,
+  singleColumnGrid,
+} from 'components/pdfTableViewer/gridUtilities';
 import {
   buildCalcCellsRequestTable,
   canJoinLinkGroup,
@@ -840,11 +843,15 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // the top-level list — which is what removes it from the Document Overview, since that list
   // is what the left panel renders. Removing is removeFromLinkGroup, the exact reverse.
   //
-  // `grid` is deliberately NOT written when adding. buildSaveTables writes it separately
-  // because the Grid Editor lays a group out as a grid; this flow has no layout to record.
-  // A root with `next` and no `grid` still reads as amalgamated everywhere (isAmalgamated
-  // tests both), and tableSizeLabel gates its "N × M Tables" line on a saved grid, so no
-  // bogus size appears.
+  // `grid` is written alongside `next`, as the single column `singleColumnGrid` builds: the
+  // root at (0,0) and every member below it in document order. The membership alone is not
+  // enough — the extraction walks the GRID (a root with no grid is a 1x1 grid of itself), so
+  // a group left with `next` and no `grid` silently loses every member it holds.
+  //
+  // The column is rebuilt from the whole membership on every click, not appended to, so it
+  // stays in document order however the group was built up. A multi-column layout the Grid
+  // Editor saved is therefore replaced by the single column; that panel is where a group is
+  // laid out sideways, and it is opened after the group is built, not before.
   const handleJoinLinkGroup = (tableId) => {
     const root = tables.find((t) => t.tableId === linkingRootId);
     // Looked up through `next` as well as the top level: a thumbnail draws the tables joined
@@ -872,12 +879,17 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
       toast(`${table.name} ${reason}`);
       return;
     }
+    const members = { ...(root.next ?? {}), [table.tableId]: table };
     onEditTables(
       tables
         .filter((t) => t.tableId !== table.tableId)
         .map((t) =>
           t.tableId === root.tableId
-            ? { ...t, next: { ...(t.next ?? {}), [table.tableId]: table } }
+            ? {
+                ...t,
+                next: members,
+                grid: singleColumnGrid(t, Object.values(members)),
+              }
             : t
         )
     );

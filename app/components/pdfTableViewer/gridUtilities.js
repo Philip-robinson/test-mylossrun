@@ -296,6 +296,24 @@ export const buildSaveTables = (root, grid, tables) => {
 };
 
 // ---------------------------------------------------------------------------
+// singleColumnGrid
+// ---------------------------------------------------------------------------
+
+// The link grid the linking session records for a group: the root's id at (0,0) and every
+// member's id stacked below it in column 0, in document order. Ids, not tables — the same
+// shape `buildSaveTables` writes, so the Grid Editor and the extraction read it unchanged.
+//
+// Null for a group with no members: a root alone is not a 1x1 layout, it is NO layout, the
+// same rule `buildSaveTables` applies.
+export const singleColumnGrid = (root, members) => {
+  const ordered = sortByOrder(members ?? []).filter(
+    (t) => t.tableId !== root.tableId,
+  );
+  if (ordered.length === 0) return null;
+  return [[root.tableId], ...ordered.map((t) => [t.tableId])];
+};
+
+// ---------------------------------------------------------------------------
 // insertSorted
 // ---------------------------------------------------------------------------
 

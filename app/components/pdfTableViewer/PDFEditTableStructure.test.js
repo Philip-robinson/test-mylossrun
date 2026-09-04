@@ -8562,7 +8562,9 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
       expect(saveButton()).toBeEnabled();
     });
 
-    test('a joined table lands in the root next map and leaves grid untouched', async () => {
+    // The extraction walks the GRID, not the `next` map, so membership alone would lose the
+    // member: the join records both, the member's id going into the first grid column.
+    test('a joined table lands in the root next map and in the first grid column', async () => {
       await renderLinking();
       await clickAndSettle(tableHit(0, 't-d'));
       await clickAndSettle(saveButton());
@@ -8570,8 +8572,34 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
       const [, savedTables] = saveTables.mock.calls[0];
       const root = savedTables.find((t) => t.tableId === 't-b');
       expect(Object.keys(root.next ?? {})).toEqual(['t-d']);
-      expect(root.grid ?? null).toBeNull();
+      expect(root.grid).toEqual([['t-b'], ['t-d']]);
       expect(savedTables.map((t) => t.tableId)).not.toContain('t-d');
+    });
+
+    // t-c is clicked first but sits on page 1, below t-d on page 0: the column reads down the
+    // document, not down the sequence of clicks.
+    test('the grid column is in document order, not the order of the clicks', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(1, 't-c'));
+      await clickAndSettle(tableHit(0, 't-d'));
+      await clickAndSettle(saveButton());
+
+      const [, savedTables] = saveTables.mock.calls[0];
+      const root = savedTables.find((t) => t.tableId === 't-b');
+      expect(root.grid).toEqual([['t-b'], ['t-d'], ['t-c']]);
+    });
+
+    test('taking a member back out leaves the column over the members that remain', async () => {
+      await renderLinking();
+      await clickAndSettle(tableHit(0, 't-d'));
+      await clickAndSettle(tableHit(1, 't-c'));
+      await clickAndSettle(tableHit(0, 't-d'));
+      await clickAndSettle(saveButton());
+
+      const [, savedTables] = saveTables.mock.calls[0];
+      const root = savedTables.find((t) => t.tableId === 't-b');
+      expect(Object.keys(root.next ?? {})).toEqual(['t-c']);
+      expect(root.grid).toEqual([['t-b'], ['t-c']]);
     });
 
     test('a table on a later page may join', async () => {

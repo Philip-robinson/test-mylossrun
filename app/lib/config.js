@@ -1014,6 +1014,33 @@ export function emphasiseLowQualityCells() {
   return false;
 }
 
+// The width and height in screen px of a toolbar icon button. It governs the help
+// '?' and the account button beside it alike, which is what makes them one size.
+export function toolbarIconButtonSizePx() {
+  return 20;
+}
+
+// The label on the sign-out menu item.
+export function signOutLabel() {
+  return 'Sign Out';
+}
+
+// The two localStorage keys holding the login data. Sign-in and sign-out must agree
+// about what the login data is; these values are what the application already
+// stores and must not change.
+export function accessCodeStorageKey() {
+  return 'access_code';
+}
+
+export function userEmailStorageKey() {
+  return 'user_email';
+}
+
+// Where the browser goes once signed out.
+export function signedOutPath() {
+  return '/';
+}
+
 const default_export = {
   baseUrl,
   resizeDebounceMs,
@@ -1202,7 +1229,12 @@ const default_export = {
   specialToolColouredCellHelpId,
   specialToolColouredAreaHelpId,
   unknownExtractionMechanism,
-  emphasiseLowQualityCells
+  emphasiseLowQualityCells,
+  toolbarIconButtonSizePx,
+  signOutLabel,
+  accessCodeStorageKey,
+  userEmailStorageKey,
+  signedOutPath
 };
 
 export default default_export;

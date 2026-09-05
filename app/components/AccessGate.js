@@ -12,6 +12,7 @@ import {
 import LockIcon from '@mui/icons-material/Lock';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
+import { accessCodeStorageKey, userEmailStorageKey } from 'config';
 import { validate } from 'services/validate';
 
 export default function AccessGate({ children }) {
@@ -22,8 +23,8 @@ export default function AccessGate({ children }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    const storedAccessCode = localStorage.getItem('access_code');
-    const storedEmail = localStorage.getItem('user_email');
+    const storedAccessCode = localStorage.getItem(accessCodeStorageKey());
+    const storedEmail = localStorage.getItem(userEmailStorageKey());
 
     if (storedAccessCode) {
       validateStoredAccessCode(storedAccessCode, storedEmail);
@@ -42,12 +43,12 @@ export default function AccessGate({ children }) {
           setEmail(storedEmail);
         }
       } else {
-        localStorage.removeItem('access_code');
-        localStorage.removeItem('user_email');
+        localStorage.removeItem(accessCodeStorageKey());
+        localStorage.removeItem(userEmailStorageKey());
       }
     } catch (err) {
-      localStorage.removeItem('access_code');
-      localStorage.removeItem('user_email');
+      localStorage.removeItem(accessCodeStorageKey());
+      localStorage.removeItem(userEmailStorageKey());
     } finally {
       setIsLoading(false);
     }
@@ -61,9 +62,9 @@ export default function AccessGate({ children }) {
       const data = await validate(accessCode.trim(), email.trim() || null);
 
       if (data.success && data.valid) {
-        localStorage.setItem('access_code', accessCode.trim());
+        localStorage.setItem(accessCodeStorageKey(), accessCode.trim());
         if (email.trim()) {
-          localStorage.setItem('user_email', email.trim());
+          localStorage.setItem(userEmailStorageKey(), email.trim());
         }
         setIsAuthenticated(true);
       } else {

@@ -705,6 +705,12 @@ export function helpButtonHelpId() {
   return 'help-button';
 }
 
+// The account button at the far right of the toolbar, beside the `?`. The toolbar stands
+// over every screen, so every screen describes it.
+export function accountButtonHelpId() {
+  return 'account-button';
+}
+
 export function dropBoxHelpId() {
   return 'document-drop-box';
 }
@@ -725,6 +731,11 @@ export function documentListStatusHelpId() {
 // live in the Layers panel, the dim and scale controls in the editor's own toolbar, the
 // two labels on the selected table's corners, and the rest in the Document Overview
 // column down the left or the Pages column down the right.
+//
+// The two corner labels are not the boundary pass's alone: both passes describe both of
+// them — the name label in the same words, from one shared list, and the status label in
+// words of each pass's own, the boundary pass's about the linking a click drives and the
+// contents pass's about what the label says where it is inert.
 //
 // The Document Overview column stands unchanged through both editor passes, so the ids
 // from documentOverviewSaveHelpId down are described by the contents pass too.
@@ -823,8 +834,11 @@ export function documentOverviewExportHelpId() {
   return 'document-overview-export';
 }
 
-// The contents pass's ids: the page in the centre, the Layers column, the tool rail and
-// its three buttons, and the nine entries of the Special tool's sub-menu.
+// The contents pass's ids: the Layers column, the tool rail and its three buttons, and the
+// nine entries of the Special tool's sub-menu — and the page in the centre, which is not
+// the contents pass's alone. Both passes describe editorPageTableHelpId, in different
+// words: the boundary pass as the selected table's boundary, the contents pass as the grid
+// that boundary holds.
 export function editorPageTableHelpId() {
   return 'editor-page-table';
 }
@@ -1161,6 +1175,7 @@ const default_export = {
   helpBadgeBackgroundColour,
   helpBadgeTextColour,
   helpButtonHelpId,
+  accountButtonHelpId,
   documentListScreenId,
   boundaryPassScreenId,
   contentsPassScreenId,

@@ -14,6 +14,7 @@
  */
 
 import {
+  accountButtonHelpId,
   boundaryCreateTableHelpId,
   boundaryDeleteTableHelpId,
   boundaryPassScreenId,
@@ -80,6 +81,7 @@ import {
   toolbarValidateBordersHelpId,
   toolbarValidateTablesHelpId,
   validateBordersHelpId,
+  signOutLabel,
   validateTablesHelpId, emphasiseLowQualityCells,
 } from 'config';
 
@@ -112,6 +114,32 @@ function validateBordersBody() {
   return [
     'Switch to the validate borders page to allow table borders to be modified ',
     'and table linking to be redefined.',
+  ];
+}
+
+// The account button at the far right of the toolbar. The toolbar stands over every
+// screen the application has — the document list included, which has no editor and no
+// tabs — so every screen describes it, from this one list.
+//
+// The menu it opens is not described separately. The scrim takes every pointer event
+// while help is up, so the menu cannot be opened there and its items are never mounted
+// for the hit-test to find; what the menu offers is said here instead.
+function accountTips() {
+  return [
+    {
+      helpId: accountButtonHelpId(),
+      title: 'Account',
+      body: [
+        'This provides an Account Access menu, which provides:',
+        {
+          list: [
+            ['A ',
+              { bold: signOutLabel() },
+              ' menu option to sign out and return to the log in page.'],
+          ],
+        },
+      ],
+    },
   ];
 }
 
@@ -188,6 +216,22 @@ function layersPageStepTips() {
         'below the current table on the same page it will step to that; ',
         'if not it will move to the next page; ',
         'if there is no next page it will move to the first.',
+      ],
+    },
+  ];
+}
+
+// The name label above the selected table's top-left corner. It sits there through both
+// editor passes and says the same thing in each, so both screens describe it from this one
+// list rather than from two copies that could drift apart.
+function tableNameLabelTips() {
+  return [
+    {
+      helpId: tableNameLabelHelpId(),
+      title: 'Title label',
+      body: [
+        "This displays the table's name (defaulting to \"Page: X, Table: Y\") and ",
+        "the currently understood size of the table in columns and rows.",
       ],
     },
   ];
@@ -293,7 +337,7 @@ function documentOverviewTips() {
 export function helpScreens() {
   return {
     [documentListScreenId()]: {
-      version: 1,
+      version: 2,
       name: 'Your documents',
       summary: [
         'Every loss run you have uploaded is listed here with the stage it has reached. ',
@@ -347,10 +391,11 @@ export function helpScreens() {
             ]}
           ],
         },
+        ...accountTips(),
       ],
     },
     [boundaryPassScreenId()]: {
-      version: 6,
+      version: 8,
       name: 'Table Borders',
       summary: [
         "This pass is about where the tables are on the page and how they inter-relate. ",
@@ -364,6 +409,27 @@ export function helpScreens() {
         ]}
       ],
       tips: [
+        {
+          helpId: editorPageTableHelpId(),
+          title: 'Selected Table Boundary',
+          body: [
+            'This is a selected area of a PDF page that is expected to be a table. ',
+            'The content shown is that of the original PDF page; the bounding rectangle ',
+            'is drawn in blue and is the area containing the text to be included in ',
+            'that table.',
+            {
+              list: [
+                'Drag the sides to make the area bigger or smaller.',
+                ['The ',
+                  { bold: 'Create table' },
+                  ' button on the right may be used to create a new table.'],
+                ['The ',
+                  { bold: 'Delete this table' },
+                  ' button on the right can be used to delete the current table.'],
+              ],
+            },
+          ],
+        },
         {
           helpId: boundaryDeleteTableHelpId(),
           title: 'Delete the current table',
@@ -424,14 +490,7 @@ export function helpScreens() {
             ]}
           ],
         },
-        {
-          helpId: tableNameLabelHelpId(),
-          title: 'Title label',
-          body: [
-            "This displays the table's name (defaulting to \"Page: X, Table: Y\") and ",
-            "the currently understood size of the table in columns and rows.",
-          ],
-        },
+        ...tableNameLabelTips(),
         {
           helpId: toolbarAllFilesHelpId(),
           title: 'All files',
@@ -445,10 +504,11 @@ export function helpScreens() {
         },
         ...layersPageStepTips(),
         ...documentOverviewTips(),
+        ...accountTips(),
       ],
     },
     [contentsPassScreenId()]: {
-      version: 11,
+      version: 13,
       name: 'Table contents',
       summary: [
         'This pass is about the inside of one table — its rows, ',
@@ -467,6 +527,28 @@ export function helpScreens() {
             'using the edit mode buttons to the left. ',
             'The contents shown is the original PDF image with grid lines and ',
             'special areas drawn on top'],
+        },
+        ...tableNameLabelTips(),
+        {
+          helpId: tableLinkLabelHelpId(),
+          title: 'Table status',
+          body: [
+            'This describes the table type, it is not a button. It can be one of:',
+            {
+              list: [
+                [{ bold: 'Selected' },
+                  ': the table to which it is attached is a single table.'],
+                [{ bold: 'Linked' },
+                  ': this table is the first in a group of linked tables that ',
+                  'together form a larger table.'],
+                [{ bold: 'Linked to' },
+                  ' and a table name (for example ',
+                  { bold: 'Linked to Page 1, table 1' },
+                  '): this table is part of a group of tables, ',
+                  'the first being the named table.'],
+              ],
+            },
+          ],
         },
         ...editorToolbarTips(),
         {
@@ -767,10 +849,11 @@ export function helpScreens() {
           side: "right"
         },
         ...documentOverviewTips(),
+        ...accountTips(),
       ],
     },
     [linkTablesScreenId()]: {
-      version: 4,
+      version: 5,
       name: 'Grid Editor',
       summary: [
         'For grouped tables examine if they can form a single table and arrange the ',
@@ -843,10 +926,11 @@ export function helpScreens() {
           body: ['Exit this screen saving the current state.'],
         },
         ...toolbarValidateTips(),
+        ...accountTips(),
       ],
     },
     [reviewTableScreenId()]: {
-      version: 4,
+      version: 5,
       name: 'Extraction review',
       summary: emphasiseLowQualityCells()?[
         'This is the data that will be written out to the workbook. Every cell is editable — ',
@@ -968,6 +1052,7 @@ export function helpScreens() {
           ],
         },
         ...toolbarValidateTips(),
+        ...accountTips(),
       ],
     },
   };

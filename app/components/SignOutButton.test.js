@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-import { signOutLabel } from 'config';
+import { accountButtonHelpId, signOutLabel } from 'config';
 import { navigateTo, signOut } from 'services/session';
 
 import SignOutButton from 'components/SignOutButton';
@@ -23,6 +23,15 @@ describe('SignOutButton', () => {
 
     expect(button).toBe(screen.getByTestId('sign-out-button'));
     expect(screen.getByTestId('AccountCircleOutlinedIcon')).toBeInTheDocument();
+  });
+
+  it('carries the help id, so the overlay can describe it', () => {
+    render(<SignOutButton />);
+
+    expect(screen.getByTestId('sign-out-button')).toHaveAttribute(
+      'data-help-id',
+      accountButtonHelpId(),
+    );
   });
 
   it('shows no menu item until the button is clicked', () => {

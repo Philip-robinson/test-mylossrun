@@ -1,4 +1,5 @@
 import {
+  accountButtonHelpId,
   boundaryPassScreenId,
   cellEditCancelHelpId,
   cellEditConfidenceHelpId,
@@ -13,6 +14,7 @@ import {
   documentOverviewReviewHelpId,
   documentOverviewSaveHelpId,
   editorDimDocumentHelpId,
+  editorPageTableHelpId,
   editorPageTitleHelpId,
   editorScaleHelpId,
   helpButtonHelpId,
@@ -21,6 +23,8 @@ import {
   layersNextHelpId,
   layersPreviousHelpId,
   reviewTableScreenId,
+  tableLinkLabelHelpId,
+  tableNameLabelHelpId,
   toolbarValidateBordersHelpId,
   toolbarValidateTablesHelpId,
   validateBordersHelpId,
@@ -278,6 +282,99 @@ describe('the cell-edit dialog', () => {
       }
 
       expect(dialogTips(screenId)).toEqual([]);
+    }
+  });
+});
+
+// The name label sits above the selected table's top-left corner in both passes and says
+// the same thing in each, so both screens describe it from the one list.
+describe("the table's name label", () => {
+  const nameTips = (screenId) =>
+    helpScreens()[screenId].tips.filter(
+      (tip) => tip.helpId === tableNameLabelHelpId(),
+    );
+
+  it('is described by the boundary pass', () => {
+    expect(nameTips(boundaryPassScreenId()).map((tip) => tip.title)).toEqual([
+      'Title label',
+    ]);
+  });
+
+  it('is described by the contents pass in the same words', () => {
+    expect(nameTips(contentsPassScreenId())).toEqual(
+      nameTips(boundaryPassScreenId()),
+    );
+  });
+});
+
+// The selected table's boundary is one element carrying one help id, and each pass
+// describes it as what that pass is about: its boundary on the borders pass, the grid it
+// holds on the contents pass. Two screens, one id, deliberately different words.
+describe("the selected table's boundary", () => {
+  const boundaryTip = (screenId) =>
+    helpScreens()[screenId].tips.find(
+      (tip) => tip.helpId === editorPageTableHelpId(),
+    );
+
+  it('is the first thing the boundary pass describes', () => {
+    const tips = helpScreens()[boundaryPassScreenId()].tips;
+
+    expect(tips[0].helpId).toEqual(editorPageTableHelpId());
+    expect(tips[0].title).toEqual('Selected Table Boundary');
+  });
+
+  it('is described by the contents pass in words of its own', () => {
+    expect(boundaryTip(contentsPassScreenId()).title).toEqual('Table');
+    expect(boundaryTip(contentsPassScreenId())).not.toEqual(
+      boundaryTip(boundaryPassScreenId()),
+    );
+  });
+});
+
+// The status label above the selected table's top-right corner. The borders pass makes it
+// clickable and describes the linking it drives; the contents pass renders it inert, so
+// that pass describes what it says rather than what it does.
+describe("the table's status label", () => {
+  const statusTip = (screenId) =>
+    helpScreens()[screenId].tips.find(
+      (tip) => tip.helpId === tableLinkLabelHelpId(),
+    );
+
+  it('is described by the contents pass as a status, not a button', () => {
+    expect(statusTip(contentsPassScreenId()).title).toEqual('Table status');
+  });
+
+  it('is described by the borders pass in words of its own', () => {
+    expect(statusTip(boundaryPassScreenId()).title).toEqual(
+      'Selected/Link button',
+    );
+    expect(statusTip(contentsPassScreenId())).not.toEqual(
+      statusTip(boundaryPassScreenId()),
+    );
+  });
+});
+
+// The account button sits at the far right of the toolbar, and the toolbar stands over
+// every screen the application has — the document list included, which has no editor and
+// no tabs. So every screen describes it, from the one list.
+describe('the account button', () => {
+  const accountTip = (screenId) =>
+    helpScreens()[screenId].tips.find(
+      (tip) => tip.helpId === accountButtonHelpId(),
+    );
+
+  it('is described by every screen', () => {
+    for (const screenId of Object.keys(helpScreens())) {
+      expect(accountTip(screenId)).toBeDefined();
+      expect(accountTip(screenId).title).toEqual('Account');
+    }
+  });
+
+  it('is described by every screen in the same words', () => {
+    const tips = Object.keys(helpScreens()).map(accountTip);
+
+    for (const tip of tips) {
+      expect(tip).toEqual(tips[0]);
     }
   });
 });

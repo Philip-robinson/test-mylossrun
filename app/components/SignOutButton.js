@@ -10,7 +10,11 @@ import { IconButton, ListItemIcon, Menu, MenuItem } from '@mui/material';
 import AccountCircleOutlinedIcon from '@mui/icons-material/AccountCircleOutlined';
 import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
 
-import { signOutLabel, toolbarIconButtonSizePx } from 'config';
+import {
+  accountButtonHelpId,
+  signOutLabel,
+  toolbarIconButtonSizePx,
+} from 'config';
 import { navigateTo, signOut } from 'services/session';
 
 export default function SignOutButton() {
@@ -26,6 +30,7 @@ export default function SignOutButton() {
       <IconButton
         aria-label={'Account'}
         data-testid={'sign-out-button'}
+        data-help-id={accountButtonHelpId()}
         onClick={(event) => setAnchorEl(event.currentTarget)}
         // MUI's IconButton carries 8px of padding by default, which would draw this
         // visibly larger than the `?` beside it; p: 0 with an explicit box is what

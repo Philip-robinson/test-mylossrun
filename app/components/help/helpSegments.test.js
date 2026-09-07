@@ -1,5 +1,8 @@
 import { render, screen } from '@testing-library/react';
-import { helpSegmentNodes } from 'components/help/helpSegments';
+import {
+  helpParagraphBreak,
+  helpSegmentNodes,
+} from 'components/help/helpSegments';
 
 function renderSegments(segments) {
   render(<div data-testid={'segments'}>{helpSegmentNodes(segments)}</div>);
@@ -42,6 +45,27 @@ describe('helpSegmentNodes', () => {
     const segments = ['kept ', { italic: 'unknown' }, null, 'kept'];
 
     expect(renderSegments(segments).textContent).toBe('kept kept');
+  });
+
+  it('renders a break segment as a break element between the two runs of words', () => {
+    const segments = ['First paragraph.', helpParagraphBreak(), 'Second paragraph.'];
+    const rendered = renderSegments(segments);
+    const children = Array.from(rendered.childNodes);
+
+    expect(rendered.querySelectorAll('[data-help-break]')).toHaveLength(1);
+    expect(children.map((node) => node.textContent)).toEqual([
+      'First paragraph.',
+      '',
+      'Second paragraph.',
+    ]);
+  });
+
+  it('drops a break segment written with anything but true', () => {
+    const segments = ['kept ', { break: 'yes' }, 'kept'];
+    const rendered = renderSegments(segments);
+
+    expect(rendered.querySelectorAll('[data-help-break]')).toHaveLength(0);
+    expect(rendered.textContent).toBe('kept kept');
   });
 
   it('renders a list segment as one li per item, in order', () => {

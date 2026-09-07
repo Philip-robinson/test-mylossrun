@@ -10,6 +10,13 @@ import { HelpContext } from 'components/help/HelpProvider';
 import { EditorPassContext } from 'components/EditorPassProvider';
 import Toolbar from './Toolbar';
 
+// The sign-out button reaches the session service, which navigates; mocking the module
+// keeps a test click from leaving the page.
+jest.mock('services/session', () => ({
+  signOut: jest.fn(),
+  navigateTo: jest.fn(),
+}));
+
 // The toolbar now carries the help button, which takes the screen and the way into
 // help from the help context. The context is supplied directly where a test needs the
 // button present; every other test renders the toolbar with no help at all, which is
@@ -135,6 +142,24 @@ describe('Toolbar', () => {
 
   test('renders no help button where there is no help', () => {
     render(<Toolbar activeView={'loader'} />);
+    expect(screen.queryByTestId('help-button')).not.toBeInTheDocument();
+  });
+
+  test('renders the sign-out button after the flexible spacer', () => {
+    const { container } = renderWithHelp(helpValue());
+    const spacer = container.querySelector('.toolbar-data');
+    const signOutButton = screen.getByTestId('sign-out-button');
+    expect(
+      spacer.compareDocumentPosition(signOutButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  // Unlike the help button, the account button needs no context: everyone who can see
+  // the toolbar is past the access gate and so is signed in.
+  test('renders the sign-out button where there is no help', () => {
+    render(<Toolbar />);
+    expect(screen.getByTestId('sign-out-button')).toBeInTheDocument();
     expect(screen.queryByTestId('help-button')).not.toBeInTheDocument();
   });
 

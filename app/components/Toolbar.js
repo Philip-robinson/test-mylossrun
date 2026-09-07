@@ -1,7 +1,7 @@
 'use client';
 
-// The application's header: the two logos, the tabs, the data slot and the ? that opens
-// help.
+// The application's header: the two logos, the tabs, the data slot, the ? that opens
+// help and the account button that signs out.
 //
 // The tabs are the editor's, so they appear only in the editor view: back to the file
 // list, and one for each of the editor's two passes. The pass you are on is the current
@@ -11,6 +11,7 @@
 // what the pass owes.
 
 import HelpButton from 'components/help/HelpButton';
+import SignOutButton from 'components/SignOutButton';
 import ToolbarTab from 'components/ToolbarTab';
 import { useEditorPass } from 'components/EditorPassProvider';
 import {
@@ -56,6 +57,7 @@ export default function Toolbar({ activeView = 'loader', onAllFiles }) {
       </div>
       <div className={'toolbar-data'} />
       <HelpButton />
+      <SignOutButton />
     </div>
   );
 }

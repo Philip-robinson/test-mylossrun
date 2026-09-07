@@ -5,8 +5,10 @@
 //
 // What is being described comes from the help context. With no target it is the
 // screen as a whole — the entry card, whose title is the screen's name, whose words
-// are the screen's summary followed by the shared introduction, and whose hole is
-// around the ? that opened it. With a target it is that screen's tip for it.
+// are the screen's summary and then, as a second paragraph, the shared introduction,
+// and whose hole is around the ? that opened it. The two are about different things —
+// this screen, and the ? itself — so a paragraph break stands between them rather than
+// letting them run together as one. With a target it is that screen's tip for it.
 //
 // The scrim covers the viewport and takes every pointer event, so nothing beneath it
 // can be clicked while help is up. A click on it is a question rather than an action:
@@ -46,6 +48,7 @@ import {
   measureHelpCard,
   measureHelpTarget,
 } from 'components/help/helpDom';
+import { helpParagraphBreak } from 'components/help/helpSegments';
 import {
   firstKnownHelpId,
   holeRect,
@@ -204,7 +207,7 @@ function shownHelp(screenId, targetHelpId) {
   if (!tip) {
     return {
       title: screen.name,
-      body: [...(screen.summary || []), ...helpIntroBody()],
+      body: [...(screen.summary || []), helpParagraphBreak(), ...helpIntroBody()],
       targetHelpId: helpButtonHelpId(),
       side: undefined,
       padding: helpHolePaddingPx(),

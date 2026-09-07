@@ -79,6 +79,14 @@ describe('HelpOverlay', () => {
       );
     });
 
+    // The summary is about the screen and the introduction is about the ?, so they are
+    // two paragraphs rather than one run of words.
+    it("separates the screen's summary from the introduction", () => {
+      render(<Harness />);
+
+      expect(card().querySelectorAll('[data-help-break]')).toHaveLength(1);
+    });
+
     it('points at the help button', () => {
       render(<Harness />);
 

@@ -678,6 +678,13 @@ export function helpCardBodyLineHeight() {
   return 1.2;
 }
 
+// Height of the gap a paragraph break opens in that body text. The break also ends
+// the line it stands on, so this is the space between two paragraphs and not the
+// space between two lines of one.
+export function helpCardParagraphGapHeight() {
+  return '0.6em';
+}
+
 // Fill of the HELP chip on the card.
 export function helpChipBackgroundColour() {
   return '#2f6b4f';
@@ -705,6 +712,12 @@ export function helpButtonHelpId() {
   return 'help-button';
 }
 
+// The account button at the far right of the toolbar, beside the `?`. The toolbar stands
+// over every screen, so every screen describes it.
+export function accountButtonHelpId() {
+  return 'account-button';
+}
+
 export function dropBoxHelpId() {
   return 'document-drop-box';
 }
@@ -725,6 +738,11 @@ export function documentListStatusHelpId() {
 // live in the Layers panel, the dim and scale controls in the editor's own toolbar, the
 // two labels on the selected table's corners, and the rest in the Document Overview
 // column down the left or the Pages column down the right.
+//
+// The two corner labels are not the boundary pass's alone: both passes describe both of
+// them — the name label in the same words, from one shared list, and the status label in
+// words of each pass's own, the boundary pass's about the linking a click drives and the
+// contents pass's about what the label says where it is inert.
 //
 // The Document Overview column stands unchanged through both editor passes, so the ids
 // from documentOverviewSaveHelpId down are described by the contents pass too.
@@ -823,8 +841,11 @@ export function documentOverviewExportHelpId() {
   return 'document-overview-export';
 }
 
-// The contents pass's ids: the page in the centre, the Layers column, the tool rail and
-// its three buttons, and the nine entries of the Special tool's sub-menu.
+// The contents pass's ids: the Layers column, the tool rail and its three buttons, and the
+// nine entries of the Special tool's sub-menu — and the page in the centre, which is not
+// the contents pass's alone. Both passes describe editorPageTableHelpId, in different
+// words: the boundary pass as the selected table's boundary, the contents pass as the grid
+// that boundary holds.
 export function editorPageTableHelpId() {
   return 'editor-page-table';
 }
@@ -1014,6 +1035,33 @@ export function emphasiseLowQualityCells() {
   return false;
 }
 
+// The width and height in screen px of a toolbar icon button. It governs the help
+// '?' and the account button beside it alike, which is what makes them one size.
+export function toolbarIconButtonSizePx() {
+  return 20;
+}
+
+// The label on the sign-out menu item.
+export function signOutLabel() {
+  return 'Sign Out';
+}
+
+// The two localStorage keys holding the login data. Sign-in and sign-out must agree
+// about what the login data is; these values are what the application already
+// stores and must not change.
+export function accessCodeStorageKey() {
+  return 'access_code';
+}
+
+export function userEmailStorageKey() {
+  return 'user_email';
+}
+
+// Where the browser goes once signed out.
+export function signedOutPath() {
+  return '/';
+}
+
 const default_export = {
   baseUrl,
   resizeDebounceMs,
@@ -1130,10 +1178,12 @@ const default_export = {
   helpCardTextColour,
   helpCardBodyFontSize,
   helpCardBodyLineHeight,
+  helpCardParagraphGapHeight,
   helpChipBackgroundColour,
   helpBadgeBackgroundColour,
   helpBadgeTextColour,
   helpButtonHelpId,
+  accountButtonHelpId,
   documentListScreenId,
   boundaryPassScreenId,
   contentsPassScreenId,
@@ -1202,7 +1252,12 @@ const default_export = {
   specialToolColouredCellHelpId,
   specialToolColouredAreaHelpId,
   unknownExtractionMechanism,
-  emphasiseLowQualityCells
+  emphasiseLowQualityCells,
+  toolbarIconButtonSizePx,
+  signOutLabel,
+  accessCodeStorageKey,
+  userEmailStorageKey,
+  signedOutPath
 };
 
 export default default_export;

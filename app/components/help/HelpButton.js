@@ -11,7 +11,7 @@
 // rather than decorative.
 
 import { Box } from '@mui/material';
-import { helpButtonHelpId, toolbarIconButtonSizePx } from 'config';
+import { helpButtonHelpId } from 'config';
 import { useHelp } from 'components/help/HelpProvider';
 import HelpNewBadge from 'components/help/HelpNewBadge';
 
@@ -40,8 +40,8 @@ export default function HelpButton() {
           background: 'none',
           color: 'var(--secondary-text)',
           cursor: 'pointer',
-          width: `${toolbarIconButtonSizePx()}px`,
-          height: `${toolbarIconButtonSizePx()}px`,
+          width: '20px',
+          height: '20px',
           p: 0,
           fontSize: '0.75rem',
           lineHeight: 1,

@@ -12,7 +12,6 @@ import {
 import LockIcon from '@mui/icons-material/Lock';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
-import { accessCodeStorageKey, userEmailStorageKey } from 'config';
 import { validate } from 'services/validate';
 
 export default function AccessGate({ children }) {
@@ -23,8 +22,8 @@ export default function AccessGate({ children }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    const storedAccessCode = localStorage.getItem(accessCodeStorageKey());
-    const storedEmail = localStorage.getItem(userEmailStorageKey());
+    const storedAccessCode = localStorage.getItem('access_code');
+    const storedEmail = localStorage.getItem('user_email');
 
     if (storedAccessCode) {
       validateStoredAccessCode(storedAccessCode, storedEmail);
@@ -43,12 +42,12 @@ export default function AccessGate({ children }) {
           setEmail(storedEmail);
         }
       } else {
-        localStorage.removeItem(accessCodeStorageKey());
-        localStorage.removeItem(userEmailStorageKey());
+        localStorage.removeItem('access_code');
+        localStorage.removeItem('user_email');
       }
     } catch (err) {
-      localStorage.removeItem(accessCodeStorageKey());
-      localStorage.removeItem(userEmailStorageKey());
+      localStorage.removeItem('access_code');
+      localStorage.removeItem('user_email');
     } finally {
       setIsLoading(false);
     }
@@ -62,9 +61,9 @@ export default function AccessGate({ children }) {
       const data = await validate(accessCode.trim(), email.trim() || null);
 
       if (data.success && data.valid) {
-        localStorage.setItem(accessCodeStorageKey(), accessCode.trim());
+        localStorage.setItem('access_code', accessCode.trim());
         if (email.trim()) {
-          localStorage.setItem(userEmailStorageKey(), email.trim());
+          localStorage.setItem('user_email', email.trim());
         }
         setIsAuthenticated(true);
       } else {
@@ -115,8 +114,8 @@ export default function AccessGate({ children }) {
             <Image
               src={'/cactuslogo.png'}
               alt={'Cactus Risk'}
-              width={140}
-              height={38}
+              width={64}
+              height={64}
               priority
             />
           </Box>
@@ -128,7 +127,7 @@ export default function AccessGate({ children }) {
               mt: 0.5,
             }}
           >
-            {'AI-Powered Document Intelligence'}
+            {'Document Intelligence'}
           </Typography>
         </Box>
 

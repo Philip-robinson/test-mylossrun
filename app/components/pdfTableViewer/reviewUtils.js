@@ -8,8 +8,6 @@
 // A plain number, optionally money: one leading currency symbol (with optional
 // spaces after it), an optional minus, then digits either ungrouped or in
 // thousands groups, and at most one decimal point.
-import {emphasiseLowQualityCells} from "config";
-
 const NUMERIC_PATTERN = /^[£$€]?\s*-?(\d+|\d{1,3}(,\d{3})+)(\.\d+)?$/;
 
 // True when `text` reads as a number and so should be right-aligned. Anything
@@ -120,12 +118,13 @@ export const adjacentPoorCell = (poorCells, selected, step) => {
 
 // How confidently the extraction read one value, as the edit dialog states it —
 // "Confidence 87%" — rounded to a whole percent because the scale is 0–100 and a
-// fraction of a percent is not a distinction the reader can act on. A value that
-// carries no confidence at all reads "Confidence unknown" rather than "0%", which
-// would claim a bad reading where in fact there was no reading.
+// fraction of a percent is not a distinction the reader can act on. A confidence of 0
+// is a reading and is stated as 0%; only a value that carries no confidence at all —
+// absent, null, not a finite number — reads "Confidence unknown", since claiming 0%
+// there would report a bad reading where in fact there was no reading.
+//
+// Whether the label is shown at all is the caller's decision, not this function's.
 export const confidenceLabel = (confidence) =>
-  emphasiseLowQualityCells() &&
-  typeof confidence === 'number' &&
-  Number.isFinite(confidence)
+  typeof confidence === 'number' && Number.isFinite(confidence)
     ? `Confidence ${Math.round(confidence)}%`
     : 'Confidence unknown';

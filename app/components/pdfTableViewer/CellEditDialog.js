@@ -2,7 +2,8 @@
 
 // The extraction review screen's cell-edit dialog: a small floating box, opened by
 // clicking a cell of the merged table, showing that cell as it appears in the PDF above
-// the buttons that settle the correction and the confidence the extraction read it with.
+// the buttons that settle the correction, and — while the low-quality emphasis is on —
+// the confidence the extraction read it with.
 // The tick hands the correction back to the panel; the X changes nothing.
 //
 // It holds no text and no field of its own. The correction is typed into the CELL, in
@@ -29,9 +30,10 @@
 //
 // A cell whose source reference is blank (`cellSourceKey` is null) has nothing in the
 // metadata to write back to, so there is no rectangle to crop and no correction worth
-// taking: the dialog still opens and still shows the confidence, but confirm is disabled
-// and cancel is the only way out. Silently accepting an edit that could not be persisted,
-// and would vanish at the next extraction, is worse than visibly refusing it.
+// taking: the dialog still opens and still shows what it would otherwise show, but
+// confirm is disabled and cancel is the only way out. Silently accepting an edit that
+// could not be persisted, and would vanish at the next extraction, is worse than visibly
+// refusing it.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Box, Button, CircularProgress, Typography } from '@mui/material';
@@ -279,7 +281,7 @@ export default function CellEditDialog({
             // The only constraint is on width: `max-width: 100%` scales a crop too wide
             // for the dialog down to fit, and `height: auto` makes the height follow so
             // the proportions hold. A crop that is then still too tall overflows and the
-            // area above scrolls. `margin: 0 auto` centres it.
+            // area above scrolls.
             style={{
               display: 'block',
               margin: '0 auto',
@@ -289,7 +291,6 @@ export default function CellEditDialog({
           />
         )}
       </Box>
-      {/* The three buttons, on one row now that there is no field to sit beside. */}
       <Box
         data-testid={'cell-edit-buttons'}
         sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
@@ -329,16 +330,18 @@ export default function CellEditDialog({
           )
         }
       </Box>
-      {/* How confidently this value was read, under the buttons: it is the reason the
-          cell is worth looking at, and the crop above is what that claim is about. */}
-      <Typography
-        data-testid={'cell-edit-confidence'}
-        data-help-id={cellEditConfidenceHelpId()}
-        variant={'body2'}
-        color={'text.secondary'}
-      >
-        {confidenceLabel(cell?.confidence)}
-      </Typography>
+      {
+        emphasiseLowQualityCells() && (
+        <Typography
+          data-testid={'cell-edit-confidence'}
+          data-help-id={cellEditConfidenceHelpId()}
+          variant={'body2'}
+          color={'text.secondary'}
+        >
+          {confidenceLabel(cell?.confidence)}
+        </Typography>
+        )
+      }
     </Box>
   );
 }

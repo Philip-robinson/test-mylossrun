@@ -23,6 +23,7 @@ import {
   cellEditImageSpinnerSizePx,
   cellEditNextHelpId,
   confirmColour,
+  emphasiseLowQualityCells,
   maxCellEditorImageHeight,
   reviewCellEditDialogWidthPx,
 } from 'config';
@@ -217,6 +218,37 @@ describe('CellEditDialog', () => {
     expect(screen.getByTestId('cell-edit-confidence')).toHaveTextContent(
       confidenceLabel(sectionTitleCell.confidence)
     );
+  });
+
+  // A confidence of 0 is a reading, and a bad one — exactly the reading the user is
+  // being asked to check. Reporting it as unknown would hide the worst case there is.
+  it('states a confidence of 0 as 0%, not as unknown', () => {
+    renderDialog({ cell: sourcelessCell });
+
+    expect(screen.getByTestId('cell-edit-confidence')).toHaveTextContent(
+      'Confidence 0%'
+    );
+  });
+
+  // With the emphasis off nothing else on the screen presents a cell as worth checking,
+  // so the line is absent altogether rather than present and saying nothing useful.
+  describe('with the low-quality emphasis off', () => {
+    beforeEach(() => {
+      emphasiseLowQualityCells.mockReturnValue(false);
+    });
+
+    afterEach(() => {
+      emphasiseLowQualityCells.mockReturnValue(true);
+    });
+
+    it('shows no confidence line at all', () => {
+      renderDialog();
+
+      expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
+      expect(
+        screen.queryByTestId('cell-edit-confidence')
+      ).not.toBeInTheDocument();
+    });
   });
 
   it('requests the image once, for the source cell of the source table', () => {

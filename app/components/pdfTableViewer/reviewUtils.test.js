@@ -1,9 +1,4 @@
-jest.mock('config', () => ({
-  __esModule: true,
-  ...jest.requireActual('config'),
-  emphasiseLowQualityCells: jest.fn(() => true),
-}));
-
+// No config mock: reviewUtils imports no config, so there is nothing here to stub.
 import {
   looksNumeric,
   isWideText,
@@ -297,6 +292,7 @@ describe('reviewUtils', () => {
     it('states the confidence as a whole percent', () => {
       expect(confidenceLabel(87)).toBe('Confidence 87%');
       expect(confidenceLabel(100)).toBe('Confidence 100%');
+      // 0 is a reading, and the worst one: it is stated, not called unknown.
       expect(confidenceLabel(0)).toBe('Confidence 0%');
     });
 

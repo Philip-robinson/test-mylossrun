@@ -19,12 +19,16 @@
 import { TextField } from '@mui/material';
 import { reviewCellEditRowCount, reviewCellEditorMinWidthPx } from 'config';
 
-export default function ReviewCellEditor({ value, onChange, onTab }) {
+export default function ReviewCellEditor({ value, onChange, onTab, onEsc }) {
   const handleKeyDown = (event) => {
-    if (event.key !== 'Tab') return;
     if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === 'Escape') {
+      if (!onEsc) return;
+      event.preventDefault();
+      onEsc();
+    }
+    if (event.key !== 'Tab') return;
     if (!onTab) return;
-    // The field is about to be unmounted, and a textarea's own Tab moves the focus.
     event.preventDefault();
     onTab();
   };

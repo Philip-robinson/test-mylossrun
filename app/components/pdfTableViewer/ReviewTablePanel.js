@@ -554,6 +554,10 @@ export default function ReviewTablePanel({
     setEditing(null);
   };
 
+  const handleEscape = () => {
+    setEditing(null);
+  };
+
   // Correct this cell and carry straight on to the next one still wanting attention,
   // without going back to the grid in between.
   //
@@ -603,7 +607,10 @@ export default function ReviewTablePanel({
   // back to. Refused by being withheld rather than by being swallowed, so the keystroke
   // then goes back to being an ordinary Tab.
   const handleTab =
-    editing && cellSourceKey(editing.cell) ? handleConfirmAndNext : undefined;
+    editing && cellSourceKey(editing.cell) ? emphasiseLowQualityCells()?handleConfirmAndNext:handleConfirm : undefined;
+
+  const handleEsc =
+    editing && cellSourceKey(editing.cell) ? handleEscape : undefined;
 
   // Save, and leave for the editor once the save has landed.
   //
@@ -772,6 +779,7 @@ export default function ReviewTablePanel({
                     value={editing.text}
                     onChange={handleEditText}
                     onTab={handleTab}
+                    onEsc={handleEsc}
                   />
                 ) : (
                   activeTable.title.text
@@ -830,6 +838,7 @@ export default function ReviewTablePanel({
                     value={editing.text}
                     onChange={handleEditText}
                     onTab={handleTab}
+                    onEsc={handleEsc}
                   />
                 ) : (
                   activeTable.sectionTitle.text
@@ -966,6 +975,7 @@ export default function ReviewTablePanel({
                                   value={editing.text}
                                   onChange={handleEditText}
                                   onTab={handleTab}
+                                  onEsc={handleEsc}
                                 />
                               ) : (
                                 cell.text

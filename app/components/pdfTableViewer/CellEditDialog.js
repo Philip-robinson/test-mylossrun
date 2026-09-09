@@ -281,7 +281,7 @@ export default function CellEditDialog({
             // The only constraint is on width: `max-width: 100%` scales a crop too wide
             // for the dialog down to fit, and `height: auto` makes the height follow so
             // the proportions hold. A crop that is then still too tall overflows and the
-            // area above scrolls.
+            // area above scrolls. `margin: 0 auto` centres it.
             style={{
               display: 'block',
               margin: '0 auto',
@@ -291,6 +291,7 @@ export default function CellEditDialog({
           />
         )}
       </Box>
+      {/* The three buttons, on one row now that there is no field to sit beside. */}
       <Box
         data-testid={'cell-edit-buttons'}
         sx={{ display: 'flex', alignItems: 'center', gap: 1 }}
@@ -330,6 +331,11 @@ export default function CellEditDialog({
           )
         }
       </Box>
+      {/* How confidently this value was read, under the buttons: it is the reason the
+          cell is worth looking at, and the crop above is what that claim is about. It
+          appears only while the low-quality emphasis is on — with the emphasis off no
+          cell is presented as worth checking, so a confidence line would state a claim
+          the rest of the screen makes nothing of. */}
       {
         emphasiseLowQualityCells() && (
         <Typography

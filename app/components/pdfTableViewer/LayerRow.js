@@ -5,9 +5,6 @@
 // a separate control — clicking anywhere on the row toggles the layer. Purely
 // presentational and controlled: all state lives in the parent.
 //
-// Borders is rendered untoggleable: it is always drawn, so it carries no eye and no click,
-// and it always shows its background colour.
-//
 // `helpId` is the row's own help id where its layer has one; a row without one is simply
 // not described, so the attribute is left off rather than written empty.
 
@@ -40,8 +37,7 @@ export default function LayerRow({
         py: 0.75,
         cursor: toggleable ? 'pointer' : 'default',
         // A layer that is on carries its own 10%-opacity background, so the panel states
-        // what is drawn without the icons having to be read. Borders is untoggleable and
-        // always on, so it always carries its tint — which is true of it.
+        // what is drawn without the icons having to be read.
         backgroundColor: on ? backgroundColour : 'transparent',
         borderRadius: 1,
       }}
@@ -60,8 +56,8 @@ export default function LayerRow({
       <Typography data-testid={'layer-count'} variant={'body2'}>
         {count}
       </Typography>
-      {/* The slot is present on every row, so an untoggleable row's count lines up with a
-          toggleable one's rather than sitting an icon's width further right. */}
+      {/* The slot is present on every row, so a row drawn without an eye keeps its count
+          lined up with the rest rather than sitting an icon's width further right. */}
       <Box
         data-testid={'layer-tick-slot'}
         sx={{

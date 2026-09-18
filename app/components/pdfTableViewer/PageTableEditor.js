@@ -150,9 +150,11 @@ export default function PageTableEditor({
   // Tables" has moved it on, stays on the contents pass: it survives moving between tables
   // and between pages, and returns to 'border' only when the editor is remounted.
   const [editorMode, setEditorMode] = useState('border');
-  // Which layers are drawn in gridMode. Editor state, never persisted and never reset by
-  // navigation — what a user chose to look at outlives the table they chose it on.
+  // Which layers are drawn. `border` is honoured in both passes; the other four belong to
+  // gridMode. Editor state, never persisted and never reset by navigation — what a user
+  // chose to look at outlives the table they chose it on.
   const [layerVisibility, setLayerVisibility] = useState({
+    border: true,
     rows: true,
     columns: true,
     special: true,

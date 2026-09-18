@@ -8,6 +8,7 @@ import {
   specialToolColouredTableHelpId,
   specialToolHeaderHelpId,
   specialToolHideRowHelpId,
+  specialToolMergedHelpId,
   specialToolSectionHelpId,
   specialToolTitleHelpId,
 } from 'config';
@@ -17,6 +18,7 @@ const KEYS = [
   'title',
   'hideRow',
   'sectionTitle',
+  'merged',
   'colouredRows',
   'colouredColumns',
   'colouredTable',
@@ -25,7 +27,7 @@ const KEYS = [
 ];
 
 describe('SpecialToolMenu', () => {
-  it('lists its nine entries in order with their labels', () => {
+  it('lists its ten entries in order with their labels', () => {
     render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
     const rendered = screen
       .getAllByRole('button')
@@ -33,6 +35,7 @@ describe('SpecialToolMenu', () => {
     expect(rendered).toEqual(KEYS.map((k) => `special-tool-${k}`));
     expect(screen.getByText('Section')).toBeInTheDocument();
     expect(screen.getByText('Title')).toBeInTheDocument();
+    expect(screen.getByText('Merged')).toBeInTheDocument();
     expect(screen.getByText('Columns')).toBeInTheDocument();
     expect(screen.getByText('Cell')).toBeInTheDocument();
   });
@@ -105,6 +108,7 @@ describe('SpecialToolMenu', () => {
       title: specialToolTitleHelpId(),
       hideRow: specialToolHideRowHelpId(),
       sectionTitle: specialToolSectionHelpId(),
+      merged: specialToolMergedHelpId(),
       colouredRows: specialToolColouredRowsHelpId(),
       colouredColumns: specialToolColouredColumnsHelpId(),
       colouredTable: specialToolColouredTableHelpId(),

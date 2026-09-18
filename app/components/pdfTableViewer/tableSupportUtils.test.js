@@ -3,6 +3,7 @@ import {
   MERGE_ROLE_JOINED,
   MERGE_ROLE_ROOT,
   buildCalcCellsRequestTable,
+  cellBlockFromRect,
   clampToUnitPage,
   buildCalcHint,
   buildRecalcHint,
@@ -17,6 +18,7 @@ import {
   mergeMap,
   mergeRolesByTableId,
   mergeTargetSpan,
+  withMergedBlock,
   mergedCellCovering,
   mergedCellLimits,
   mergedCells,
@@ -24,6 +26,7 @@ import {
   overlapArea,
   pageTableName,
   findTableById,
+  recalcCellBounds,
   reconcileAxisEdit,
   replaceTableById,
   specialAreaEntries,
@@ -34,6 +37,7 @@ import {
   tablesOnPage,
   tablesWithLostConfidence,
   titlesEqual,
+  uncoveredCells,
   withCellSpan,
   leadingSquaresBounds,
   linkedTablesWithParents,
@@ -683,6 +687,21 @@ describe('calculate-cells request/merge helpers', () => {
       expect(request).not.toHaveProperty('rowHeights');
     });
 
+    it('sends a merged cell once and none of the squares its span covers', () => {
+      const merged = { ...cell(0, 0, 'a', 20), rowSpan: 2, columnSpan: 2 };
+      const bottomRight = {
+        ...cell(1, 0, 'd', 50),
+        column: 1,
+        bounds: { left: 0.25, top: 0.4, width: 0.15, height: 0.2 },
+      };
+      const request = buildCalcCellsRequestTable(
+        calcTable({
+          cells: [merged, cell(0, 1, 'b', 30), cell(1, 0, 'c', 40), bottomRight],
+        })
+      );
+      expect(request.cells).toEqual([{ ...CELL_BOUNDS['0,0'], row: 0, column: 0 }]);
+    });
+
     it('includes the title rectangle only when the table has a title', () => {
       expect(buildCalcCellsRequestTable(calcTable()).title).toEqual({
         left: 0.1,
@@ -938,6 +957,100 @@ describe('merged-cell helpers', () => {
     });
   });
 
+  describe('cellBlockFromRect', () => {
+    // A 4x4 grid of quarter-page bands at the page origin. Quarter bands make the coverage
+    // test exact in binary floating point: 0.15 / 0.25 is precisely the double
+    // mergeCoverageFraction() returns, so the "exactly 60%" case is not a near miss.
+    const quarterTable = (extra = {}) => ({
+      tableId: 'qt-1',
+      name: 'Quarter Table',
+      pdfPage: 0,
+      tableInPage: 0,
+      bounds: { left: 0, top: 0, width: 1, height: 1 },
+      columnWidths: [0.25, 0.25, 0.25, 0.25].map((value) => ({ value, confidence: 90 })),
+      rowHeights: [0.25, 0.25, 0.25, 0.25].map((value) => ({ value, confidence: 90 })),
+      cells: [],
+      ...extra,
+    });
+
+    const full = { left: 0, top: 0, width: 1, height: 1 };
+
+    it('is the block a rectangle covering two whole columns and two whole rows draws', () => {
+      expect(
+        cellBlockFromRect(quarterTable(), {
+          left: 0.25,
+          top: 0.25,
+          width: 0.5,
+          height: 0.5,
+        })
+      ).toEqual({ row: 1, column: 1, rowSpan: 2, columnSpan: 2 });
+    });
+
+    it('anchors on the first included band when the rectangle starts part-way in', () => {
+      const block = cellBlockFromRect(quarterTable(), {
+        left: 0.5,
+        top: 0.75,
+        width: 0.5,
+        height: 0.25,
+      });
+      expect(block).toEqual({ row: 3, column: 2, rowSpan: 1, columnSpan: 2 });
+    });
+
+    it('includes a column covered by more than 60% of its width and excludes one covered by less', () => {
+      const t = quarterTable();
+      // Column 0 whole, column 1 covered 0.17 of 0.25 -> in.
+      expect(
+        cellBlockFromRect(t, { ...full, width: 0.42 }).columnSpan
+      ).toBe(2);
+      // Column 1 covered 0.1 of 0.25 -> out, leaving column 0 alone.
+      expect(
+        cellBlockFromRect(t, { ...full, width: 0.35 }).columnSpan
+      ).toBe(1);
+    });
+
+    it('includes a row covered by more than 60% of its height and excludes one covered by less', () => {
+      const t = quarterTable();
+      expect(cellBlockFromRect(t, { ...full, height: 0.42 }).rowSpan).toBe(2);
+      expect(cellBlockFromRect(t, { ...full, height: 0.35 }).rowSpan).toBe(1);
+    });
+
+    it('excludes a band covered by exactly 60%, and includes the same band just above it', () => {
+      const t = quarterTable();
+      // 0.15 / 0.25 is exactly mergeCoverageFraction(): the test is strictly greater than.
+      expect(cellBlockFromRect(t, { ...full, width: 0.15 })).toBeNull();
+      expect(cellBlockFromRect(t, { ...full, width: 0.16 })).toEqual({
+        row: 0,
+        column: 0,
+        rowSpan: 4,
+        columnSpan: 1,
+      });
+      expect(cellBlockFromRect(t, { ...full, height: 0.15 })).toBeNull();
+      expect(cellBlockFromRect(t, { ...full, height: 0.16 })).toEqual({
+        row: 0,
+        column: 0,
+        rowSpan: 1,
+        columnSpan: 4,
+      });
+    });
+
+    it('is null for a rectangle that misses the table entirely', () => {
+      expect(
+        cellBlockFromRect(quarterTable({ bounds: { left: 0.6, top: 0.6, width: 1, height: 1 } }), {
+          left: 0,
+          top: 0,
+          width: 0.2,
+          height: 0.2,
+        })
+      ).toBeNull();
+    });
+
+    it('is null for a table with no columns, no rows or no bounds', () => {
+      expect(cellBlockFromRect(quarterTable({ columnWidths: [] }), full)).toBeNull();
+      expect(cellBlockFromRect(quarterTable({ rowHeights: [] }), full)).toBeNull();
+      expect(cellBlockFromRect(quarterTable({ bounds: undefined }), full)).toBeNull();
+    });
+  });
+
   describe('mergedCells', () => {
     it('is the span-carrying cells in list order, excluding span-1 cells', () => {
       const rowSpanning = spanCell(0, 0, 2, 1);
@@ -1024,6 +1137,36 @@ describe('merged-cell helpers', () => {
     });
   });
 
+  describe('uncoveredCells', () => {
+    it('is every entry, in list order, for a table with no merged cell', () => {
+      const cells = [spanCell(0, 0, 1, 1), spanCell(0, 1, 1, 1), spanCell(1, 0, 1, 1)];
+      expect(uncoveredCells(spanTable(cells))).toEqual(cells);
+    });
+
+    it('keeps the anchor and everything outside the block, and drops the squares it covers', () => {
+      const merged = spanCell(0, 0, 2, 2);
+      const outside = spanCell(2, 2, 1, 1);
+      const t = spanTable([
+        merged,
+        spanCell(0, 1, 1, 1),
+        spanCell(1, 0, 1, 1),
+        spanCell(1, 1, 1, 1),
+        outside,
+      ]);
+      expect(uncoveredCells(t)).toEqual([merged, outside]);
+    });
+
+    it('still reports a covered entry as covered when it carries a stale span of its own', () => {
+      const merged = spanCell(0, 0, 2, 2);
+      const stale = spanCell(1, 1, 2, 2);
+      expect(uncoveredCells(spanTable([merged, stale]))).toEqual([merged]);
+    });
+
+    it('is empty for a table with no cells array', () => {
+      expect(uncoveredCells(spanTable([], { cells: undefined }))).toEqual([]);
+    });
+  });
+
   describe('withCellSpan', () => {
     it('sets the requested spans on the cell already anchored there', () => {
       const t = spanTable([spanCell(0, 0, 1, 1), spanCell(1, 1, 1, 1)]);
@@ -1073,6 +1216,69 @@ describe('merged-cell helpers', () => {
       expect(next.cells[0].columnSpan).toBe(3);
     });
 
+    it('gives the merged cell the bounds of its whole block', () => {
+      const t = spanTable([spanCell(0, 0, 1, 1)]);
+      const next = withCellSpan(t, 0, 0, { rowSpan: 2, columnSpan: 2 });
+      const cell = next.cells[0];
+      expect(cell.bounds).toEqual(recalcCellBounds(t, cell));
+      expect(cell.bounds).not.toEqual(gridSquareBounds(t, 0, 0));
+    });
+
+    it('shrinks the bounds back to the single square when the span is reduced to 1x1', () => {
+      const t = spanTable([
+        spanCell(0, 0, 2, 2, {
+          bounds: { left: 0.1, top: 0.2, width: 0.2, height: 0.2 },
+        }),
+      ]);
+      const next = withCellSpan(t, 0, 0, { rowSpan: 1, columnSpan: 1 });
+      expect(next.cells[0].bounds).toEqual(gridSquareBounds(t, 0, 0));
+    });
+
+    it('leaves the text and confidence of the cells the block covers alone', () => {
+      const covered = [
+        spanCell(0, 1, 1, 1, { text: 'b', confidence: 80 }),
+        spanCell(1, 0, 1, 1, { text: 'c', confidence: 70 }),
+        spanCell(1, 1, 1, 1, { text: 'd', confidence: 60 }),
+      ];
+      const t = spanTable([spanCell(0, 0, 1, 1), ...covered]);
+      const next = withCellSpan(t, 0, 0, { rowSpan: 2, columnSpan: 2 });
+      expect(next.cells.slice(1)).toEqual(covered);
+    });
+
+    it('clears the spans of a merged cell the new block merely overlaps', () => {
+      // (0,0) 2x2 covers rows 0-1 / columns 0-1; the new block at (1,1) 2x2 covers rows 1-2 /
+      // columns 1-2. They share only square (1,1), and the existing anchor is outside the new
+      // block, so nothing but the overlap test catches this.
+      const t = spanTable([spanCell(0, 0, 2, 2), spanCell(1, 1, 1, 1)]);
+      const next = withCellSpan(t, 1, 1, { rowSpan: 2, columnSpan: 2 });
+      expect(next.cells[0].rowSpan).toBe(1);
+      expect(next.cells[0].columnSpan).toBe(1);
+    });
+
+    it('leaves a merged cell that only abuts the new block alone', () => {
+      // (0,0) 1x2 covers columns 0-1 of row 0; the new block is row 1, columns 0-1. They
+      // touch along an edge and share no square.
+      const t = spanTable([spanCell(0, 0, 1, 2), spanCell(1, 0, 1, 1)]);
+      const next = withCellSpan(t, 1, 0, { rowSpan: 1, columnSpan: 2 });
+      expect(next.cells[0].rowSpan).toBe(1);
+      expect(next.cells[0].columnSpan).toBe(2);
+    });
+
+    it('clears the spans of a merged cell the enlarged block swallows, and nothing else about it', () => {
+      const innerBounds = { left: 0.2, top: 0.3, width: 0.2, height: 0.2 };
+      const t = spanTable([
+        spanCell(0, 0, 1, 1),
+        spanCell(1, 1, 2, 2, { text: 'inner', confidence: 55, bounds: innerBounds }),
+      ]);
+      const next = withCellSpan(t, 0, 0, { rowSpan: 3, columnSpan: 3 });
+      const inner = next.cells[1];
+      expect(inner.rowSpan).toBe(1);
+      expect(inner.columnSpan).toBe(1);
+      expect(inner.text).toBe('inner');
+      expect(inner.confidence).toBe(55);
+      expect(inner.bounds).toEqual(innerBounds);
+    });
+
     it('does not mutate the input table', () => {
       const t = spanTable([spanCell(0, 0, 1, 1, { confidence: 95 })]);
       const before = JSON.parse(JSON.stringify(t));
@@ -1080,6 +1286,63 @@ describe('merged-cell helpers', () => {
       expect(t).toEqual(before);
       expect(next).not.toBe(t);
       expect(next.cells).not.toBe(t.cells);
+    });
+  });
+
+  describe('withMergedBlock', () => {
+    const block = (row, column, rowSpan, columnSpan) => ({
+      row,
+      column,
+      rowSpan,
+      columnSpan,
+    });
+
+    it('merges the block when no merged cell matches it exactly', () => {
+      const t = spanTable([spanCell(0, 0, 1, 1)]);
+      const next = withMergedBlock(t, block(0, 0, 2, 2));
+      expect(next.cells[0].rowSpan).toBe(2);
+      expect(next.cells[0].columnSpan).toBe(2);
+    });
+
+    it('deletes the merge when the block is exactly an existing merged cell', () => {
+      const t = spanTable([spanCell(0, 0, 2, 2, { text: 'kept' })]);
+      const next = withMergedBlock(t, block(0, 0, 2, 2));
+      expect(next.cells[0].rowSpan).toBe(1);
+      expect(next.cells[0].columnSpan).toBe(1);
+      expect(next.cells[0].text).toBe('kept');
+      expect(next.cells[0].bounds).toEqual(gridSquareBounds(t, 0, 0));
+    });
+
+    it('merges rather than deletes when the block shares an anchor but not both spans', () => {
+      const t = spanTable([spanCell(0, 0, 2, 2)]);
+      const next = withMergedBlock(t, block(0, 0, 2, 3));
+      expect(next.cells[0].rowSpan).toBe(2);
+      expect(next.cells[0].columnSpan).toBe(3);
+    });
+
+    it('merges rather than deletes when the block matches the spans at another anchor', () => {
+      const t = spanTable([spanCell(0, 0, 2, 2)]);
+      const next = withMergedBlock(t, block(1, 1, 2, 2));
+      const moved = next.cells.find((c) => c.row === 1 && c.column === 1);
+      expect(moved.rowSpan).toBe(2);
+      expect(moved.columnSpan).toBe(2);
+      // The old merge overlapped the new block, so it went with it.
+      expect(next.cells[0].rowSpan).toBe(1);
+      expect(next.cells[0].columnSpan).toBe(1);
+    });
+
+    it('un-merges a merged cell drawn over as a single square', () => {
+      const t = spanTable([spanCell(0, 0, 2, 2)]);
+      const next = withMergedBlock(t, block(0, 0, 1, 1));
+      expect(next.cells[0].rowSpan).toBe(1);
+      expect(next.cells[0].columnSpan).toBe(1);
+    });
+
+    it('is a no-op on a single square that was never merged', () => {
+      const t = spanTable([spanCell(1, 1, 1, 1)]);
+      const next = withMergedBlock(t, block(1, 1, 1, 1));
+      expect(mergedCells(next)).toEqual([]);
+      expect(next.cells).toHaveLength(1);
     });
   });
 

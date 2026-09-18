@@ -50,7 +50,6 @@ describe('LayerRow', () => {
     });
   });
 
-  // Borders is untoggleable and always on, so it now carries its tint too.
   it('gives an untoggleable row the background colour, since it is always on', () => {
     renderRow({ toggleable: false });
     expect(screen.getByTestId('layer-row')).toHaveAttribute('data-on', 'true');

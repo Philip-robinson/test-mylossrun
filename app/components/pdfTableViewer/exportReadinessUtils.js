@@ -7,6 +7,9 @@
 // The threshold and the minimum stage arrive as arguments — no config import — so these
 // stay trivially unit-testable and the component owns the lookup.
 //
+// That rule is about VALUES, not about the module graph: `uncoveredCells` takes no
+// threshold and no stage, so importing it leaves that contract intact.
+//
 // A value is low confidence when its confidence is STRICTLY below the threshold, which is
 // the review screen's rule; a value carrying no numeric confidence is read as confidence
 // 0, since an absent reading is not a good one. A table holding no values at all is
@@ -14,6 +17,7 @@
 // has still to reach.
 
 import { linkedMembers } from 'components/pdfTableViewer/gridUtilities';
+import { uncoveredCells } from 'components/pdfTableViewer/tableSupportUtils';
 
 // Every value of ONE table that the review screen could be asked to correct: its cells,
 // each of its section titles' values, and — only when `withTitle` — its title. Absent
@@ -42,6 +46,13 @@ import { linkedMembers } from 'components/pdfTableViewer/gridUtilities';
 // so can never be corrected there — counting it would hold a group root out of "Ready for
 // Export" for ever with nothing on screen to fix. A member's CELLS and SECTION TITLES do
 // appear in the merged grid, each naming its source table, so they still count.
+//
+// The positions a merged cell's span covers are dropped on that same principle: the back
+// end's amalgamation keys its source cells by first position and leaves the positions a
+// span covers blank, so a covered cell never reaches the merged grid and never reaches the
+// review screen. Counting one would hold its table out of "Ready for Export" for ever with
+// nothing on screen to fix. Only the cells no OTHER cell's span covers are gathered.
+
 // The rows the merged grid takes no cells from: every row named by a section title, whose
 // row the merge skips whole — only the carried value travels — so nothing else along it is
 // ever drawn. `_data_row_indexes` in the back end is the same rule.
@@ -69,7 +80,7 @@ const correctableValues = (
   const skippedRows = sectionTitleRows(table);
   const shown = headerRowsShown ?? table?.headerCount ?? 0;
   return [
-    ...(table?.cells ?? []).filter((cell) =>
+    ...uncoveredCells(table ?? {}).filter((cell) =>
       reachesTheGrid(cell, table, shown, skippedRows)
     ),
     ...(withTitle && table?.title ? [table.title] : []),

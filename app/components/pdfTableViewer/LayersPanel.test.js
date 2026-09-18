@@ -27,7 +27,13 @@ const renderPanel = (props = {}) =>
   render(
     <LayersPanel
       editorMode={'border'}
-      layerVisibility={{ rows: true, columns: true, special: true, colours: true }}
+      layerVisibility={{
+        border: true,
+        rows: true,
+        columns: true,
+        special: true,
+        colours: true,
+      }}
       onToggleLayer={() => {}}
       selectedTable={TABLE}
       samePageTables={[TABLE, { tableId: 't2' }]}
@@ -56,10 +62,22 @@ describe('LayersPanel', () => {
       expect(screen.queryByTestId('layers-validate-borders')).toBeNull();
     });
 
-    it('gives the Borders row no eye, since it is always drawn', () => {
+    it('gives the Borders row an eye, so the boundaries can be hidden', () => {
       renderPanel({ editorMode: 'border' });
-      expect(screen.queryByTestId('layer-eye')).toBeNull();
-      expect(screen.queryByTestId('layer-eye-off')).toBeNull();
+      expect(screen.getByTestId('layer-eye')).toBeInTheDocument();
+    });
+
+    it('shows the Borders row off when its flag is false', () => {
+      renderPanel({ editorMode: 'border', layerVisibility: { border: false } });
+      expect(screen.getByTestId('layer-eye-off')).toBeInTheDocument();
+      expect(screen.getByTestId('layer-row')).toHaveAttribute('data-on', 'false');
+    });
+
+    it('reports the border key when the Borders row is clicked', () => {
+      const onToggleLayer = jest.fn();
+      renderPanel({ editorMode: 'border', onToggleLayer });
+      fireEvent.click(screen.getByTestId('layer-row'));
+      expect(onToggleLayer).toHaveBeenCalledWith('border');
     });
 
     it('calls onValidateTables when the button is clicked', () => {
@@ -71,9 +89,15 @@ describe('LayersPanel', () => {
   });
 
   describe('gridMode', () => {
-    it('lists Rows, Columns, Special Areas and Colours in that order', () => {
+    it('lists Borders, Rows, Columns, Special Areas and Colours in that order', () => {
       renderPanel({ editorMode: 'grid' });
-      expect(labels()).toEqual(['Rows', 'Columns', 'Special Areas', 'Colours']);
+      expect(labels()).toEqual([
+        'Borders',
+        'Rows',
+        'Columns',
+        'Special Areas',
+        'Colours',
+      ]);
     });
 
     it('offers Validate Borders in place of Validate Tables', () => {
@@ -94,28 +118,35 @@ describe('LayersPanel', () => {
     it('shows each row on or off according to layerVisibility', () => {
       renderPanel({
         editorMode: 'grid',
-        layerVisibility: { rows: true, columns: false, special: true, colours: false },
+        layerVisibility: {
+          border: false,
+          rows: true,
+          columns: false,
+          special: true,
+          colours: false,
+        },
       });
       const states = screen
         .getAllByTestId('layer-row')
         .map((row) => row.getAttribute('data-on'));
-      expect(states).toEqual(['true', 'false', 'true', 'false']);
+      expect(states).toEqual(['false', 'true', 'false', 'true', 'false']);
     });
 
     it('reports the layer key when a row is clicked', () => {
       const onToggleLayer = jest.fn();
       renderPanel({ editorMode: 'grid', onToggleLayer });
-      fireEvent.click(screen.getAllByTestId('layer-row')[2]);
+      fireEvent.click(screen.getAllByTestId('layer-row')[3]);
       expect(onToggleLayer).toHaveBeenCalledWith('special');
     });
 
-    it('counts rows, columns, special areas and coloured areas', () => {
+    it('counts tables, rows, columns, special areas and coloured areas', () => {
       renderPanel({ editorMode: 'grid' });
       const counts = screen
         .getAllByTestId('layer-count')
         .map((c) => c.textContent);
-      // 2 rows, 3 columns, header + one section title = 2 specials, 1 coloured area.
-      expect(counts).toEqual(['2', '3', '2', '1']);
+      // 2 tables on the page, 2 rows, 3 columns, header + one section title = 2 specials,
+      // 1 coloured area.
+      expect(counts).toEqual(['2', '2', '3', '2', '1']);
     });
   });
 
@@ -157,13 +188,15 @@ describe('LayersPanel', () => {
     );
   });
 
-  // The contents pass describes each layer it lists, in the order the panel lists them.
-  it('carries a help id on every layer row it lists in gridMode', () => {
+  // The contents pass describes each of its four layers, in the order the panel lists
+  // them. Borders heads that list and is described by the pass's own tips, not as a layer.
+  it('carries a help id on every contents layer row it lists in gridMode', () => {
     renderPanel({ editorMode: 'grid' });
 
     expect(
       screen.getAllByTestId('layer-row').map((row) => row.getAttribute('data-help-id')),
     ).toEqual([
+      null,
       layersRowsHelpId(),
       layersColumnsHelpId(),
       layersSpecialHelpId(),
@@ -171,8 +204,7 @@ describe('LayersPanel', () => {
     ]);
   });
 
-  // Borders is the boundary pass's one row, always drawn, and that pass describes it
-  // through its own tips rather than as a layer.
+  // Borders is described through the passes' own tips rather than as a layer.
   it('leaves the Borders row unannotated', () => {
     renderPanel();
 

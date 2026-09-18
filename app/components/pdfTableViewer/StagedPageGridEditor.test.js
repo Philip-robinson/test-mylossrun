@@ -259,6 +259,41 @@ describe('StagedPageGridEditor', () => {
       ).toEqual(['false', 'true']);
     });
 
+    // The Borders layer is honoured in both passes: with it off no boundary is drawn, the
+    // selected table's edge hit lines go with them — an invisible boundary is not one to
+    // drag — and so do the name and Link labels that caption each boundary.
+    it('draws no boundary, edge or label when the Borders layer is off', async () => {
+      const { container } = await renderLoaded(
+        baseProps({
+          selectedTableId: 't1',
+          layerVisibility: { border: false },
+        })
+      );
+      expect(boundaries(container)).toHaveLength(0);
+      expect(container.querySelectorAll('[data-testid="hit-line"]')).toHaveLength(0);
+      expect(screen.queryAllByTestId('selected-label')).toHaveLength(0);
+      expect(screen.queryAllByTestId('link-label')).toHaveLength(0);
+    });
+
+    it('draws no boundary or label in the contents pass when the Borders layer is off', async () => {
+      const { container } = await renderLoaded(
+        baseProps({
+          selectedTableId: 't1',
+          editorMode: 'grid',
+          layerVisibility: { border: false },
+        })
+      );
+      expect(boundaries(container)).toHaveLength(0);
+      expect(screen.queryAllByTestId('selected-label')).toHaveLength(0);
+      expect(screen.queryAllByTestId('link-label')).toHaveLength(0);
+    });
+
+    it('draws both labels for every table when the Borders layer is on', async () => {
+      await renderLoaded(baseProps({ selectedTableId: 't1' }));
+      expect(screen.getAllByTestId('selected-label')).toHaveLength(2);
+      expect(screen.getAllByTestId('link-label')).toHaveLength(2);
+    });
+
     it('gives the four draggable edges to the selected table alone', async () => {
       const { container } = await renderLoaded(
         baseProps({ selectedTableId: 't1' })
@@ -767,9 +802,9 @@ describe('StagedPageGridEditor', () => {
       expect(screen.queryByTestId('coloured-area-0')).toBeNull();
     });
 
-    // The Title tool sets the title rectangle, so it is drawn with the other special areas.
-    // A merged-cell block has no renderer here.
-    it('draws a title rectangle with the special areas, and no merged-cell block', async () => {
+    // The Title tool sets the title rectangle and the Merged tool sets a cell's spans, so
+    // both are drawn with the other special areas.
+    it('draws a title rectangle and a merged-cell block with the special areas', async () => {
       const withTitleAndMerge = {
         ...alpha(),
         title: {
@@ -785,7 +820,7 @@ describe('StagedPageGridEditor', () => {
         gridProps({ metadataTables: [withTitleAndMerge, beta()] })
       );
       expect(screen.getByTestId('title-rect')).toBeInTheDocument();
-      expect(screen.queryByTestId('merged-cell-0')).toBeNull();
+      expect(screen.getByTestId('merged-cell-0-0')).toBeInTheDocument();
     });
 
     it('moves a grid line while no tool is armed', async () => {
@@ -811,6 +846,7 @@ describe('StagedPageGridEditor', () => {
       ['colouredTable'],
       ['colouredCell'],
       ['colouredArea'],
+      ['merged'],
     ])('with the %s Special tool armed', (specialTool) => {
       it('offers no grid-line hit lines to drag', async () => {
         await renderLoaded(gridProps({ tool: 'special', specialTool }));
@@ -1077,6 +1113,147 @@ describe('StagedPageGridEditor', () => {
         clientY: 75,
       });
       expect(editedAlpha(onEditTables).sectionTitles).toEqual([]);
+    });
+  });
+
+  // Alpha's two 0.05 columns and two 0.05 rows put its bands at screen 0..50 and 50..100,
+  // so a drag from (2, 2) to (98, 98) covers 96% of every band and a drag ending at x 70
+  // covers only 40% of column 1 — either side of mergeCoverageFraction().
+  describe('the Merged tool', () => {
+    const texted = () => ({
+      ...alpha(),
+      cells: gridCells(2, 2).map((c) => ({
+        ...c,
+        text: `r${c.row}c${c.column}`,
+      })),
+    });
+
+    const spanned = () => {
+      const t = texted();
+      t.cells = t.cells.map((c) =>
+        c.row === 0 && c.column === 0 ? { ...c, rowSpan: 2, columnSpan: 2 } : c
+      );
+      return t;
+    };
+
+    const mergedProps = (overrides = {}) =>
+      gridProps({
+        tool: 'special',
+        specialTool: 'merged',
+        metadataTables: [texted(), beta()],
+        ...overrides,
+      });
+
+    const drag = (svg, from, to) => {
+      fireEvent.mouseDown(svg, { clientX: from[0], clientY: from[1] });
+      fireEvent.mouseMove(window, { clientX: to[0], clientY: to[1] });
+      fireEvent.mouseUp(window, { clientX: to[0], clientY: to[1] });
+    };
+
+    const cellRC = (table, row, column) =>
+      table.cells.find((c) => c.row === row && c.column === column);
+
+    it('a drag across a 2x2 area spans the top-left cell over it', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(mergedProps({ onEditTables }));
+      drag(container.querySelector('svg'), [2, 2], [98, 98]);
+
+      const anchor = cellRC(editedAlpha(onEditTables), 0, 0);
+      expect(anchor.rowSpan).toBe(2);
+      expect(anchor.columnSpan).toBe(2);
+      expect(anchor.confidence).toBe(0);
+    });
+
+    it('keeps the covered cells, with their text and their confidence', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(mergedProps({ onEditTables }));
+      drag(container.querySelector('svg'), [2, 2], [98, 98]);
+
+      const edited = editedAlpha(onEditTables);
+      [
+        [0, 1],
+        [1, 0],
+        [1, 1],
+      ].forEach(([row, column]) => {
+        const covered = cellRC(edited, row, column);
+        expect(covered.text).toBe(`r${row}c${column}`);
+        expect(covered.confidence).toBe(90);
+      });
+    });
+
+    it('merges nothing when the gesture is shorter than the click threshold', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(mergedProps({ onEditTables }));
+      drag(container.querySelector('svg'), [25, 25], [27, 26]);
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+
+    it('leaves out a column the rectangle barely reaches', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(mergedProps({ onEditTables }));
+      drag(container.querySelector('svg'), [2, 2], [70, 98]);
+
+      const anchor = cellRC(editedAlpha(onEditTables), 0, 0);
+      expect(anchor.columnSpan).toBe(1);
+      expect(anchor.rowSpan).toBe(2);
+    });
+
+    it('un-merges a block when the drag resolves to its anchor square alone', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(
+        mergedProps({ metadataTables: [spanned(), beta()], onEditTables })
+      );
+      drag(container.querySelector('svg'), [2, 2], [48, 48]);
+
+      const anchor = cellRC(editedAlpha(onEditTables), 0, 0);
+      expect(anchor.rowSpan).toBe(1);
+      expect(anchor.columnSpan).toBe(1);
+    });
+
+    // Drawing the same block twice is how a merge is undone: the second drag matches the
+    // merged cell exactly, so it deletes it rather than re-applying the span it already has.
+    it('deletes the merge when the drag is exactly an existing merged block', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(
+        mergedProps({ metadataTables: [spanned(), beta()], onEditTables })
+      );
+      drag(container.querySelector('svg'), [2, 2], [98, 98]);
+
+      const anchor = cellRC(editedAlpha(onEditTables), 0, 0);
+      expect(anchor.rowSpan).toBe(1);
+      expect(anchor.columnSpan).toBe(1);
+      expect(anchor.text).toBe('r0c0');
+    });
+
+    it('outlines a merged block while the Special Areas layer is on', async () => {
+      await renderLoaded(gridProps({ metadataTables: [spanned(), beta()] }));
+      expect(screen.getByTestId('merged-cell-0-0')).toBeInTheDocument();
+    });
+
+    it('outlines nothing while the Special Areas layer is off', async () => {
+      const { container } = await renderLoaded(
+        gridProps({
+          metadataTables: [spanned(), beta()],
+          layerVisibility: {
+            rows: true,
+            columns: true,
+            special: false,
+            colours: true,
+          },
+        })
+      );
+      expect(
+        container.querySelectorAll('[data-testid^="merged-cell-"]')
+      ).toHaveLength(0);
+    });
+
+    it('outlines nothing for a table holding no merged cell', async () => {
+      const { container } = await renderLoaded(
+        gridProps({ metadataTables: [texted(), beta()] })
+      );
+      expect(
+        container.querySelectorAll('[data-testid^="merged-cell-"]')
+      ).toHaveLength(0);
     });
   });
 

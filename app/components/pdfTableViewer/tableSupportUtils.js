@@ -7,6 +7,7 @@
 import {
   highConfidence,
   lowConfidence,
+  mergeCoverageFraction,
   reviewEditedCellConfidence,
   unknownExtractionMechanism,
 } from 'config';
@@ -168,6 +169,58 @@ export function gridSquareAtFraction(table, frac) {
   };
 }
 
+// The block of grid squares a drawn page-fraction rectangle { left, top, width, height }
+// selects, as { row, column, rowSpan, columnSpan }, or null when it selects nothing. Null
+// also for a table with no bounds or with an empty axis, there being no grid to hit.
+//
+// The two axes are resolved SEPARATELY and the block is their product. Deciding it per axis
+// is what makes the block rectangular by construction rather than by luck, which matters
+// because rowSpan/columnSpan can express nothing else: there is no way to record an L-shaped
+// or ragged selection, so it must not be possible to draw one.
+//
+// A band joins the block when its own width (or height) is above zero and the share of it the
+// rectangle overlaps is STRICTLY greater than mergeCoverageFraction() — a square merely
+// clipped by the edge of the drag is not what the user drew over. Bands come from the same
+// cumulative axis offsets gridSquareBounds draws from, so a merge lands on exactly the squares
+// the grid shows.
+//
+// The included bands on an axis are necessarily contiguous: only the two end bands of an
+// overlap can be partly covered, and every band between them is covered whole. So the count of
+// included bands and `last - first + 1` are the same number, and the span can be taken from
+// the count without a contiguity check.
+export function cellBlockFromRect(table, rect) {
+  const bounds = table?.bounds;
+  if (!bounds) return null;
+  const cols = (table.columnWidths ?? []).map((v) => v.value);
+  const rows = (table.rowHeights ?? []).map((v) => v.value);
+  if (!cols.length || !rows.length) return null;
+  const includedBands = (values, origin, start, extent) => {
+    const offsets = cumulative(values);
+    const end = start + extent;
+    const included = [];
+    for (let i = 0; i < values.length; i += 1) {
+      const size = values[i];
+      if (size <= 0) continue;
+      const bandStart = origin + (i ? offsets[i - 1] : 0);
+      const overlap = Math.max(
+        0,
+        Math.min(end, bandStart + size) - Math.max(start, bandStart)
+      );
+      if (overlap / size > mergeCoverageFraction()) included.push(i);
+    }
+    return included;
+  };
+  const columns = includedBands(cols, bounds.left, rect.left, rect.width);
+  const rowBands = includedBands(rows, bounds.top, rect.top, rect.height);
+  if (!columns.length || !rowBands.length) return null;
+  return {
+    row: rowBands[0],
+    column: columns[0],
+    rowSpan: rowBands.length,
+    columnSpan: columns.length,
+  };
+}
+
 // The table's merged cells — the entries spanning more than one square in either direction —
 // in cells-array order. Tolerates a missing cells array.
 export function mergedCells(table) {
@@ -189,6 +242,27 @@ export function mergedCellCovering(table, row, column) {
         column < cell.column + (cell.columnSpan ?? 1)
     ) ?? null
   );
+}
+
+// The entries of table.cells that no OTHER entry's span covers, in cells-array order — the
+// cells that are actually drawn and actually worth reading. For a table with no merged cell
+// this is table.cells itself, entry for entry.
+//
+// An entry is covered when some other entry has a span above 1 that reaches its position and
+// it is not sitting at that other entry's own anchor. Entries are compared by identity, the
+// way withCellSpan compares against `existing`, so two entries that happen to hold the same
+// row and column do not cancel each other out. Tolerates a missing cells array.
+export function uncoveredCells(table) {
+  const cells = table?.cells ?? [];
+  const coveredBy = (other, cell) =>
+    other !== cell &&
+    ((other.rowSpan ?? 1) > 1 || (other.columnSpan ?? 1) > 1) &&
+    cell.row >= other.row &&
+    cell.row < other.row + (other.rowSpan ?? 1) &&
+    cell.column >= other.column &&
+    cell.column < other.column + (other.columnSpan ?? 1) &&
+    !(cell.row === other.row && cell.column === other.column);
+  return cells.filter((cell) => !cells.some((other) => coveredBy(other, cell)));
 }
 
 // Which of the four span edits are available for the selected cell `cellRef`
@@ -230,12 +304,30 @@ export function mergedCellLimits(table, cellRef) {
 // would keep the text read from its original single square and the merge would never reach the
 // extracted text. A reduction zeroes it too, because the region changed.
 //
+// The cell's BOUNDS become its spanned block, which recalcCellBounds computes exactly: the
+// grid square at the anchor, widened and deepened by the sum of the spanned columnWidths and
+// rowHeights. Both re-read paths in the product take a cell's stored bounds verbatim and read
+// neither span field, so leaving the pre-merge single-square bounds in place would have the
+// merged root re-read over its original square and the merge would never reach the extracted
+// text. The note above that cell.bounds is the tighter OCR text box is knowingly departed from
+// here: no extraction ever read the block as one region, so there is no measured text box for
+// it, and the grid-line rectangle is the rectangle the user drew the merge over. A span
+// REDUCTION shrinks the bounds back by the same rule, which is correct.
+//
 // Cells the widened span now covers are deliberately NOT deleted: cellAt matches top-left
 // only so a covered entry is inert in the UI, mergeCalcCellsResponse matches by exact
 // (row, column) so it is inert in a recalculation, and fillGridCells would recreate it on the
 // next load anyway. Deleting them would make a span REDUCTION destructive — the covered
 // cells' text could not come back. The saved cells list may therefore hold entries for squares
 // a spanning cell covers, the same tolerance fillGridCells documents.
+//
+// Their SPANS are another matter: any other merged cell whose block OVERLAPS the new one at
+// so much as a single square has both of its spans reset to 1, and nothing else about it
+// changed. Two overlapping spans are not representable — uncoveredCells could not say which
+// span owns a square, and un-merging the outer block would resurrect a stale inner span over
+// squares the user no longer thinks are grouped. Overlap rather than anchor-containment is
+// the test because a block that covers only the TAIL of an existing merge overlaps it just
+// as unrepresentably as one that swallows it whole.
 export function withCellSpan(table, row, column, spans) {
   const C = (table.columnWidths ?? []).length;
   const R = (table.rowHeights ?? []).length;
@@ -243,16 +335,57 @@ export function withCellSpan(table, row, column, spans) {
   const base =
     existing ?? makeDefaultCell(row, column, gridSquareBounds(table, row, column));
   const clamp = (value, max) => Math.max(1, Math.min(value, max));
+  const rowSpan = clamp(spans?.rowSpan ?? base.rowSpan ?? 1, R - row);
+  const columnSpan = clamp(spans?.columnSpan ?? base.columnSpan ?? 1, C - column);
   const updated = {
     ...base,
-    rowSpan: clamp(spans?.rowSpan ?? base.rowSpan ?? 1, R - row),
-    columnSpan: clamp(spans?.columnSpan ?? base.columnSpan ?? 1, C - column),
+    rowSpan,
+    columnSpan,
+    bounds: recalcCellBounds(table, { row, column, rowSpan, columnSpan }),
     confidence: 0,
   };
+  const swallowed = (cell) =>
+    cell !== updated &&
+    ((cell.rowSpan ?? 1) > 1 || (cell.columnSpan ?? 1) > 1) &&
+    cell.row < row + rowSpan &&
+    cell.row + (cell.rowSpan ?? 1) > row &&
+    cell.column < column + columnSpan &&
+    cell.column + (cell.columnSpan ?? 1) > column;
   const cells = existing
     ? (table.cells ?? []).map((cell) => (cell === existing ? updated : cell))
     : [...(table.cells ?? []), updated];
-  return { ...table, cells };
+  return {
+    ...table,
+    cells: cells.map((cell) =>
+      swallowed(cell) ? { ...cell, rowSpan: 1, columnSpan: 1 } : cell
+    ),
+  };
+}
+
+// Apply the block the Merged tool drew to the table.
+//
+// A block matching an existing merged cell EXACTLY — same anchor, same two spans — DELETES
+// that merge: drawing a merge a second time over the same squares is how it is undone. Any
+// other block is merged, taking every merged cell it overlaps with it (see withCellSpan).
+//
+// The delete goes through withCellSpan with 1x1 spans rather than dropping the cell from the
+// list, so the cell keeps its text and its bounds shrink back to its own grid square — the
+// same path a span reduction takes, and for the same reason: the squares the merge covered
+// must be able to come back.
+export function withMergedBlock(table, block) {
+  const exact = mergedCells(table).find(
+    (cell) =>
+      cell.row === block.row &&
+      cell.column === block.column &&
+      (cell.rowSpan ?? 1) === block.rowSpan &&
+      (cell.columnSpan ?? 1) === block.columnSpan
+  );
+  return withCellSpan(
+    table,
+    block.row,
+    block.column,
+    exact ? { rowSpan: 1, columnSpan: 1 } : block
+  );
 }
 
 // The span to apply when the user merges a not-yet-merged square at (row, column):
@@ -1046,9 +1179,15 @@ export function specialAreaEntries(table) {
 
 // Build the calculate-cells request table for ONE metadata table: the table's own rectangle
 // (the DTO inherits Rectangle, so left/top/width/height sit at the top level), its
-// tableInPage so the response can be matched back, and one entry per cell carrying that
-// cell's OWN rectangle plus its row/column. The per-cell rectangles *are* the grid — there
-// are deliberately no columnWidths/rowHeights, because the endpoint moves nothing.
+// tableInPage so the response can be matched back, and one entry per UNCOVERED cell carrying
+// that cell's OWN rectangle plus its row/column. The per-cell rectangles *are* the grid —
+// there are deliberately no columnWidths/rowHeights, because the endpoint moves nothing.
+//
+// Cells another cell's span covers are left out: such a cell is never drawn as its own region
+// and amalgamation leaves its position blank, so it never reaches the review screen and
+// reading it is waste — and reading the squares of a merged block individually is the
+// opposite of what a merge asks for. A table with no merged cell has every entry uncovered,
+// so its request is byte-identical to the one this built before.
 //
 // The optional `title` and `specials` keys are omitted entirely when the table has nothing
 // for them, so a plain table's request stays minimal.
@@ -1057,7 +1196,7 @@ export function buildCalcCellsRequestTable(table) {
   return {
     ...plainRect(table.bounds),
     tableInPage: table.tableInPage,
-    cells: (table.cells ?? []).map((cell) => ({
+    cells: uncoveredCells(table).map((cell) => ({
       ...plainRect(cell.bounds),
       row: cell.row,
       column: cell.column,

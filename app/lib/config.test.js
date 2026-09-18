@@ -117,3 +117,15 @@ describe('layer colour config', () => {
     expect(isValidColour(config.selectedSectionTitleHighlight())).toBeTruthy();
   });
 });
+
+describe('merged cell config', () => {
+  // A share of a grid square, so what is asserted is the range it has to stay in: at or
+  // below 0 every square the drawn rectangle touches at all would join the block, and at
+  // or above 1 only a square covered edge to edge ever would.
+  it('mergeCoverageFraction() is a fraction of a square, on both import paths', () => {
+    for (const source of [configModule, config]) {
+      expect(source.mergeCoverageFraction()).toBeGreaterThan(0);
+      expect(source.mergeCoverageFraction()).toBeLessThan(1);
+    }
+  });
+});

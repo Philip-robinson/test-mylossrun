@@ -149,7 +149,7 @@ export function stagedGridEditorEnabled() {
 }
 
 // Width of the slot each Layers row reserves for its eye, whether or not it has one.
-// Borders has none, and without a reserved slot its count would sit an icon's width
+// Without a reserved slot, a row drawn without an eye would sit its count an icon's width
 // further right than every other row's.
 export function layerTickSlotWidthPx() {
   return 42;
@@ -285,6 +285,17 @@ export function gridToolbarCornerRadiusPx() {
 
 export function gridToolbarShadow() {
   return '0 0 6px 1px rgba(0,0,0,0.18)';
+}
+
+// The share of a grid square's width and of its height that the Merged tool's drawn
+// rectangle must cover before that square joins the block.
+export function mergeCoverageFraction() {
+  return 0.6;
+}
+
+// Stroke width of the outline drawn around a merged cell's block.
+export function mergedCellOutlineWidthPx() {
+  return 2;
 }
 
 // The Special tools that pick something to colour, in menu order. One list, read by the
@@ -854,8 +865,8 @@ export function layersPanelHelpId() {
   return 'layers-panel';
 }
 
-// One per toggleable layer row in that panel. Borders carries none: it is listed by the
-// boundary pass alone, is always drawn, and the pass's own tips already describe it.
+// One per contents layer row in that panel. Borders carries none: it is listed by both
+// passes and the passes' own tips already describe it.
 export function layersRowsHelpId() {
   return 'layers-rows';
 }
@@ -902,6 +913,10 @@ export function specialToolSectionHelpId() {
 
 export function specialToolHideRowHelpId() {
   return 'special-tool-hide-row';
+}
+
+export function specialToolMergedHelpId() {
+  return 'special-tool-merged';
 }
 
 // The review screen's ids: the two titles above the grid, the count and the go-to controls
@@ -1113,6 +1128,8 @@ const default_export = {
   gridToolbarBorderColour,
   gridToolbarCornerRadiusPx,
   gridToolbarShadow,
+  mergeCoverageFraction,
+  mergedCellOutlineWidthPx,
   colourSpecialToolKeys,
   sectionTitlePlaceholderColumnName,
   selectedRowHighlight,
@@ -1229,6 +1246,7 @@ const default_export = {
   specialToolTitleHelpId,
   specialToolSectionHelpId,
   specialToolHideRowHelpId,
+  specialToolMergedHelpId,
   linkAvailableTablesHelpId,
   linkLinkedTablesHelpId,
   linkUnlinkHelpId,

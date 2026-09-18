@@ -73,6 +73,7 @@ import {
   specialToolColouredTableHelpId,
   specialToolHeaderHelpId,
   specialToolHideRowHelpId,
+  specialToolMergedHelpId,
   specialToolSectionHelpId,
   specialToolTitleHelpId,
   tableLinkLabelHelpId,
@@ -510,7 +511,7 @@ export function helpScreens() {
       ],
     },
     [contentsPassScreenId()]: {
-      version: 13,
+      version: 14,
       name: 'Table contents',
       summary: [
         'This pass is about the inside of one table — its rows, ',
@@ -717,6 +718,28 @@ export function helpScreens() {
             'not be included in the output; instead the output table will be ',
             'split at this point and the rows below will become a separate ',
             'spreadsheet within the output workbook. A table can have many sections.',
+          ],
+          side: "right"
+        },
+        {
+          helpId: specialToolMergedHelpId(),
+          title: 'Merged button',
+          body: [
+            'Clicking this sets Merged mode, clicking again clears it.',
+            'When in Merged mode:',
+            {
+              list: [
+                'Horizontal and vertical grid line dragging is disabled.',
+                'Drag with the mouse across a rectangular group of cells to ',
+                'join them into one cell.',
+                'A cell joins the group when more than 60% of both its width ',
+                'and its height falls inside the rectangle you draw.',
+                'The top left cell of the group becomes the single cell, and ',
+                'it is read as one when the text is next extracted.',
+                'Dragging over a single cell of an existing group breaks the ',
+                'group up again.',
+              ],
+            },
           ],
           side: "right"
         },

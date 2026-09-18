@@ -535,6 +535,49 @@ describe('isExportReady', () => {
     expect(isExportReady(root, HIGH, READY)).toBe(true);
   });
 
+  // The back end keys its source cells by first position, so the positions a merged cell's
+  // span covers stay blank in the merged grid and never reach the review screen. A poor
+  // reading at one of them is drawn nowhere the reviewer could correct it.
+  it('ignores a value at a position a merged cell\'s span covers', () => {
+    const root = readyTable({
+      headerCount: 1,
+      cells: [
+        cell(1, 0, 99),
+        { ...cell(2, 0, 99), columnSpan: 2, rowSpan: 2 },
+        cell(2, 1, 0),
+        cell(3, 0, 11),
+        cell(3, 1, 13),
+      ],
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(true);
+  });
+
+  // The merged cell itself is the one that IS drawn, so its own reading still counts.
+  it('counts the merged cell\'s own low confidence', () => {
+    const root = readyTable({
+      headerCount: 1,
+      cells: [
+        cell(1, 0, 99),
+        { ...cell(2, 0, 20), columnSpan: 2, rowSpan: 1 },
+        cell(2, 1, 99),
+      ],
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(false);
+  });
+
+  // Nothing changes for a table holding no merged cell: every cell is drawn, so every
+  // cell counts.
+  it('counts every cell of a table holding no merged cell', () => {
+    const root = readyTable({
+      headerCount: 1,
+      cells: [cell(1, 0, 99), cell(2, 0, 99), cell(2, 1, 0)],
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(false);
+  });
+
   it('refuses an absent table rather than throwing', () => {
     expect(isExportReady(undefined, HIGH, READY)).toBe(false);
     expect(isExportReady(null, HIGH, READY)).toBe(false);

@@ -15,6 +15,7 @@ import {
   layerRowsColour,
   linkedEmphasisColour,
   layerSpecialCellsColour,
+  mergedCellOutlineWidthPx,
   sectionTitleMarkerColour,
   sectionTitleMarkerDash,
   sectionTitlePlaceholderColumnName,
@@ -34,6 +35,7 @@ import TableLinkLabel from 'components/pdfTableViewer/TableLinkLabel';
 import TableHelpFrame from 'components/pdfTableViewer/TableHelpFrame';
 import {
   LINK_LABEL_END_LINKING,
+  cellBlockFromRect,
   clampBoundaryTarget,
   cleanupAxis,
   cumulative,
@@ -43,17 +45,20 @@ import {
   linkLabelText,
   linkedTablesWithParents,
   mergeCells,
+  mergedCells,
   mergeMap,
   mergeRolesByTableId,
   moveDivider,
   overlaps,
   pageTableName,
+  recalcCellBounds,
   reconcileAxisEdit,
   replaceTableById,
   resizeBoundary,
   splitEntryAt,
   splitMap,
   tablesOnPage,
+  withMergedBlock,
   clampToUnitPage,
 } from 'components/pdfTableViewer/tableSupportUtils';
 import {
@@ -211,8 +216,9 @@ export function StagedPageGridEditor({
   // which of its entries is armed. Both are null in borderMode.
   tool = null,
   specialTool = null,
-  // Which layers are drawn in gridMode: { rows, columns, special, colours }. A missing key
-  // reads as on. Every layer is treated as off in borderMode.
+  // Which layers are drawn: { border, rows, columns, special, colours }. A missing key
+  // reads as on. `border` is honoured in both passes; the other four are treated as off in
+  // borderMode.
   layerVisibility = {},
   dim = false,
   onEditTables,
@@ -309,11 +315,13 @@ export function StagedPageGridEditor({
     [samePage, selectedTableId]
   );
 
-  // What the two passes draw. borderMode is about boundaries alone, so every layer flag
-  // reads off there whatever the host holds; gridMode honours the flags, a missing key
-  // reading as on. The Header tool draws the header rectangle whatever the Special flag
-  // says, and suppresses the other special areas while it is armed.
+  // What the two passes draw. borderMode is about boundaries alone, so the four contents
+  // flags read off there whatever the host holds; gridMode honours them, a missing key
+  // reading as on. The Borders flag is the exception: the boundaries are drawn in both
+  // passes, so it is honoured in both. The Header tool draws the header rectangle whatever
+  // the Special flag says, and suppresses the other special areas while it is armed.
   const gridMode = editorMode === 'grid';
+  const showBorders = layerVisibility.border !== false;
   const showRows = gridMode && layerVisibility.rows !== false;
   const showColumns = gridMode && layerVisibility.columns !== false;
   const showSpecial = gridMode && layerVisibility.special !== false;
@@ -981,6 +989,19 @@ export function StagedPageGridEditor({
       });
       return;
     }
+    // The Merged tool's drag spans the cell at the drawn block's top-left over the whole
+    // block, deleting every merge the block overlaps. Drawing the block an existing merge
+    // already occupies deletes that merge instead — see withMergedBlock, which decides
+    // between the two. The table is looked up afresh rather than taken from the closed-over
+    // `selected`, matching applySpecialRowClick.
+    if (c.forMerge) {
+      const t = findTableById(metadataTables, selected.tableId);
+      if (!t) return;
+      const block = cellBlockFromRect(t, bounds);
+      if (!block) return;
+      commitTableEdit(t.tableId, withMergedBlock(t, block));
+      return;
+    }
     // The Section Title Row tool's drag names the row nearest the drawn area's vertical
     // centre as a section title, with the drawn area as the value it supplies. The column
     // name is a placeholder: naming it properly is later work.
@@ -1080,7 +1101,8 @@ export function StagedPageGridEditor({
     tool === 'special' &&
     (specialTool === 'sectionTitle' ||
       specialTool === 'colouredArea' ||
-      specialTool === 'title');
+      specialTool === 'title' ||
+      specialTool === 'merged');
 
   // Report a changed pending selection, seeding the draft colours from the page pixels
   // under it the first time it becomes non-empty — the swatches then open on a guess
@@ -1188,6 +1210,7 @@ export function StagedPageGridEditor({
         startClientY: e.clientY,
         forColour: specialTool === 'colouredArea',
         forTitle: specialTool === 'title',
+        forMerge: specialTool === 'merged',
       };
       setSectionAreaRect({ left: frac.fx, top: frac.fy, width: 0, height: 0 });
       window.addEventListener('mousemove', handleSectionAreaMove);
@@ -1552,13 +1575,18 @@ export function StagedPageGridEditor({
   };
 
   // Every table on the page, so a page's other tables — and a table just created — are
-  // visible while one of them is being edited, rather than the selected one alone.
-  const renderBorder = () => (
-    <g>
-      {samePage.map((t) => borderRect(t, t.tableId === selected?.tableId))}
-      {selectedEdges()}
-    </g>
-  );
+  // visible while one of them is being edited, rather than the selected one alone. With the
+  // Borders layer off nothing here is drawn, and the edge hit lines go with the rects: an
+  // invisible boundary is not one to drag. The name and Link labels go with it too, above.
+  const renderBorder = () => {
+    if (!showBorders) return null;
+    return (
+      <g>
+        {samePage.map((t) => borderRect(t, t.tableId === selected?.tableId))}
+        {selectedEdges()}
+      </g>
+    );
+  };
 
   // The selected table's internal horizontal grid lines (row dividers), drawn in
   // layerRowsColour() when the Rows layer is on and layerGrey() when it is off. When
@@ -1995,6 +2023,36 @@ export function StagedPageGridEditor({
     );
   };
 
+  // The selected table's merged cells, each outlined over its whole spanned block
+  // (recalcCellBounds sums the spanned axis entries). Deliberate limitation: the grid lines
+  // running through a block are left drawn, because teaching renderHorizontalLines and
+  // renderVerticalLines about spans and partial lines is a far larger change than this
+  // needs, and the solid outline over them is unambiguous.
+  const renderMergedCells = () => {
+    if (!selected) return null;
+    return (
+      <g>
+        {mergedCells(selected).map((cell) => {
+          const b = recalcCellBounds(selected, cell);
+          return (
+            <rect
+              key={`merged-${cell.row}-${cell.column}`}
+              data-testid={`merged-cell-${cell.row}-${cell.column}`}
+              x={b.left * pixelWidth}
+              y={b.top * pixelHeight}
+              width={b.width * pixelWidth}
+              height={b.height * pixelHeight}
+              fill={'none'}
+              style={{ stroke: layerSpecialCellsColour() }}
+              strokeWidth={mergedCellOutlineWidthPx()}
+              vectorEffect={'non-scaling-stroke'}
+            />
+          );
+        })}
+      </g>
+    );
+  };
+
   const renderSpecial = () => {
     if (!selected) return null;
     return (
@@ -2002,6 +2060,7 @@ export function StagedPageGridEditor({
         {showHeader ? renderHeaderRect() : null}
         {showSpecial ? renderTitleRect() : null}
         {showOtherSpecial ? renderSectionTitles() : null}
+        {showOtherSpecial ? renderMergedCells() : null}
       </g>
     );
   };
@@ -2261,8 +2320,14 @@ export function StagedPageGridEditor({
 
           The selected table's labels take the border colour and the rest the de-emphasised
           grey, matching the boundary each sits above — except a Link label in the End
-          Linking state, which takes the emphasis colour whichever table it belongs to. */}
+          Linking state, which takes the emphasis colour whichever table it belongs to.
+
+          Both labels belong to the boundary they sit above, so the Borders layer takes them
+          with it: with it off there is no boundary for a name or a status to caption, and
+          the Link label's button goes too rather than hanging over a page with nothing
+          drawn on it. */}
       {overlayScale &&
+        showBorders &&
         samePage.map((t) => {
           const isSelected = t.tableId === selected?.tableId;
           const top = Math.max(

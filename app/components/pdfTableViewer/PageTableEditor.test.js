@@ -708,15 +708,17 @@ describe('PageTableEditor — the two passes', () => {
       return view;
     };
 
-    test('lists the four toggleable layers and the tool-bar', async () => {
+    test('lists Borders and the four contents layers, and the tool-bar', async () => {
       await enterGridMode();
-      expect(screen.getAllByTestId('layer-row')).toHaveLength(4);
+      expect(screen.getAllByTestId('layer-row')).toHaveLength(5);
+      expect(screen.getByText('Borders')).toBeInTheDocument();
       expect(screen.getByTestId('grid-toolbar')).toBeInTheDocument();
     });
 
     test('every layer starts on', async () => {
       await enterGridMode();
       expect(lastStagedProps().layerVisibility).toEqual({
+        border: true,
         rows: true,
         columns: true,
         special: true,
@@ -737,7 +739,7 @@ describe('PageTableEditor — the two passes', () => {
 
       getImage.mockClear();
       await act(async () => {
-        fireEvent.click(screen.getAllByTestId('layer-row')[3]);
+        fireEvent.click(screen.getAllByTestId('layer-row')[4]);
       });
       await waitFor(() =>
         expect(lastStagedProps().layerVisibility.colours).toBe(false)
@@ -757,11 +759,11 @@ describe('PageTableEditor — the two passes', () => {
         )
       );
       await act(async () => {
-        fireEvent.click(screen.getAllByTestId('layer-row')[3]);
+        fireEvent.click(screen.getAllByTestId('layer-row')[4]);
       });
       getImage.mockClear();
       await act(async () => {
-        fireEvent.click(screen.getAllByTestId('layer-row')[3]);
+        fireEvent.click(screen.getAllByTestId('layer-row')[4]);
       });
       await waitFor(() =>
         expect(lastStagedProps().layerVisibility.colours).toBe(true)
@@ -831,7 +833,7 @@ describe('PageTableEditor — the two passes', () => {
 
       // Toggling Colours off would have been served from the cache before the save.
       await act(async () => {
-        fireEvent.click(screen.getAllByTestId('layer-row')[3]);
+        fireEvent.click(screen.getAllByTestId('layer-row')[4]);
       });
       await waitFor(() =>
         expect(getImage).toHaveBeenCalledWith(
@@ -846,10 +848,20 @@ describe('PageTableEditor — the two passes', () => {
     test('turning a layer off reports it to the editor', async () => {
       await enterGridMode();
       await act(async () => {
-        fireEvent.click(screen.getAllByTestId('layer-row')[0]);
+        fireEvent.click(screen.getAllByTestId('layer-row')[1]);
       });
       await waitFor(() =>
         expect(lastStagedProps().layerVisibility.rows).toBe(false)
+      );
+    });
+
+    test('turning Borders off reports it to the editor', async () => {
+      await enterGridMode();
+      await act(async () => {
+        fireEvent.click(screen.getAllByTestId('layer-row')[0]);
+      });
+      await waitFor(() =>
+        expect(lastStagedProps().layerVisibility.border).toBe(false)
       );
     });
 

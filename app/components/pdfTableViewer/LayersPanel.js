@@ -2,9 +2,10 @@
 
 // LayersPanel: the fixed-width (200px) right-hand "Layers" panel of the staged grid
 // editor. Which rows it lists is the editor's mode: borderMode is about table boundaries
-// alone and lists Borders, while gridMode is about one table's contents and lists the
-// other four. Each listed row but Borders is an independent visibility flag, toggled by
-// clicking the row. Below the rows sit the context-dependent Options block, the
+// alone and lists Borders alone, while gridMode is about one table's contents and lists
+// Borders plus the other four — the boundaries stay worth seeing and worth hiding while
+// the contents are worked on. Every listed row is an independent visibility flag, toggled
+// by clicking the row. Below the rows sit the context-dependent Options block, the
 // Previous / Next buttons, and the button that switches passes — Validate Tables in
 // borderMode, Validate Borders in gridMode.
 //
@@ -39,9 +40,8 @@ import {
 } from 'config';
 
 // The five rows in display order: Borders first, because the boundary pass comes first,
-// and Colours last. `countKey` selects the row's count from `layerCounts`; `toggleable`
-// is false only for Borders, which is always drawn and so carries no eye. `helpId` is the
-// id the help overlay describes the row by — the four gridMode layers have one, Borders
+// and Colours last. `countKey` selects the row's count from `layerCounts`. `helpId` is the
+// id the help overlay describes the row by — the four contents layers have one, Borders
 // none.
 const LAYER_DEFS = [
   {
@@ -50,7 +50,6 @@ const LAYER_DEFS = [
     colour: layerBorderColour,
     backgroundColour: layerBorderBackgroundColour,
     countKey: 'border',
-    toggleable: false,
   },
   {
     key: 'rows',
@@ -59,7 +58,6 @@ const LAYER_DEFS = [
     colour: layerRowsColour,
     backgroundColour: layerRowsBackgroundColour,
     countKey: 'rows',
-    toggleable: true,
   },
   {
     key: 'columns',
@@ -68,7 +66,6 @@ const LAYER_DEFS = [
     colour: layerColumnsColour,
     backgroundColour: layerColumnsBackgroundColour,
     countKey: 'columns',
-    toggleable: true,
   },
   {
     key: 'special',
@@ -77,7 +74,6 @@ const LAYER_DEFS = [
     colour: layerSpecialCellsColour,
     backgroundColour: layerSpecialCellsBackgroundColour,
     countKey: 'specialCells',
-    toggleable: true,
   },
   {
     key: 'colours',
@@ -86,7 +82,6 @@ const LAYER_DEFS = [
     colour: layerColoursColour,
     backgroundColour: layerColoursBackgroundColour,
     countKey: 'colours',
-    toggleable: true,
   },
 ];
 
@@ -112,9 +107,11 @@ export default function LayersPanel({
     pageColouredAreas,
   });
   const borderMode = editorMode === 'border';
-  const rows = LAYER_DEFS.filter((def) =>
-    borderMode ? def.key === 'border' : def.key !== 'border'
-  );
+  // The boundary pass lists Borders alone; the contents pass lists every row, Borders
+  // included.
+  const rows = borderMode
+    ? LAYER_DEFS.filter((def) => def.key === 'border')
+    : LAYER_DEFS;
 
   return (
     <Box
@@ -154,8 +151,7 @@ export default function LayersPanel({
             label={def.label}
             count={counts[def.countKey]}
             helpId={def.helpId ? def.helpId() : undefined}
-            on={def.toggleable ? layerVisibility[def.key] !== false : true}
-            toggleable={def.toggleable}
+            on={layerVisibility[def.key] !== false}
             onToggle={() => onToggleLayer(def.key)}
           />
         ))}

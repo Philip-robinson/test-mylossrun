@@ -23,6 +23,7 @@ import {
   layersNextHelpId,
   layersPreviousHelpId,
   reviewTableScreenId,
+  specialToolMergedHelpId,
   tableLinkLabelHelpId,
   tableNameLabelHelpId,
   toolbarValidateBordersHelpId,
@@ -379,5 +380,19 @@ describe('the account button', () => {
     for (const tip of tips) {
       expect(tip).toEqual(tips[0]);
     }
+  });
+});
+
+// The Merged button sits on the Special sub-menu, which the contents pass alone has, so
+// that is the one screen which describes it.
+describe('the Merged button', () => {
+  const mergedTip = (screenId) =>
+    helpScreens()[screenId].tips.find(
+      (tip) => tip.helpId === specialToolMergedHelpId(),
+    );
+
+  it('is described by the contents pass', () => {
+    expect(mergedTip(contentsPassScreenId())).toBeDefined();
+    expect(mergedTip(contentsPassScreenId()).title).toEqual('Merged button');
   });
 });

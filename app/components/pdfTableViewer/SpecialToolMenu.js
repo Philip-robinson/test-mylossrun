@@ -19,6 +19,7 @@ import {
   specialToolColouredTableHelpId,
   specialToolHeaderHelpId,
   specialToolHideRowHelpId,
+  specialToolMergedHelpId,
   specialToolSectionHelpId,
   specialToolTitleHelpId,
 } from 'config';
@@ -31,6 +32,7 @@ const SPECIAL_TOOL_DEFS = [
   { key: 'title', label: 'Title', helpId: specialToolTitleHelpId },
   { key: 'hideRow', label: 'Hide Row', helpId: specialToolHideRowHelpId },
   { key: 'sectionTitle', label: 'Section', helpId: specialToolSectionHelpId },
+  { key: 'merged', label: 'Merged', helpId: specialToolMergedHelpId },
   {
     key: 'colouredRows',
     label: 'Rows',

@@ -8,6 +8,7 @@ import {
   specialToolColouredTableHelpId,
   specialToolHeaderHelpId,
   specialToolHideRowHelpId,
+  specialToolJoinedEndRowHelpId,
   specialToolMergedHelpId,
   specialToolSectionHelpId,
   specialToolTitleHelpId,
@@ -19,6 +20,7 @@ const KEYS = [
   'hideRow',
   'sectionTitle',
   'merged',
+  'joinedEndRow',
   'colouredRows',
   'colouredColumns',
   'colouredTable',
@@ -27,7 +29,7 @@ const KEYS = [
 ];
 
 describe('SpecialToolMenu', () => {
-  it('lists its ten entries in order with their labels', () => {
+  it('lists its eleven entries in order with their labels', () => {
     render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
     const rendered = screen
       .getAllByRole('button')
@@ -45,6 +47,59 @@ describe('SpecialToolMenu', () => {
     const heading = screen.getByTestId('special-tool-heading-colouring');
     expect(heading).toHaveTextContent('Colouring');
     expect(screen.getAllByRole('button')).not.toContain(heading);
+  });
+
+  it('places Joined end row after Merged and before the Colouring heading', () => {
+    render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
+    const merged = screen.getByTestId('special-tool-merged');
+    const joined = screen.getByTestId('special-tool-joinedEndRow');
+    const heading = screen.getByTestId('special-tool-heading-colouring');
+    expect(joined).toHaveTextContent('Joined end row');
+    expect(merged.nextElementSibling).toBe(joined);
+    expect(joined.nextElementSibling).toBe(heading);
+  });
+
+  it('shows Joined end row active from the table flag', () => {
+    const { rerender } = render(
+      <SpecialToolMenu splitBottomRow={true} onSelectSpecialTool={() => {}} />
+    );
+    expect(screen.getByTestId('special-tool-joinedEndRow')).toHaveAttribute(
+      'data-active',
+      'true'
+    );
+    rerender(
+      <SpecialToolMenu splitBottomRow={false} onSelectSpecialTool={() => {}} />
+    );
+    expect(screen.getByTestId('special-tool-joinedEndRow')).toHaveAttribute(
+      'data-active',
+      'false'
+    );
+  });
+
+  it('disables Joined end row when there is no table flag', () => {
+    const { rerender } = render(
+      <SpecialToolMenu onSelectSpecialTool={() => {}} />
+    );
+    expect(screen.getByTestId('special-tool-joinedEndRow')).toBeDisabled();
+    rerender(
+      <SpecialToolMenu splitBottomRow={null} onSelectSpecialTool={() => {}} />
+    );
+    expect(screen.getByTestId('special-tool-joinedEndRow')).toBeDisabled();
+  });
+
+  it('toggles the flag on a Joined end row click without selecting a tool', () => {
+    const onSelectSpecialTool = jest.fn();
+    const onToggleSplitBottomRow = jest.fn();
+    render(
+      <SpecialToolMenu
+        splitBottomRow={false}
+        onSelectSpecialTool={onSelectSpecialTool}
+        onToggleSplitBottomRow={onToggleSplitBottomRow}
+      />
+    );
+    fireEvent.click(screen.getByTestId('special-tool-joinedEndRow'));
+    expect(onToggleSplitBottomRow).toHaveBeenCalledTimes(1);
+    expect(onSelectSpecialTool).not.toHaveBeenCalled();
   });
 
   it('arms exactly the entry it is given', () => {
@@ -109,6 +164,7 @@ describe('SpecialToolMenu', () => {
       hideRow: specialToolHideRowHelpId(),
       sectionTitle: specialToolSectionHelpId(),
       merged: specialToolMergedHelpId(),
+      joinedEndRow: specialToolJoinedEndRowHelpId(),
       colouredRows: specialToolColouredRowsHelpId(),
       colouredColumns: specialToolColouredColumnsHelpId(),
       colouredTable: specialToolColouredTableHelpId(),

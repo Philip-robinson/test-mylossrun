@@ -83,6 +83,7 @@ jest.mock('config', () => ({
   mediumConfidence: jest.fn(() => 80),
   highConfidence: jest.fn(() => 90),
   reviewColumnMaxWidthPx: jest.fn(() => 250),
+  singleCellSpan: jest.fn(() => 1),
   reviewWideCellMinCharacters: jest.fn(() => 10),
   reviewLowConfidenceBorderColour: jest.fn(() => 'rgb(1, 0, 0)'),
   reviewLowConfidenceBackgroundColour: jest.fn(() => 'rgb(0, 2, 0)'),
@@ -120,6 +121,11 @@ jest.mock('config', () => ({
   // The review bar, the low-confidence wash and the poor-cell markers are all drawn only
   // while the low-quality emphasis is on, and that is the panel these tests describe.
   emphasiseLowQualityCells: jest.fn(() => true),
+  // Read by SplitRowWave, a real collaborator here.
+  splitRowWaveHeightPx: jest.fn(() => 6),
+  splitRowWavePitchPx: jest.fn(() => 40),
+  reviewSplitRowWaveColour: jest.fn(() => 'rgb(8, 0, 0)'),
+  reviewSplitRowWaveStrokeWidthPx: jest.fn(() => 2),
 }));
 
 // The <Toaster/> lives in the app layout, not in this component, so failures are
@@ -198,6 +204,27 @@ const sectionTitleTable = {
     [cell('root', 0, 0, 'Claim', 99), sourceless('Policy')],
     [cell('root', 1, 0, 'ABC Ltd', 97), sectionCell('root', 0, 'Section A', 88)],
     [cell('root', 2, 0, 'DEF Ltd', 97), sectionCell('root', 0, 'Section A', 88)],
+  ],
+};
+
+// A 3x3 grid whose top-left cell is merged across two rows and two columns, covering
+// a low-confidence value that must neither render nor be flagged.
+const mergedTable = {
+  name: 'root',
+  title: null,
+  headerCount: 0,
+  cells: [
+    [
+      { ...cell('root', 0, 0, 'Merged', 99), rowSpan: 2, columnSpan: 2 },
+      cell('root', 0, 1, 'Hidden', 10),
+      cell('root', 0, 2, 'Right', 99),
+    ],
+    [sourceless(''), sourceless(''), cell('root', 1, 2, 'Below', 60)],
+    [
+      cell('root', 2, 0, 'Foot', 99),
+      cell('root', 2, 1, 'Tail', 99),
+      cell('root', 2, 2, 'End', 99),
+    ],
   ],
 };
 
@@ -1620,6 +1647,94 @@ describe('ReviewTablePanel', () => {
     });
   });
 
+  describe('rows joined across tables', () => {
+    const joinedTable = {
+      name: 'root',
+      title: null,
+      headerCount: 1,
+      splitRows: [2],
+      cells: [0, 1, 2, 3, 4, 5].map((row) => [
+        cell('root', row, 0, `a${row}`, 99),
+        cell('root', row, 1, `b${row}`, 99),
+      ]),
+    };
+
+    const rowHeads = () =>
+      screen.getAllByTestId('review-row-head').map((el) => el.textContent);
+
+    it('draws a wave in every grid cell of a joined row and nowhere else', async () => {
+      extractTable.mockResolvedValue({ tables: [joinedTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(12)
+      );
+      expect(screen.getAllByTestId('review-split-row-wave')).toHaveLength(2);
+      const rows = screen.getAllByTestId('review-row-head').map((head) =>
+        head.closest('tr')
+      );
+      rows.forEach((row, rowIndex) => {
+        const cells = row.querySelectorAll('[data-testid="review-cell"]');
+        const waved = [...cells].filter((el) =>
+          el.querySelector('[data-testid="review-split-row-wave"]')
+        );
+        expect(waved).toHaveLength(rowIndex === 2 ? cells.length : 0);
+      });
+      screen.getAllByTestId('review-row-head').forEach((head) =>
+        expect(
+          head.querySelector('[data-testid="review-split-row-wave"]')
+        ).toBeNull()
+      );
+    });
+
+    it('draws a wave on a merged cell rooted above a joined row that it ends on', async () => {
+      const cells = joinedTable.cells.map((row) => [...row]);
+      cells[1][0] = { ...cells[1][0], rowSpan: 2 };
+      cells[3][0] = { ...cells[3][0], rowSpan: 2 };
+      extractTable.mockResolvedValue({ tables: [{ ...joinedTable, cells }] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(10)
+      );
+      const waved = screen
+        .getAllByTestId('review-cell')
+        .filter((el) =>
+          el.querySelector('[data-testid="review-split-row-wave"]')
+        )
+        .map((el) => el.textContent);
+      expect(waved).toEqual(['a1', 'b2']);
+    });
+
+    it('numbers a joined pair as one row', async () => {
+      extractTable.mockResolvedValue({ tables: [joinedTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(12)
+      );
+      expect(rowHeads()).toEqual(['1', '2', '3', '', '4', '5']);
+    });
+
+    it('draws no wave and numbers every row without joined rows', async () => {
+      const { splitRows, ...plainTable } = joinedTable;
+      extractTable.mockResolvedValue({ tables: [plainTable] });
+
+      renderPanel();
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(12)
+      );
+      expect(
+        screen.queryAllByTestId('review-split-row-wave')
+      ).toHaveLength(0);
+      expect(rowHeads()).toEqual(['1', '2', '3', '4', '5', '6']);
+    });
+  });
+
   describe('cell editing', () => {
     // The correction is typed where the value is read: clicking a cell turns THAT cell
     // into a field, and the dialog beside it carries only the crop, the buttons and the
@@ -2498,5 +2613,72 @@ describe('ReviewTablePanel — the help anchors', () => {
         .getByTestId('review-section-title')
         .closest(`[data-help-id="${reviewSectionTitleHelpId()}"]`)
     ).toContainElement(screen.getByTestId('review-section-title-label'));
+  });
+});
+
+describe('merged cells', () => {
+  const shown = async (props = {}) => {
+    extractTable.mockResolvedValue({ tables: [mergedTable] });
+    renderPanel(props);
+    await waitFor(() =>
+      expect(screen.queryAllByTestId('review-cell')).toHaveLength(6)
+    );
+  };
+
+  it('renders no element for a covered position', async () => {
+    await shown();
+
+    expect(screen.getAllByTestId('review-cell')).toHaveLength(6);
+    expect(cellTexts()).not.toContain('Hidden');
+  });
+
+  it('spans a merged cell and leaves an unmerged one unspanned', async () => {
+    await shown();
+
+    const cells = cellsByText();
+    expect(cells.Merged).toHaveAttribute('rowspan', '2');
+    expect(cells.Merged).toHaveAttribute('colspan', '2');
+    expect(cells.Right).not.toHaveAttribute('rowspan');
+    expect(cells.Right).not.toHaveAttribute('colspan');
+  });
+
+  it('caps a merged cell at the combined width of the columns it covers', async () => {
+    await shown();
+
+    expect(cellsByText().Merged.style.maxWidth).toBe(
+      `${reviewColumnMaxWidthPx() * 2}px`
+    );
+  });
+
+  it('does not flag a covered low-confidence value', async () => {
+    await shown();
+
+    expect(screen.getByTestId('review-confidence-count')).toHaveTextContent(
+      '1 entry flagged for review'
+    );
+    const options = [
+      ...screen.getByTestId('review-poor-cells').querySelectorAll('option'),
+    ].map((o) => o.textContent);
+    expect(options).toEqual(['Go to…', 'C2']);
+  });
+
+  it('writes a correction to a merged cell back to its anchor source', async () => {
+    const onEditTables = jest.fn();
+    await shown({ onEditTables });
+
+    await openEditor('Merged');
+    await typeCorrection('Joined');
+    await userEvent.click(screen.getByTestId('cell-edit-confirm'));
+
+    expect(onEditTables).toHaveBeenCalledTimes(1);
+    const [nextTables] = onEditTables.mock.calls[0];
+    const edited = nextTables
+      .find((t) => t.tableId === 'root')
+      .cells.find((c) => c.row === 0 && c.column === 0);
+    expect(edited.text).toBe('Joined');
+    await waitFor(() => expect(cellsByText().Joined).toBeDefined());
+    expect(cellsByText().Joined).toHaveAttribute('rowspan', '2');
+    expect(cellsByText().Joined).toHaveAttribute('colspan', '2');
+    expect(cellTexts()).not.toContain('Hidden');
   });
 });

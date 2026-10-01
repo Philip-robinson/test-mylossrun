@@ -19,7 +19,7 @@
 // the Document Overview offers is built from what the SERVER holds. Exporting itself
 // lives there rather than here — one workbook covers the whole document.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
   Button,
@@ -35,6 +35,7 @@ import { extractTable, getCellImages } from 'services/images';
 import CellEditDialog from 'components/pdfTableViewer/CellEditDialog';
 import ReviewCellEditor from 'components/pdfTableViewer/ReviewCellEditor';
 import ReviewTableTabs from 'components/pdfTableViewer/ReviewTableTabs';
+import SplitRowWave from 'components/pdfTableViewer/SplitRowWave';
 import {
   adjacentPoorCell,
   belowHighConfidenceCells,
@@ -45,6 +46,8 @@ import {
   looksNumeric,
   lowConfidenceSectionTitle,
   lowConfidenceTitle,
+  mergedCellLayout,
+  reviewRowNumbers,
 } from 'components/pdfTableViewer/reviewUtils';
 import {
   applyEditToGrid,
@@ -81,6 +84,7 @@ import {
   reviewSectionTitleLabel,
   reviewTitleLabel,
   reviewWideCellMinCharacters, emphasiseLowQualityCells,
+  singleCellSpan,
 } from 'config';
 
 // Columns are content-sized but capped, and over-long content wraps at word boundaries
@@ -103,8 +107,11 @@ import {
 // rather than as a box drawn around each doubtful value. Its padding is zero because
 // the wash has to reach the cell's edges and the body div inside it carries the
 // spacing.
-const cellStyle = (cell, poor) => ({
-  maxWidth: reviewColumnMaxWidthPx(),
+//
+// A merged cell's cap is the combined cap of the columns it covers.
+const cellStyle = (cell, poor, joined, columnSpan) => ({
+  ...(joined ? { position: 'relative' } : {}),
+  maxWidth: reviewColumnMaxWidthPx() * columnSpan,
   minWidth: isWideText(cell.text, reviewWideCellMinCharacters())
     ? reviewColumnMaxWidthPx()
     : undefined,
@@ -308,10 +315,19 @@ export default function ReviewTablePanel({
   // and the Go to… list describe the table the user is actually looking at.
   const activeTable = mergedTables[activeIndex] ?? null;
   const rows = activeTable?.cells ?? [];
+  // Rows joined to the row below them, and the ruler number each row shows.
+  const splitRows = activeTable?.splitRows ?? [];
+  const headerCount = activeTable?.headerCount ?? 0;
+  const rowNumbers = useMemo(
+    () => reviewRowNumbers(rows.length, headerCount, splitRows),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows.length, headerCount, activeTable?.splitRows]
+  );
+  const layout = mergedCellLayout(rows, singleCellSpan());
   // Recomputed every render from the DISPLAYED grid, so both the count and the list
   // of places to go shrink as corrections are confirmed. This is the list the GRID asks,
   // and only the grid: it holds nothing but positions, so the title can never match one.
-  const poorCells = belowHighConfidenceCells(rows, highConfidence());
+  const poorCells = belowHighConfidenceCells(rows, highConfidence(), layout);
   // The title's entry, or null when there is no title or it was read confidently.
   const titleEntry = lowConfidenceTitle(
     activeTable?.title,
@@ -884,15 +900,17 @@ export default function ReviewTablePanel({
             <tbody>
               {/* The column-letter ruler, one cell per grid column plus the corner. */}
               <tr>
+                {/* Ruler z-indexes start at 2 so a joined row's wave (z-index 1) paints
+                    over the next row's cells but under the rulers. */}
                 <th
                   data-testid={'review-corner'}
-                  style={gutterStyle({ top: true, left: true, zIndex: 3 })}
+                  style={gutterStyle({ top: true, left: true, zIndex: 4 })}
                 />
                 {(rows[0] ?? []).map((_, columnIndex) => (
                   <th
                     key={columnIndex}
                     data-testid={'review-column-head'}
-                    style={gutterStyle({ top: true, zIndex: 2 })}
+                    style={gutterStyle({ top: true, zIndex: 3 })}
                   >
                     {columnLabel(columnIndex)}
                   </th>
@@ -900,16 +918,19 @@ export default function ReviewTablePanel({
               </tr>
               {rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
-                  {/* The row-number ruler. Numbered from the top of the DISPLAYED
-                      grid, header rows included, so it agrees with the coordinates
-                      the bar's list offers. */}
+                  {/* The row-number ruler, header rows included. A joined pair is
+                      numbered as one row, matching the workbook; its lower row is
+                      left blank. */}
                   <th
                     data-testid={'review-row-head'}
-                    style={gutterStyle({ left: true, zIndex: 1 })}
+                    style={gutterStyle({ left: true, zIndex: 2 })}
                   >
-                    {rowIndex + 1}
+                    {rowNumbers[rowIndex] ?? ''}
                   </th>
                   {row.map((cell, columnIndex) => {
+                    // A position covered by a merged cell draws nothing.
+                    const span = layout[rowIndex][columnIndex];
+                    if (span === null) return null;
                     // The merged table's leading rows are its headers; there is no
                     // per-cell header flag to consult.
                     const Tag =
@@ -932,6 +953,11 @@ export default function ReviewTablePanel({
                     const isEditing =
                       editing?.rowIndex === rowIndex &&
                       editing?.columnIndex === columnIndex;
+                    // Waved when the cell's last row is joined, so a merged cell rooted
+                    // above a joined row carries that row's wave across its column.
+                    const joined = splitRows.includes(
+                      rowIndex + span.rowSpan - singleCellSpan()
+                    );
                     return (
                       <Tag
                         key={columnIndex}
@@ -941,7 +967,17 @@ export default function ReviewTablePanel({
                             `${rowIndex}:${columnIndex}`
                           ] = element;
                         }}
-                        style={cellStyle(cell, poor)}
+                        rowSpan={
+                          span.rowSpan > singleCellSpan()
+                            ? span.rowSpan
+                            : undefined
+                        }
+                        colSpan={
+                          span.columnSpan > singleCellSpan()
+                            ? span.columnSpan
+                            : undefined
+                        }
+                        style={cellStyle(cell, poor, joined, span.columnSpan)}
                         onClick={(event) => {
                           // A click landing in the field of the cell already being
                           // corrected is not a fresh click on the cell: restarting the
@@ -985,6 +1021,7 @@ export default function ReviewTablePanel({
                             cell.text
                           )}
                         </div>
+                        {joined && <SplitRowWave />}
                       </Tag>
                     );
                   })}

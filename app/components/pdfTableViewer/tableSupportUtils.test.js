@@ -3,6 +3,7 @@ import {
   MERGE_ROLE_JOINED,
   MERGE_ROLE_ROOT,
   buildCalcCellsRequestTable,
+  buildCalcReplacement,
   cellBlockFromRect,
   clampToUnitPage,
   buildCalcHint,
@@ -26,6 +27,7 @@ import {
   overlapArea,
   pageTableName,
   findTableById,
+  tableAboveInGroup,
   recalcCellBounds,
   reconcileAxisEdit,
   replaceTableById,
@@ -1768,6 +1770,49 @@ describe('findTableById', () => {
   });
 });
 
+describe('tableAboveInGroup', () => {
+  const t = (id) => ({ tableId: id, next: null });
+  const groupRoot = {
+    tableId: 'r',
+    grid: [
+      ['r', 'b'],
+      ['c', 'd'],
+      [null, 'e'],
+    ],
+    next: { b: t('b'), c: t('c'), d: t('d'), e: t('e') },
+  };
+  const tables = [groupRoot];
+
+  it('returns the root for a table at (1, 0)', () => {
+    expect(tableAboveInGroup(tables, 'c')).toBe(groupRoot);
+  });
+
+  it('returns the table at (1, 1) for one at (2, 1)', () => {
+    expect(tableAboveInGroup(tables, 'e')).toBe(groupRoot.next.d);
+  });
+
+  it('finds a table in a grid nested inside a root\'s next', () => {
+    const inner = {
+      tableId: 'n',
+      grid: [['n'], ['m']],
+      next: { m: t('m') },
+    };
+    const outer = [{ tableId: 'o', grid: [['o']], next: { n: inner } }];
+    expect(tableAboveInGroup(outer, 'm')).toBe(inner);
+  });
+
+  it('returns null for a root, a grid-row-0 companion, an empty slot above and an unknown id', () => {
+    const gapped = [
+      { tableId: 'g', grid: [['g', null], [null, 'h']], next: { h: t('h') } },
+    ];
+    expect(tableAboveInGroup(tables, 'r')).toBeNull();
+    expect(tableAboveInGroup(tables, 'b')).toBeNull();
+    expect(tableAboveInGroup(gapped, 'h')).toBeNull();
+    expect(tableAboveInGroup(tables, 'missing')).toBeNull();
+    expect(tableAboveInGroup(tables, null)).toBeNull();
+  });
+});
+
 describe('replaceTableById', () => {
 
   it('replaces a top-level table', () => {
@@ -2707,5 +2752,14 @@ describe('mergeFindGridLines — an appended table is a whole table', () => {
         expect(t.name).not.toBe('');
       }
     }
+  });
+});
+
+describe('buildCalcReplacement — split bottom row', () => {
+  test('keeps the menu table splitBottomRow over a result that lacks it', () => {
+    const menuTable = tbl('M', 0, 0, 0, 0.1, 0.1, { splitBottomRow: true });
+    const resultTable = tbl('R', 0, 0, 0, 0.1, 0.1);
+    delete resultTable.splitBottomRow;
+    expect(buildCalcReplacement(menuTable, resultTable).splitBottomRow).toBe(true);
   });
 });

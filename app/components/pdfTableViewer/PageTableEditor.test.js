@@ -1577,3 +1577,87 @@ describe('re-detecting the grid of a joined member', () => {
     expect(written[0].next.MEMBER.bounds.width).toBeCloseTo(0.08, 6);
   });
 });
+
+// The Joined end row entry toggles the selected table's splitBottomRow and reports the
+// change up through onChange.
+describe('the Joined end row toggle', () => {
+  const MEMBER = {
+    ...TABLE_B,
+    tableId: 'MEMBER',
+    name: 'Member',
+    tableInPage: 1,
+  };
+  const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
+
+  const stagedProps = () =>
+    mockStagedProps.mock.calls[mockStagedProps.mock.calls.length - 1][0];
+
+  const renderHosted = async (initial, selectedTableId, onChange) => {
+    stagedGridEditorEnabled.mockReturnValue(true);
+    function Host() {
+      const [tables, setTables] = React.useState(initial);
+      return (
+        <PageTableEditor
+          metadata={metadataWith(tables)}
+          page={0}
+          onChange={(next) => {
+            setTables(next);
+            onChange(next);
+          }}
+          selectedTableId={selectedTableId}
+          onSelectTable={jest.fn()}
+          onSave={jest.fn().mockResolvedValue(true)}
+        />
+      );
+    }
+    render(<Host />);
+    await screen.findByTestId('staged-editor');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('layers-validate-tables'));
+    });
+    await waitFor(() => expect(stagedProps().editorMode).toBe('grid'));
+    fireEvent.click(screen.getByTestId('grid-tool-special'));
+    await screen.findByTestId('special-tool-joinedEndRow');
+  };
+
+  const lastWritten = (onChange) =>
+    onChange.mock.calls[onChange.mock.calls.length - 1][0];
+
+  test('sets then clears the flag on the selected table', async () => {
+    const onChange = jest.fn();
+    await renderHosted([TABLE_A, TABLE_B], 'A', onChange);
+
+    fireEvent.click(screen.getByTestId('special-tool-joinedEndRow'));
+    await waitFor(() =>
+      expect(
+        lastWritten(onChange).find((t) => t.tableId === 'A').splitBottomRow
+      ).toBe(true)
+    );
+    expect(screen.getByTestId('special-tool-joinedEndRow')).toHaveAttribute(
+      'data-active',
+      'true'
+    );
+
+    fireEvent.click(screen.getByTestId('special-tool-joinedEndRow'));
+    await waitFor(() =>
+      expect(
+        lastWritten(onChange).find((t) => t.tableId === 'A').splitBottomRow
+      ).toBe(false)
+    );
+  });
+
+  test('sets then clears the flag on a table nested in a root next', async () => {
+    const onChange = jest.fn();
+    await renderHosted([ROOT], 'MEMBER', onChange);
+
+    fireEvent.click(screen.getByTestId('special-tool-joinedEndRow'));
+    await waitFor(() =>
+      expect(lastWritten(onChange)[0].next.MEMBER.splitBottomRow).toBe(true)
+    );
+
+    fireEvent.click(screen.getByTestId('special-tool-joinedEndRow'));
+    await waitFor(() =>
+      expect(lastWritten(onChange)[0].next.MEMBER.splitBottomRow).toBe(false)
+    );
+  });
+});

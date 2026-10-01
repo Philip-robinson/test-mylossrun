@@ -53,6 +53,37 @@ describe('GridToolRail', () => {
     expect(onSelectSpecialTool).toHaveBeenCalledWith('header');
   });
 
+  it('passes the split-row flag and its toggle to the sub-menu', () => {
+    const onToggleSplitBottomRow = jest.fn();
+    const { rerender } = render(
+      <GridToolRail
+        tool={'special'}
+        splitBottomRow={true}
+        onSelectTool={() => {}}
+        onSelectSpecialTool={() => {}}
+        onToggleSplitBottomRow={onToggleSplitBottomRow}
+      />
+    );
+    const button = screen.getByTestId('special-tool-joinedEndRow');
+    expect(button).toHaveAttribute('data-active', 'true');
+    fireEvent.click(button);
+    expect(onToggleSplitBottomRow).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <GridToolRail
+        tool={'special'}
+        splitBottomRow={false}
+        onSelectTool={() => {}}
+        onSelectSpecialTool={() => {}}
+        onToggleSplitBottomRow={onToggleSplitBottomRow}
+      />
+    );
+    expect(screen.getByTestId('special-tool-joinedEndRow')).toHaveAttribute(
+      'data-active',
+      'false'
+    );
+  });
+
   // The overlay measures its tip's hole from this attribute and the copy module keys the
   // same tip by the same function, so the id is a literal on neither side.
   it('carries the rail help id', () => {

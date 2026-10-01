@@ -148,6 +148,22 @@ export function stagedGridEditorEnabled() {
   return true;
 }
 
+// Experimental: in the Validate tables pass, display whitespace above and below each table
+// (or each run of vertically overlapping tables). Display only; page coordinates are unchanged.
+export function tableSeparationEnabled() {
+  return true;
+}
+
+// Screen px of whitespace drawn above and below each table when tableSeparationEnabled().
+export function tableSeparationGapPx() {
+  return 15;
+}
+
+// Page px two tables may overlap vertically and still be separated as touching tables.
+export function tableSeparationTouchTolerancePx() {
+  return 1;
+}
+
 // Width of the slot each Layers row reserves for its eye, whether or not it has one.
 // Without a reserved slot, a row drawn without an eye would sit its count an icon's width
 // further right than every other row's.
@@ -298,6 +314,16 @@ export function mergedCellOutlineWidthPx() {
   return 2;
 }
 
+// Peak-to-trough height of the wave drawn along a split row's edge.
+export function splitRowWaveHeightPx() {
+  return 5;
+}
+
+// Width of one full cycle of the split-row wave.
+export function splitRowWavePitchPx() {
+  return 30;
+}
+
 // The Special tools that pick something to colour, in menu order. One list, read by the
 // editor to decide a colour tool is armed and by the Options block to decide the colour
 // selectors are shown.
@@ -441,6 +467,11 @@ export function reviewColumnMaxWidthPx() {
   return 400;
 }
 
+// The row or column span of a cell that is not merged.
+export function singleCellSpan() {
+  return 1;
+}
+
 // Text length (characters) at or below which a review-table cell is treated as short.
 // A cell holding MORE than this is long enough that wrapping it into a narrow column
 // would squeeze it into a tall ribbon, so such a cell is pinned to the full column
@@ -453,6 +484,16 @@ export function reviewWideCellMinCharacters() {
 // instead, so the grid keeps one uniform ruling whatever it holds.
 export function reviewCellBorderColour() {
   return 'blue';
+}
+
+// Colour of the wave drawn on the review grid between the two halves of a split row.
+export function reviewSplitRowWaveColour() {
+  return 'red';
+}
+
+// Stroke width of the review grid's split-row wave.
+export function reviewSplitRowWaveStrokeWidthPx() {
+  return 1;
 }
 
 // Wash over a review-table cell read below highConfidence().
@@ -919,6 +960,10 @@ export function specialToolMergedHelpId() {
   return 'special-tool-merged';
 }
 
+export function specialToolJoinedEndRowHelpId() {
+  return 'special-tool-joined-end-row';
+}
+
 // The review screen's ids: the two titles above the grid, the count and the go-to controls
 // in the bar over them, the grid itself, the section tabs under it and the Save that ends
 // the review.
@@ -1061,6 +1106,10 @@ export function signOutLabel() {
   return 'Sign Out';
 }
 
+export function appVersion() {
+  return process.env.NEXT_PUBLIC_APP_VERSION || '';
+}
+
 // The two localStorage keys holding the login data. Sign-in and sign-out must agree
 // about what the login data is; these values are what the application already
 // stores and must not change.
@@ -1099,6 +1148,9 @@ const default_export = {
   excelContentType,
   excelFileSuffix,
   stagedGridEditorEnabled,
+  tableSeparationEnabled,
+  tableSeparationGapPx,
+  tableSeparationTouchTolerancePx,
   layerTickSlotWidthPx,
   defaultScalePercent,
   scalePercentOptions,
@@ -1130,6 +1182,8 @@ const default_export = {
   gridToolbarShadow,
   mergeCoverageFraction,
   mergedCellOutlineWidthPx,
+  splitRowWaveHeightPx,
+  splitRowWavePitchPx,
   colourSpecialToolKeys,
   sectionTitlePlaceholderColumnName,
   selectedRowHighlight,
@@ -1154,8 +1208,11 @@ const default_export = {
   optionsGroupSpacing,
   optionsRowSpacing,
   reviewColumnMaxWidthPx,
+  singleCellSpan,
   reviewWideCellMinCharacters,
   reviewCellBorderColour,
+  reviewSplitRowWaveColour,
+  reviewSplitRowWaveStrokeWidthPx,
   reviewLowConfidenceBackgroundColour,
   reviewLowConfidenceBorderColour,
   reviewLowConfidenceMarkerWidthPx,
@@ -1247,6 +1304,7 @@ const default_export = {
   specialToolSectionHelpId,
   specialToolHideRowHelpId,
   specialToolMergedHelpId,
+  specialToolJoinedEndRowHelpId,
   linkAvailableTablesHelpId,
   linkLinkedTablesHelpId,
   linkUnlinkHelpId,
@@ -1273,6 +1331,7 @@ const default_export = {
   emphasiseLowQualityCells,
   toolbarIconButtonSizePx,
   signOutLabel,
+  appVersion,
   accessCodeStorageKey,
   userEmailStorageKey,
   signedOutPath

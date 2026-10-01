@@ -6,12 +6,20 @@
 // a validated access code, so a user who can see the toolbar is always signed in.
 
 import { useState } from 'react';
-import { IconButton, ListItemIcon, Menu, MenuItem } from '@mui/material';
+import {
+  Divider,
+  IconButton,
+  ListItemIcon,
+  Menu,
+  MenuItem,
+  Typography,
+} from '@mui/material';
 import AccountCircleOutlinedIcon from '@mui/icons-material/AccountCircleOutlined';
 import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
 
 import {
   accountButtonHelpId,
+  appVersion,
   signOutLabel,
   toolbarIconButtonSizePx,
 } from 'config';
@@ -19,6 +27,7 @@ import { navigateTo, signOut } from 'services/session';
 
 export default function SignOutButton() {
   const [anchorEl, setAnchorEl] = useState(null);
+  const version = appVersion();
 
   const handleSignOut = () => {
     setAnchorEl(null);
@@ -57,6 +66,19 @@ export default function SignOutButton() {
           </ListItemIcon>
           {signOutLabel()}
         </MenuItem>
+        {version && [
+          <Divider key={'version-divider'} />,
+          <MenuItem
+            key={'version'}
+            data-testid={'version-menu-item'}
+            disabled
+            sx={{ opacity: '1 !important' }}
+          >
+            <Typography variant={'caption'} color={'text.secondary'}>
+              {`Version ${version}`}
+            </Typography>
+          </MenuItem>,
+        ]}
       </Menu>
     </>
   );

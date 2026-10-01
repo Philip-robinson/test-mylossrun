@@ -113,4 +113,36 @@ describe('AccessGate', () => {
     expect(screen.getByText('Access Required')).toBeInTheDocument();
     expect(screen.queryByText('child')).not.toBeInTheDocument();
   });
+
+  describe('version footer', () => {
+    afterEach(() => {
+      delete process.env.NEXT_PUBLIC_APP_VERSION;
+    });
+
+    test('(e) the login form shows the version when the build knows one', async () => {
+      process.env.NEXT_PUBLIC_APP_VERSION = '1.0.1924 (71b6c04)';
+
+      render(
+        <AccessGate>
+          <div>{'child'}</div>
+        </AccessGate>,
+      );
+
+      await screen.findByText('Access Required');
+      expect(screen.getByTestId('login-version')).toHaveTextContent(
+        'Version 1.0.1924 (71b6c04)',
+      );
+    });
+
+    test('(f) the login form shows no version when the build has none', async () => {
+      render(
+        <AccessGate>
+          <div>{'child'}</div>
+        </AccessGate>,
+      );
+
+      await screen.findByText('Access Required');
+      expect(screen.queryByTestId('login-version')).not.toBeInTheDocument();
+    });
+  });
 });

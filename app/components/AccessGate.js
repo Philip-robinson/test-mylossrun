@@ -12,7 +12,11 @@ import {
 import LockIcon from '@mui/icons-material/Lock';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
-import { accessCodeStorageKey, userEmailStorageKey } from 'config';
+import {
+  accessCodeStorageKey,
+  appVersion,
+  userEmailStorageKey,
+} from 'config';
 import { validate } from 'services/validate';
 
 export default function AccessGate({ children }) {
@@ -93,6 +97,8 @@ export default function AccessGate({ children }) {
   }
 
   if (!isAuthenticated) {
+    const version = appVersion();
+
     return (
       <Box
         sx={{
@@ -235,6 +241,20 @@ export default function AccessGate({ children }) {
             </form>
           </Paper>
         </Box>
+
+        {version && (
+          <Typography
+            data-testid={'login-version'}
+            variant={'caption'}
+            sx={{
+              textAlign: 'center',
+              color: '#6c757d',
+              py: 2,
+            }}
+          >
+            {`Version ${version}`}
+          </Typography>
+        )}
       </Box>
     );
   }

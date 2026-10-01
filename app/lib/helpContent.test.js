@@ -23,6 +23,7 @@ import {
   layersNextHelpId,
   layersPreviousHelpId,
   reviewTableScreenId,
+  specialToolJoinedEndRowHelpId,
   specialToolMergedHelpId,
   tableLinkLabelHelpId,
   tableNameLabelHelpId,
@@ -394,5 +395,18 @@ describe('the Merged button', () => {
   it('is described by the contents pass', () => {
     expect(mergedTip(contentsPassScreenId())).toBeDefined();
     expect(mergedTip(contentsPassScreenId()).title).toEqual('Merged button');
+  });
+});
+
+// The Joined end row button sits on the Special sub-menu, so the contents pass describes it.
+describe('the Joined end row button', () => {
+  const joinedTip = (screenId) =>
+    helpScreens()[screenId].tips.find(
+      (tip) => tip.helpId === specialToolJoinedEndRowHelpId(),
+    );
+
+  it('is described by the contents pass', () => {
+    expect(joinedTip(contentsPassScreenId())).toBeDefined();
+    expect(joinedTip(contentsPassScreenId()).title).toEqual('Joined end row button');
   });
 });

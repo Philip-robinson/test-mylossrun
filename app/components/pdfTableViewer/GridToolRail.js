@@ -17,6 +17,8 @@ export default function GridToolRail({
   specialTool = null,
   onSelectTool,
   onSelectSpecialTool,
+  splitBottomRow = null,
+  onToggleSplitBottomRow,
 }) {
   return (
     <Box
@@ -39,6 +41,8 @@ export default function GridToolRail({
         <SpecialToolMenu
           specialTool={specialTool}
           onSelectSpecialTool={onSelectSpecialTool}
+          splitBottomRow={splitBottomRow}
+          onToggleSplitBottomRow={onToggleSplitBottomRow}
         />
       ) : null}
     </Box>

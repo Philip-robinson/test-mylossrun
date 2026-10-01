@@ -73,6 +73,7 @@ import {
   specialToolColouredTableHelpId,
   specialToolHeaderHelpId,
   specialToolHideRowHelpId,
+  specialToolJoinedEndRowHelpId,
   specialToolMergedHelpId,
   specialToolSectionHelpId,
   specialToolTitleHelpId,
@@ -511,7 +512,7 @@ export function helpScreens() {
       ],
     },
     [contentsPassScreenId()]: {
-      version: 14,
+      version: 15,
       name: 'Table contents',
       summary: [
         'This pass is about the inside of one table — its rows, ',
@@ -740,6 +741,17 @@ export function helpScreens() {
                 'group up again.',
               ],
             },
+          ],
+          side: "right"
+        },
+        {
+          helpId: specialToolJoinedEndRowHelpId(),
+          title: 'Joined end row button',
+          body: [
+            'Clicking this toggles, for the selected table, that its last row ',
+            'continues as the first row of the table below it in its group.',
+            'When it is set the table\'s bottom border is drawn wavy, and the ',
+            'two rows become one row in the workbook.',
           ],
           side: "right"
         },

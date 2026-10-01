@@ -74,4 +74,35 @@ describe('SignOutButton', () => {
     expect(await screen.findByTestId('sign-out-button')).toBeInTheDocument();
     expect(screen.queryByRole('menuitem')).not.toBeInTheDocument();
   });
+
+  describe('version', () => {
+    afterEach(() => {
+      delete process.env.NEXT_PUBLIC_APP_VERSION;
+    });
+
+    it('shows the version below sign out when the build knows one', async () => {
+      process.env.NEXT_PUBLIC_APP_VERSION = '1.0.1924 (71b6c04)';
+      const user = userEvent.setup();
+      render(<SignOutButton />);
+
+      await user.click(screen.getByTestId('sign-out-button'));
+
+      const items = screen.getAllByRole('menuitem');
+
+      expect(items).toHaveLength(2);
+      expect(items[0]).toBe(screen.getByTestId('sign-out-menu-item'));
+      expect(items[1]).toBe(screen.getByTestId('version-menu-item'));
+      expect(items[1]).toHaveTextContent('Version 1.0.1924 (71b6c04)');
+      expect(items[1]).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    it('shows no version when the build has none', async () => {
+      const user = userEvent.setup();
+      render(<SignOutButton />);
+
+      await user.click(screen.getByTestId('sign-out-button'));
+
+      expect(screen.queryByTestId('version-menu-item')).not.toBeInTheDocument();
+    });
+  });
 });

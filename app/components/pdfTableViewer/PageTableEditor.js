@@ -1192,6 +1192,18 @@ export default function PageTableEditor({
               specialTool={specialTool}
               onSelectTool={handleSelectTool}
               onSelectSpecialTool={handleSelectSpecialTool}
+              splitBottomRow={
+                selectedTable ? selectedTable.splitBottomRow === true : null
+              }
+              onToggleSplitBottomRow={() => {
+                if (!selectedTable) return;
+                commitTables(
+                  replaceTableById(normalisedTables, selectedTable.tableId, {
+                    ...selectedTable,
+                    splitBottomRow: !selectedTable.splitBottomRow,
+                  })
+                );
+              }}
             />
           ) : null}
           <Box

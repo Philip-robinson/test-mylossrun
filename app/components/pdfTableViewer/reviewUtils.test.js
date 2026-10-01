@@ -10,6 +10,8 @@ import {
   flaggedForReviewLabel,
   lowConfidenceTitle,
   lowConfidenceSectionTitle,
+  mergedCellLayout,
+  reviewRowNumbers,
 } from 'components/pdfTableViewer/reviewUtils';
 
 describe('reviewUtils', () => {
@@ -183,6 +185,129 @@ describe('reviewUtils', () => {
       expect(belowHighConfidenceCells(undefined, 80)).toEqual([]);
       expect(belowHighConfidenceCells(null, 80)).toEqual([]);
     });
+
+    it('skips a covered position when a layout is supplied', () => {
+      const rows = [[sourced(10)], [sourced(10)]];
+      const layout = [[{ rowSpan: 2, columnSpan: 1 }], [null]];
+      expect(belowHighConfidenceCells(rows, 80, layout)).toEqual([
+        { rowIndex: 0, columnIndex: 0, label: 'A1' },
+      ]);
+      expect(belowHighConfidenceCells(rows, 80)).toEqual([
+        { rowIndex: 0, columnIndex: 0, label: 'A1' },
+        { rowIndex: 1, columnIndex: 0, label: 'A2' },
+      ]);
+    });
+  });
+
+  describe('mergedCellLayout', () => {
+    const SINGLE = 1;
+    const one = { rowSpan: 1, columnSpan: 1 };
+    const cell = (spans = {}) => ({
+      tableId: 'alpha',
+      row: 0,
+      column: 0,
+      text: 'x',
+      confidence: 90,
+      ...spans,
+    });
+    const grid = (rowCount, columnCount) =>
+      Array.from({ length: rowCount }, () =>
+        Array.from({ length: columnCount }, () => cell())
+      );
+
+    it('gives every entry a single span for an unmerged grid', () => {
+      expect(mergedCellLayout(grid(2, 3), SINGLE)).toEqual([
+        [one, one, one],
+        [one, one, one],
+      ]);
+    });
+
+    it('covers the position below a two-row merge', () => {
+      const rows = grid(2, 1);
+      rows[0][0] = cell({ rowSpan: 2 });
+      expect(mergedCellLayout(rows, SINGLE)).toEqual([
+        [{ rowSpan: 2, columnSpan: 1 }],
+        [null],
+      ]);
+    });
+
+    it('covers the position right of a two-column merge', () => {
+      const rows = grid(1, 2);
+      rows[0][0] = cell({ columnSpan: 2 });
+      expect(mergedCellLayout(rows, SINGLE)).toEqual([
+        [{ rowSpan: 1, columnSpan: 2 }, null],
+      ]);
+    });
+
+    it('covers three positions for a 2x2 merge at the top left of a 3x3 grid', () => {
+      const rows = grid(3, 3);
+      rows[0][0] = cell({ rowSpan: 2, columnSpan: 2 });
+      expect(mergedCellLayout(rows, SINGLE)).toEqual([
+        [{ rowSpan: 2, columnSpan: 2 }, null, one],
+        [null, null, one],
+        [one, one, one],
+      ]);
+    });
+
+    it('clamps spans running past the bottom and right edges', () => {
+      const rows = grid(2, 2);
+      rows[1][0] = cell({ rowSpan: 5 });
+      rows[0][1] = cell({ columnSpan: 5 });
+      expect(mergedCellLayout(rows, SINGLE)).toEqual([
+        [one, one],
+        [one, one],
+      ]);
+      const tall = grid(2, 2);
+      tall[0][1] = cell({ rowSpan: 5, columnSpan: 5 });
+      expect(mergedCellLayout(tall, SINGLE)).toEqual([
+        [one, { rowSpan: 2, columnSpan: 1 }],
+        [one, null],
+      ]);
+    });
+
+    it('treats absent, zero, negative and fractional spans as single', () => {
+      [undefined, 0, -1, 1.5].forEach((value) => {
+        const rows = grid(2, 2);
+        rows[0][0] = cell({ rowSpan: value, columnSpan: value });
+        expect(mergedCellLayout(rows, SINGLE)).toEqual([
+          [one, one],
+          [one, one],
+        ]);
+      });
+    });
+
+    it('treats a section-title cell as single', () => {
+      expect(
+        mergedCellLayout(
+          [[{ tableId: 'alpha', sectionTitleIndex: 0, text: 'x', confidence: 20 }]],
+          SINGLE
+        )
+      ).toEqual([[one]]);
+    });
+
+    it('draws an overlapping later merge single while the earlier keeps its spans', () => {
+      const rows = grid(2, 2);
+      rows[0][1] = cell({ rowSpan: 2 });
+      rows[1][0] = cell({ columnSpan: 2 });
+      expect(mergedCellLayout(rows, SINGLE)).toEqual([
+        [one, { rowSpan: 2, columnSpan: 1 }],
+        [one, null],
+      ]);
+    });
+
+    it('keeps a claimed position null in a shorter later row', () => {
+      const rows = [[cell({ rowSpan: 2, columnSpan: 2 }), cell()], [cell()]];
+      expect(mergedCellLayout(rows, SINGLE)).toEqual([
+        [{ rowSpan: 2, columnSpan: 2 }, null],
+        [null],
+      ]);
+    });
+
+    it('is empty for missing or empty rows', () => {
+      expect(mergedCellLayout(undefined, SINGLE)).toEqual([]);
+      expect(mergedCellLayout(null, SINGLE)).toEqual([]);
+      expect(mergedCellLayout([], SINGLE)).toEqual([]);
+    });
   });
 
   describe('flaggedForReviewLabel', () => {
@@ -338,5 +463,32 @@ describe('lowConfidenceSectionTitle', () => {
     expect(
       lowConfidenceSectionTitle({ text: '', confidence: 0 }, 80, label)
     ).toEqual({ sectionTitle: true, label });
+  });
+});
+
+describe('reviewRowNumbers', () => {
+  it('numbers every row index + 1 when no rows are joined', () => {
+    expect(reviewRowNumbers(4, 1, [])).toEqual([1, 2, 3, 4]);
+  });
+
+  it('numbers a joined pair as one row', () => {
+    expect(reviewRowNumbers(6, 1, [2])).toEqual([1, 2, 3, null, 4, 5]);
+  });
+
+  it('numbers a chain of joined rows as one row', () => {
+    expect(reviewRowNumbers(6, 1, [2, 3])).toEqual([1, 2, 3, null, null, 4]);
+  });
+
+  it('leaves header rows numbered index + 1', () => {
+    expect(reviewRowNumbers(5, 2, [2])).toEqual([1, 2, 3, null, 4]);
+  });
+
+  it('ignores entries naming a header row, the last row or beyond', () => {
+    expect(reviewRowNumbers(4, 2, [0, 1, 3, 7, -1])).toEqual([1, 2, 3, 4]);
+  });
+
+  it('treats a missing list as empty', () => {
+    expect(reviewRowNumbers(3, 1, undefined)).toEqual([1, 2, 3]);
+    expect(reviewRowNumbers(3, 1, null)).toEqual([1, 2, 3]);
   });
 });

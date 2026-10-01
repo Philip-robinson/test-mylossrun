@@ -16,6 +16,8 @@ import {
   linkedEmphasisColour,
   layerSpecialCellsColour,
   mergedCellOutlineWidthPx,
+  splitRowWaveHeightPx,
+  splitRowWavePitchPx,
   sectionTitleMarkerColour,
   sectionTitleMarkerDash,
   sectionTitlePlaceholderColumnName,
@@ -23,6 +25,9 @@ import {
   selectedColumnHighlight,
   selectedRowHighlight,
   selectedSectionTitleHighlight,
+  tableSeparationEnabled,
+  tableSeparationGapPx,
+  tableSeparationTouchTolerancePx,
 } from 'config';
 import { newUUID } from 'common/utils';
 import {
@@ -57,6 +62,7 @@ import {
   resizeBoundary,
   splitEntryAt,
   splitMap,
+  tableAboveInGroup,
   tablesOnPage,
   withMergedBlock,
   clampToUnitPage,
@@ -69,6 +75,13 @@ import {
   rowIndexAtFraction,
   rowNearestCentre,
 } from 'components/pdfTableViewer/gridToolUtils';
+import {
+  separationBands,
+  unwarpY,
+  warpSpan,
+  warpY,
+} from 'components/pdfTableViewer/tableSeparationUtils';
+import { tableOutlinePath } from 'components/pdfTableViewer/wavyLineUtils';
 
 // A mouse gesture that moves less than this many SCREEN pixels between mouse-down and
 // mouse-up is treated as a CLICK, not a resize DRAG. Mirrors the existing interactive
@@ -343,6 +356,34 @@ export function StagedPageGridEditor({
   // lines drawn but inert, so the tool gets every press inside the table.
   const linesDraggable = gridMode && !specialToolArmed;
 
+  // The Validate tables pass's display-only separation of the page's tables, or null when
+  // off. Its bands shift what is drawn; every page coordinate is left as it was.
+  const separation = useMemo(() => {
+    if (!gridMode || !tableSeparationEnabled() || !pixelHeight) return null;
+    const result = separationBands(
+      samePage.map((t) => t.bounds),
+      pixelHeight,
+      tableSeparationGapPx(),
+      tableSeparationTouchTolerancePx()
+    );
+    return result.totalGap > 0 ? result : null;
+  }, [gridMode, samePage, pixelHeight]);
+  const bands = separation ? separation.bands : null;
+
+  // Display px separation moves table `t` down by, carrying everything drawn for it. Taken
+  // at the table's middle, since a touching table's top may lie just inside the band above.
+  const tableShift = (t) => {
+    if (!bands || !t) return 0;
+    const middle = (t.bounds.top + t.bounds.height / 2) * pixelHeight;
+    return warpY(bands, middle) - middle;
+  };
+  const selectedShift = `translate(0 ${tableShift(selected)})`;
+
+  // A page-fraction rect's display y and height in px, each edge placed where that part of
+  // the page image is drawn.
+  const warpRect = (b) =>
+    warpSpan(bands, b.top * pixelHeight, (b.top + b.height) * pixelHeight);
+
   // The axis a tool is armed for, or null: 'row' for the Rows tool, 'column' for Columns.
   const toolFor = (orientation) =>
     (orientation === 'row' && tool === 'rows') ||
@@ -359,10 +400,10 @@ export function StagedPageGridEditor({
       const sx = rect.width / dims.w;
       const sy = rect.height / dims.h;
       const vx = (e.clientX - rect.left) / sx;
-      const vy = (e.clientY - rect.top) / sy;
+      const vy = unwarpY(bands, (e.clientY - rect.top) / sy);
       return { fx: vx / pixelWidth, fy: vy / pixelHeight };
     },
-    [dims, pixelWidth, pixelHeight]
+    [dims, pixelWidth, pixelHeight, bands]
   );
 
   const onePxFractionX = pixelWidth ? 1 / pixelWidth : 0;
@@ -1513,25 +1554,60 @@ export function StagedPageGridEditor({
     [dims, renderedSize, pixelWidth, pixelHeight]
   );
 
-  // One table's outer border rect in viewbox px. The selected table takes the border colour;
+  // One table's outer border in viewbox px. The selected table takes the border colour;
   // every other takes the de-emphasised grey. Both colours are var(--…) values, which jsdom
   // drops from an inline style, so which is which is also carried as a data attribute.
-  const borderRect = (table, isSelected) => (
-    <rect
-      key={`border-${table.tableId}`}
-      data-testid={BORDER_RECT_TESTID}
-      data-tableid={table.tableId}
-      data-selected={isSelected ? 'true' : 'false'}
-      x={table.bounds.left * pixelWidth}
-      y={table.bounds.top * pixelHeight}
-      width={table.bounds.width * pixelWidth}
-      height={table.bounds.height * pixelHeight}
-      fill={'none'}
-      style={{ stroke: isSelected ? layerBorderColour() : layerGrey() }}
-      strokeWidth={1}
-      vectorEffect={'non-scaling-stroke'}
-    />
-  );
+  // In gridMode a split bottom row, or a split row in the table above in the group, draws
+  // that edge wavy as a path; otherwise the border is a plain rect.
+  const borderRect = (table, isSelected) => {
+    const wavyBottom = gridMode && table.splitBottomRow === true;
+    const wavyTop =
+      gridMode &&
+      tableAboveInGroup(metadataTables, table.tableId)?.splitBottomRow === true;
+    const left = table.bounds.left * pixelWidth;
+    const top = table.bounds.top * pixelHeight + tableShift(table);
+    const width = table.bounds.width * pixelWidth;
+    const height = table.bounds.height * pixelHeight;
+    const shared = {
+      'data-testid': BORDER_RECT_TESTID,
+      'data-tableid': table.tableId,
+      'data-selected': isSelected ? 'true' : 'false',
+      fill: 'none',
+      style: { stroke: isSelected ? layerBorderColour() : layerGrey() },
+      strokeWidth: 1,
+      vectorEffect: 'non-scaling-stroke',
+    };
+    if (!wavyTop && !wavyBottom) {
+      return (
+        <rect
+          key={`border-${table.tableId}`}
+          {...shared}
+          x={left}
+          y={top}
+          width={width}
+          height={height}
+        />
+      );
+    }
+    return (
+      <path
+        key={`border-${table.tableId}`}
+        {...shared}
+        data-wavy-top={wavyTop ? 'true' : 'false'}
+        data-wavy-bottom={wavyBottom ? 'true' : 'false'}
+        d={tableOutlinePath(
+          left,
+          top,
+          width,
+          height,
+          wavyTop,
+          wavyBottom,
+          splitRowWaveHeightPx(),
+          splitRowWavePitchPx()
+        )}
+      />
+    );
+  };
 
   // The selected table's four draggable edge hit lines. Only the boundary pass has them —
   // gridMode freezes the boundary — and only the selected table: an unselected table is
@@ -1762,7 +1838,7 @@ export function StagedPageGridEditor({
     // armed: the armed tool's click on that line is what "very close to a grid line"
     // means, so the same 8px stroke serves both.
     return (
-      <g>
+      <g transform={selectedShift}>
         {renderHorizontalLines(linesDraggable || tool === 'rows')}
         {renderVerticalLines(linesDraggable || tool === 'columns')}
       </g>
@@ -1952,9 +2028,9 @@ export function StagedPageGridEditor({
       <rect
         data-testid={'section-area-preview'}
         x={sectionAreaRect.left * pixelWidth}
-        y={sectionAreaRect.top * pixelHeight}
+        y={warpRect(sectionAreaRect).y}
         width={sectionAreaRect.width * pixelWidth}
-        height={sectionAreaRect.height * pixelHeight}
+        height={warpRect(sectionAreaRect).h}
         fill={'none'}
         style={{ stroke: sectionTitleMarkerColour() }}
         strokeWidth={1}
@@ -1975,9 +2051,8 @@ export function StagedPageGridEditor({
     const bounds = selected?.title?.bounds;
     if (!bounds) return null;
     const x = bounds.left * pixelWidth;
-    const y = bounds.top * pixelHeight;
+    const { y, h } = warpRect(bounds);
     const w = bounds.width * pixelWidth;
-    const h = bounds.height * pixelHeight;
     const hitCommon = {
       stroke: 'transparent',
       strokeWidth: hitLineWidthPx(),
@@ -2057,10 +2132,12 @@ export function StagedPageGridEditor({
     if (!selected) return null;
     return (
       <g>
-        {showHeader ? renderHeaderRect() : null}
+        <g transform={selectedShift}>
+          {showHeader ? renderHeaderRect() : null}
+          {showOtherSpecial ? renderSectionTitles() : null}
+          {showOtherSpecial ? renderMergedCells() : null}
+        </g>
         {showSpecial ? renderTitleRect() : null}
-        {showOtherSpecial ? renderSectionTitles() : null}
-        {showOtherSpecial ? renderMergedCells() : null}
       </g>
     );
   };
@@ -2072,9 +2149,9 @@ export function StagedPageGridEditor({
       <rect
         data-testid={'create-preview'}
         x={createRect.left * pixelWidth}
-        y={createRect.top * pixelHeight}
+        y={warpRect(createRect).y}
         width={createRect.width * pixelWidth}
-        height={createRect.height * pixelHeight}
+        height={warpRect(createRect).h}
         fill={'none'}
         style={{ stroke: layerBorderColour() }}
         strokeWidth={1}
@@ -2094,9 +2171,8 @@ export function StagedPageGridEditor({
       <g>
         {(colouredAreas ?? []).map((area, i) => {
           const x = area.left * pixelWidth;
-          const y = area.top * pixelHeight;
+          const { y, h } = warpRect(area);
           const w = area.width * pixelWidth;
-          const h = area.height * pixelHeight;
           const parts = [
             <rect
               key={`ca-${i}`}
@@ -2185,6 +2261,7 @@ export function StagedPageGridEditor({
     return (
       <line
         data-testid={'new-line-preview'}
+        transform={selectedShift}
         x1={horizontal ? b.left * pixelWidth : newLine.position * pixelWidth}
         y1={horizontal ? newLine.position * pixelHeight : b.top * pixelHeight}
         x2={
@@ -2230,9 +2307,9 @@ export function StagedPageGridEditor({
             key={key}
             data-testid={key}
             x={b.left * pixelWidth}
-            y={b.top * pixelHeight}
+            y={warpRect(b).y}
             width={b.width * pixelWidth}
-            height={b.height * pixelHeight}
+            height={warpRect(b).h}
             style={{
               fill: layerColoursBackgroundColour(),
               stroke: layerColoursColour(),
@@ -2246,8 +2323,47 @@ export function StagedPageGridEditor({
     );
   };
 
+  const separated = Boolean(separation && dims);
+
+  // The page image cut into its bands, each shown at its shifted position.
+  const renderSeparatedImage = () =>
+    bands.map((b, i) => (
+      <div
+        key={`band-image-${i}`}
+        data-testid={'separation-band-image'}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: b.start + b.offset,
+          width: dims.w,
+          height: b.end - b.start,
+          overflow: 'hidden',
+          pointerEvents: 'none',
+        }}
+      >
+        <img
+          src={`data:image/png;base64,${image}`}
+          style={{ display: 'block', marginTop: -b.start }}
+          alt={''}
+        />
+      </div>
+    ));
+
   return (
-    <Box sx={{ position: 'relative', display: 'inline-block', lineHeight: 0 }}>
+    <Box
+      sx={{
+        position: 'relative',
+        display: 'inline-block',
+        lineHeight: 0,
+        ...(separated
+          ? {
+              width: dims.w,
+              height: dims.h + separation.totalGap,
+              backgroundColor: '#ffffff',
+            }
+          : {}),
+      }}
+    >
       <img
         ref={imgRef}
         src={`data:image/png;base64,${image}`}
@@ -2256,10 +2372,17 @@ export function StagedPageGridEditor({
         }
         // Displayed pixel-for-pixel at the fetched image's natural size (driven by the
         // scale selector's requested width); the scroll container provides horizontal and
-        // vertical scrollbars when it exceeds the available area.
-        style={{ display: 'block' }}
+        // vertical scrollbars when it exceeds the available area. With separation on it is
+        // kept, unseen, at the top-left for loading, sampling and measuring; the band strips
+        // are what is seen.
+        style={
+          separated
+            ? { display: 'block', position: 'absolute', top: 0, left: 0, visibility: 'hidden' }
+            : { display: 'block' }
+        }
         alt={''}
       />
+      {separated ? renderSeparatedImage() : null}
       {/* Hidden off-screen canvas used only to read back page pixel colours in Colours
           tools; never displayed. */}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
@@ -2279,7 +2402,7 @@ export function StagedPageGridEditor({
       )}
       {dims && (
         <svg
-          viewBox={`0 0 ${dims.w} ${dims.h}`}
+          viewBox={`0 0 ${dims.w} ${dims.h + (separated ? separation.totalGap : 0)}`}
           preserveAspectRatio={'none'}
           onMouseDown={handleOverlayMouseDown}
           onClick={handleOverlayClick}
@@ -2309,7 +2432,10 @@ export function StagedPageGridEditor({
         <TableHelpFrame
           table={selected}
           left={selected.bounds.left * pixelWidth * overlayScale.sx}
-          top={selected.bounds.top * pixelHeight * overlayScale.sy}
+          top={
+            (selected.bounds.top * pixelHeight + tableShift(selected)) *
+            overlayScale.sy
+          }
           width={selected.bounds.width * pixelWidth * overlayScale.sx}
           height={selected.bounds.height * pixelHeight * overlayScale.sy}
         />
@@ -2332,7 +2458,8 @@ export function StagedPageGridEditor({
           const isSelected = t.tableId === selected?.tableId;
           const top = Math.max(
             0,
-            t.bounds.top * pixelHeight * overlayScale.sy - (12 + 2 * 2)
+            (t.bounds.top * pixelHeight + tableShift(t)) * overlayScale.sy -
+              (12 + 2 * 2)
           );
           const left = t.bounds.left * pixelWidth * overlayScale.sx;
           const right =

@@ -129,3 +129,20 @@ describe('merged cell config', () => {
     }
   });
 });
+
+describe('split row wave config', () => {
+  it('splitRowWaveHeightPx(), splitRowWavePitchPx() and reviewSplitRowWaveStrokeWidthPx() are positive, on both import paths', () => {
+    for (const source of [configModule, config]) {
+      expect(source.splitRowWaveHeightPx()).toBeGreaterThan(0);
+      expect(source.splitRowWavePitchPx()).toBeGreaterThan(0);
+      expect(source.reviewSplitRowWaveStrokeWidthPx()).toBeGreaterThan(0);
+    }
+  });
+
+  it('reviewSplitRowWaveColour() is a colour distinct from the review cell border', () => {
+    for (const source of [configModule, config]) {
+      expect(isValidColour(source.reviewSplitRowWaveColour())).toBeTruthy();
+      expect(source.reviewSplitRowWaveColour()).not.toEqual(source.reviewCellBorderColour());
+    }
+  });
+});

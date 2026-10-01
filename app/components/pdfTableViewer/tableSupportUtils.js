@@ -687,6 +687,29 @@ export function findTableById(tables, tableId) {
   return null;
 }
 
+// The table directly above `tableId` in its group grid, looked for in every table carrying a
+// `grid` at any depth. Null when the table is at grid row 0, in no grid, or above is empty.
+export function tableAboveInGroup(tables, tableId) {
+  if (tableId == null) return null;
+  for (const root of tables ?? []) {
+    const grid = root.grid;
+    if (Array.isArray(grid)) {
+      for (let r = 0; r < grid.length; r += 1) {
+        const c =
+          r === 0 && root.tableId === tableId ? 0 : (grid[r] ?? []).indexOf(tableId);
+        if (c === -1) continue;
+        if (r === 0) return null;
+        if (r === 1 && c === 0) return root;
+        const aboveId = grid[r - 1]?.[c];
+        return (aboveId != null && root.next?.[aboveId]) || null;
+      }
+    }
+    const found = tableAboveInGroup(Object.values(root.next ?? {}), tableId);
+    if (found) return found;
+  }
+  return null;
+}
+
 // Replace the table carrying `tableId` with `newTable`, wherever it sits: at the top level,
 // or inside another table's `next` map. Rebuilding the owning table's `next` (rather than
 // only mapping the top level) is what keeps an edit to a joined table from being dropped —
@@ -795,6 +818,8 @@ export function pickCalcResultTable(menuTable, tables) {
 //   deleted                — the soft-delete marker, an editor concept only. A default the
 //                            finder sends is not authoritative and could resurrect a table.
 //   next                   — the linked/joined-table map, set in the Grid Editor panel.
+//   splitBottomRow         — whether the bottom row continues into the table below, set
+//                            from the Special menu.
 // `name` and `tableInPage` are deliberately NOT kept: both finders reflect the hint's values
 // back onto their results by design, so those legitimately round-trip.
 export function buildCalcReplacement(menuTable, resultTable) {
@@ -806,6 +831,7 @@ export function buildCalcReplacement(menuTable, resultTable) {
       confirmationStage: menuTable.confirmationStage,
       deleted: menuTable.deleted,
       next: menuTable.next,
+      splitBottomRow: menuTable.splitBottomRow,
     })
   );
 }

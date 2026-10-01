@@ -52,14 +52,57 @@ export const cellCoordinate = (rowIndex, columnIndex) =>
 // a confidence of 0 because nothing ever read them — not because a read went badly —
 // and there is nothing behind them to correct, so listing them would bury the real ones
 // under blanks. A blank tableId is the marker for that.
-export const belowHighConfidenceCells = (rows, highThreshold) =>
+// Positions a supplied `layout` marks covered (null) by a merged cell are skipped.
+export const belowHighConfidenceCells = (rows, highThreshold, layout) =>
   (rows ?? []).flatMap((row, rowIndex) =>
     row.flatMap((cell, columnIndex) =>
-      cell.tableId && cell.confidence < highThreshold
+      (!layout || layout[rowIndex]?.[columnIndex] !== null) &&
+      cell.tableId &&
+      cell.confidence < highThreshold
         ? [{ rowIndex, columnIndex, label: cellCoordinate(rowIndex, columnIndex) }]
         : [],
     ),
   );
+
+// A span read from a cell, or `singleSpan` when it is absent, not an integer or too small.
+const spanOf = (value, singleSpan) =>
+  Number.isInteger(value) && value >= singleSpan ? value : singleSpan;
+
+// The grid's merge layout: `rows`-shaped, each entry { rowSpan, columnSpan } for a drawn
+// position or null for one covered by an earlier merged cell. Spans are clamped to the
+// grid, and a merge overlapping an already claimed position is drawn single.
+export const mergedCellLayout = (rows, singleSpan) => {
+  if (!rows || rows.length === 0) return [];
+  const claimed = rows.map((row) => row.map(() => false));
+  return rows.map((row, rowIndex) =>
+    row.map((cell, columnIndex) => {
+      if (claimed[rowIndex][columnIndex]) return null;
+      const rowSpan = Math.min(
+        spanOf(cell?.rowSpan, singleSpan),
+        rows.length - rowIndex
+      );
+      const columnSpan = Math.min(
+        spanOf(cell?.columnSpan, singleSpan),
+        row.length - columnIndex
+      );
+      const region = [];
+      for (let r = rowIndex; r < rowIndex + rowSpan; r += 1) {
+        for (let c = columnIndex; c < columnIndex + columnSpan; c += 1) {
+          if ((r !== rowIndex || c !== columnIndex) && c < claimed[r].length) {
+            region.push([r, c]);
+          }
+        }
+      }
+      if (region.some(([r, c]) => claimed[r][c])) {
+        return { rowSpan: singleSpan, columnSpan: singleSpan };
+      }
+      region.forEach(([r, c]) => {
+        claimed[r][c] = true;
+      });
+      return { rowSpan, columnSpan };
+    })
+  );
+};
 
 // "1 entry flagged for review" / "N entries flagged for review". Zero is plural, as English
 // requires. Entries rather than cells: the title is flagged alongside them and is not one.
@@ -128,3 +171,21 @@ export const confidenceLabel = (confidence) =>
   typeof confidence === 'number' && Number.isFinite(confidence)
     ? `Confidence ${Math.round(confidence)}%`
     : 'Confidence unknown';
+
+// The ruler number of each row, or null for a row joined to the one above it. Header rows
+// show index + 1; data rows count on, a joined pair or chain taking one number. Entries of
+// `splitRows` naming a header row or the last row (or beyond) are ignored.
+export const reviewRowNumbers = (rowCount, headerCount, splitRows) => {
+  const joined = new Set(
+    (splitRows ?? []).filter((i) => i >= headerCount && i < rowCount - 1)
+  );
+  let skipped = 0;
+  return Array.from({ length: rowCount }, (_, index) => {
+    if (index < headerCount) return index + 1;
+    if (joined.has(index - 1)) {
+      skipped += 1;
+      return null;
+    }
+    return index + 1 - skipped;
+  });
+};

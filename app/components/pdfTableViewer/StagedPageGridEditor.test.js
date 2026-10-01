@@ -18,6 +18,14 @@ jest.mock('react-hot-toast', () => {
   return { __esModule: true, default: toastMock };
 });
 
+// These tests use unseparated page geometry; table separation is covered by
+// StagedPageGridEditor.separation.test.js.
+jest.mock('config', () => ({
+  __esModule: true,
+  ...jest.requireActual('config'),
+  tableSeparationEnabled: () => false,
+}));
+
 // jsdom does not lay out SVG/HTML, so the component's geometry maths depends
 // entirely on the mocked <img> getBoundingClientRect. We report a 100x100 box at
 // the origin; with pixelWidth/pixelHeight = 1000 a screen coordinate X maps to
@@ -1583,6 +1591,68 @@ describe('StagedPageGridEditor', () => {
       expect(list.map((t) => t.tableId)).toEqual(['t1']);
       expect(list[0].next.t2.rowHeights).toHaveLength(2);
     });
+  });
+});
+
+// A table flagged splitBottomRow draws its bottom edge wavy in the Validate tables pass, and
+// the table below it in the group draws its top edge wavy; the boundary pass stays plain.
+describe('StagedPageGridEditor — rows split across tables', () => {
+  const boundary = (container, id) =>
+    container.querySelector(`[data-testid="table-boundary"][data-tableid="${id}"]`);
+
+  // Alpha is the root; beta sits below it in the group grid.
+  const splitPair = (betaPage = 0) => [
+    {
+      ...alpha(),
+      splitBottomRow: true,
+      grid: [['t1'], ['t2']],
+      next: { t2: { ...beta(), pdfPage: betaPage } },
+    },
+  ];
+
+  it('draws the flagged table as a path with a wavy bottom in grid mode', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ metadataTables: splitPair(), editorMode: 'grid' })
+    );
+    const el = boundary(container, 't1');
+    expect(el.tagName.toLowerCase()).toBe('path');
+    expect(el).toHaveAttribute('data-wavy-bottom', 'true');
+    expect(el).toHaveAttribute('data-wavy-top', 'false');
+    expect(el).toHaveAttribute('fill', 'none');
+  });
+
+  it('draws the table below with a wavy top on the same page', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ metadataTables: splitPair(), editorMode: 'grid' })
+    );
+    const el = boundary(container, 't2');
+    expect(el.tagName.toLowerCase()).toBe('path');
+    expect(el).toHaveAttribute('data-wavy-top', 'true');
+    expect(el).toHaveAttribute('data-wavy-bottom', 'false');
+  });
+
+  it('draws the table below with a wavy top on another page', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ metadataTables: splitPair(1), page: 1, editorMode: 'grid' })
+    );
+    expect(boundary(container, 't1')).toBeNull();
+    expect(boundary(container, 't2')).toHaveAttribute('data-wavy-top', 'true');
+  });
+
+  it('still draws an unflagged, unrelated table as a rect', async () => {
+    const other = { ...beta(), tableId: 't3', bounds: { left: 0.6, top: 0.6, width: 0.1, height: 0.1 } };
+    const { container } = await renderLoaded(
+      baseProps({ metadataTables: [...splitPair(), other], editorMode: 'grid' })
+    );
+    expect(boundary(container, 't3').tagName.toLowerCase()).toBe('rect');
+  });
+
+  it('draws the flagged table as a plain rect in the boundary pass', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ metadataTables: splitPair(), editorMode: 'border' })
+    );
+    expect(boundary(container, 't1').tagName.toLowerCase()).toBe('rect');
+    expect(boundary(container, 't2').tagName.toLowerCase()).toBe('rect');
   });
 });
 

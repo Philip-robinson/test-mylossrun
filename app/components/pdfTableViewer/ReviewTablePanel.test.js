@@ -55,6 +55,8 @@ import {
   reviewFontScaleStorageKey,
   reviewFontScaleHelpId,
   reviewTableNameHelpId,
+  reviewPreviousHelpId,
+  reviewNextHelpId,
 } from 'config';
 
 jest.mock('services/images', () => ({
@@ -92,6 +94,10 @@ jest.mock('config', () => ({
   reviewFontScaleHelpId: jest.requireActual('config').reviewFontScaleHelpId,
   reviewTableNameHelpId: jest.requireActual('config').reviewTableNameHelpId,
   reviewHeaderRowGapPx: jest.fn(() => 10),
+  reviewPreviousLabel: jest.requireActual('config').reviewPreviousLabel,
+  reviewNextLabel: jest.requireActual('config').reviewNextLabel,
+  reviewPreviousHelpId: jest.requireActual('config').reviewPreviousHelpId,
+  reviewNextHelpId: jest.requireActual('config').reviewNextHelpId,
   // Read by ReviewTableTabs, a real collaborator here.
   reviewTabsHelpId: jest.requireActual('config').reviewTabsHelpId,
   // Read by CellEditDialog, whose parts this screen's tips describe.
@@ -392,6 +398,63 @@ beforeEach(() => {
 });
 
 describe('ReviewTablePanel', () => {
+  describe('the Previous and Next buttons', () => {
+    beforeEach(() => {
+      extractTable.mockReturnValue(new Promise(() => {}));
+    });
+
+    it('sit immediately right of Export, before Close', () => {
+      renderPanel({ onPrevious: jest.fn(), onNext: jest.fn() });
+
+      const ids = [...screen.getByTestId('review-export').parentElement.parentElement
+        .querySelectorAll('button')].map((b) => b.dataset.testid);
+      expect(ids).toEqual(['review-export', 'review-previous', 'review-next', 'review-exit']);
+    });
+
+    it('are disabled when there is no table to move to', () => {
+      renderPanel({ onPrevious: null, onNext: jest.fn() });
+
+      expect(screen.getByTestId('review-previous')).toBeDisabled();
+      expect(screen.getByTestId('review-next')).not.toBeDisabled();
+    });
+
+    it('save, then move to the table asked for', async () => {
+      const onSave = jest.fn().mockResolvedValue(true);
+      const onNext = jest.fn();
+      renderPanel({ onSave, onPrevious: jest.fn(), onNext });
+
+      await userEvent.click(screen.getByTestId('review-next'));
+
+      expect(onSave).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    });
+
+    it('stay put when the save fails', async () => {
+      const onPrevious = jest.fn();
+      renderPanel({ onSave: jest.fn().mockResolvedValue(false), onPrevious, onNext: null });
+
+      await userEvent.click(screen.getByTestId('review-previous'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('review-previous')).not.toBeDisabled()
+      );
+      expect(onPrevious).not.toHaveBeenCalled();
+    });
+
+    it('carry their help ids', () => {
+      renderPanel({ onPrevious: jest.fn(), onNext: jest.fn() });
+
+      expect(screen.getByTestId('review-previous')).toHaveAttribute(
+        'data-help-id',
+        reviewPreviousHelpId()
+      );
+      expect(screen.getByTestId('review-next')).toHaveAttribute(
+        'data-help-id',
+        reviewNextHelpId()
+      );
+    });
+  });
+
   describe('the header row', () => {
     const namedTables = (name) =>
       metadataTables().map((t) => (t.tableId === 'root' ? { ...t, name } : t));
@@ -1571,7 +1634,6 @@ describe('ReviewTablePanel', () => {
 
       const exportButton = screen.getByTestId('review-export');
       const closeButton = screen.getByTestId('review-exit');
-      expect(exportButton.parentElement).toBe(closeButton.parentElement);
       expect(
         exportButton.compareDocumentPosition(closeButton) &
           Node.DOCUMENT_POSITION_FOLLOWING

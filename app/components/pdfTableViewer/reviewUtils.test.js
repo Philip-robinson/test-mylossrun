@@ -3,6 +3,7 @@ import {
   looksNumeric,
   isWideText,
   adjacentPoorCell,
+  adjacentReviewTableId,
   belowHighConfidenceCells,
   cellCoordinate,
   cellTextLines,
@@ -70,6 +71,32 @@ describe('reviewUtils', () => {
     it('rejects more than one currency symbol, or a trailing one', () => {
       expect(looksNumeric('££12')).toBe(false);
       expect(looksNumeric('12£')).toBe(false);
+    });
+  });
+
+  describe('adjacentReviewTableId', () => {
+    const tables = [
+      { tableId: 'a' },
+      { tableId: 'gone', deleted: true },
+      { tableId: 'b' },
+      { tableId: 'c' },
+    ];
+
+    it('steps to the next and previous table in list order', () => {
+      expect(adjacentReviewTableId(tables, 'b', 1)).toBe('c');
+      expect(adjacentReviewTableId(tables, 'b', -1)).toBe('a');
+    });
+
+    it('skips deleted tables', () => {
+      expect(adjacentReviewTableId(tables, 'a', 1)).toBe('b');
+      expect(adjacentReviewTableId(tables, 'b', -1)).toBe('a');
+    });
+
+    it('is null past either end, or for a table not in the list', () => {
+      expect(adjacentReviewTableId(tables, 'a', -1)).toBeNull();
+      expect(adjacentReviewTableId(tables, 'c', 1)).toBeNull();
+      expect(adjacentReviewTableId(tables, 'missing', 1)).toBeNull();
+      expect(adjacentReviewTableId(undefined, 'a', 1)).toBeNull();
     });
   });
 

@@ -75,6 +75,8 @@ import {
   reviewExportHelpId,
   reviewTableNameHelpId,
   reviewFontScaleHelpId,
+  reviewPreviousHelpId,
+  reviewNextHelpId,
   reviewSectionTitleHelpId,
   reviewTableScreenId,
   reviewTabsHelpId,
@@ -1119,7 +1121,7 @@ export function helpScreens() {
       ],
     },
     [reviewTableScreenId()]: {
-      version: 7,
+      version: 8,
       name: 'Extraction review',
       summary: emphasiseLowQualityCells()?[
         'This is the data that will be written out to the workbook. Every cell is editable — ',
@@ -1249,6 +1251,22 @@ export function helpScreens() {
           body: [
             'The export button saves any unsaved changes and then exports only the ',
             'table being reviewed to an Excel workbook.',
+          ],
+        },
+        {
+          helpId: reviewPreviousHelpId(),
+          title: 'Previous button',
+          body: [
+            'Saves any changes and reviews the table before this one in the Document ',
+            'Overview list.',
+          ],
+        },
+        {
+          helpId: reviewNextHelpId(),
+          title: 'Next button',
+          body: [
+            'Saves any changes and reviews the table after this one in the Document ',
+            'Overview list.',
           ],
         },
         {

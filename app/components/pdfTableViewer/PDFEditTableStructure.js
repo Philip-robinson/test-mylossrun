@@ -37,6 +37,7 @@ import {
   saveBlob,
   tableExcelFilename,
 } from 'components/pdfTableViewer/exportUtils';
+import { adjacentReviewTableId } from 'components/pdfTableViewer/reviewUtils';
 import {
   boundaryPassEditorMode,
   boundaryPassScreenId,
@@ -955,6 +956,13 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     setReviewTableId(null);
   };
 
+  // A handler reviewing the table `step` places from the reviewed one in Document Overview
+  // order, or null when there is none. The panel saves before calling it.
+  const reviewNeighbour = (step) => {
+    const neighbourId = adjacentReviewTableId(tables, reviewTableId, step);
+    return neighbourId ? () => setReviewTableId(neighbourId) : null;
+  };
+
   // The workbook name for one table's export.
   const tableFilename = (table) =>
     tableExcelFilename(
@@ -1584,10 +1592,6 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                     values, not a declaration that the table is finished, so nothing is
                     gained by withholding it or by relabelling it once the values are clean.
 
-                    The Export button beside it is likewise offered on every non-deleted
-                    row, whatever its stage, and exports that row's table alone (a linked
-                    root as its merged group).
-
                     A root holding linked tables is no exception, even before its grid has
                     been laid out. The merge takes the root and whichever members the grid
                     already holds — an unplaced member is simply absent from it — so a
@@ -1971,6 +1975,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             />
           ) : (
             <ReviewTablePanel
+              key={reviewTableId}
               pdfId={pdfId}
               tableId={reviewTableId}
               tables={tables}
@@ -1978,6 +1983,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
               onExit={handleReviewExit}
               onSave={handleSave}
               onExport={handleExportTable}
+              onPrevious={reviewNeighbour(-1)}
+              onNext={reviewNeighbour(1)}
             />
           )}
         </Box>

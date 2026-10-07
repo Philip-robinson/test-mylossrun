@@ -772,6 +772,16 @@ export function reviewExportLabel() {
   return 'Export this table';
 }
 
+// Label of the review screen's button that reviews the previous table.
+export function reviewPreviousLabel() {
+  return 'Previous';
+}
+
+// Label of the review screen's button that reviews the next table.
+export function reviewNextLabel() {
+  return 'Next';
+}
+
 // Label of the review screen's export button while the export is in flight.
 export function reviewExportingLabel() {
   return 'Exporting…';
@@ -1247,6 +1257,14 @@ export function reviewFontScaleHelpId() {
   return 'review-font-scale';
 }
 
+export function reviewPreviousHelpId() {
+  return 'review-previous';
+}
+
+export function reviewNextHelpId() {
+  return 'review-next';
+}
+
 // The cell-edit dialog's ids: the crop of the cell as the document has it, the three
 // buttons that end the edit and the confidence the value was read with. They belong to
 // the review screen's tips, the dialog being part of that screen rather than one of its
@@ -1555,6 +1573,8 @@ const default_export = {
   reviewCloseLabel,
   reviewExportLabel,
   reviewExportingLabel,
+  reviewPreviousLabel,
+  reviewNextLabel,
   linkExportLabel,
   linkExportingLabel,
   helpScrimColour,
@@ -1657,6 +1677,8 @@ const default_export = {
   reviewExportHelpId,
   reviewTableNameHelpId,
   reviewFontScaleHelpId,
+  reviewPreviousHelpId,
+  reviewNextHelpId,
   cellEditImageHelpId,
   cellEditCancelHelpId,
   cellEditConfirmHelpId,

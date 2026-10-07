@@ -10447,6 +10447,46 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
       expect(screen.getByTestId('review-panel')).toBeInTheDocument();
     });
 
+    test('Previous and Next review the neighbouring tables in Document Overview order', async () => {
+      await renderModes();
+      await openReviewOf('Alpha');
+
+      expect(global.__REVIEW_PANEL_PROPS__.onPrevious).toBeNull();
+      // eslint-disable-next-line
+      await act(async () => {
+        global.__REVIEW_PANEL_PROPS__.onNext();
+      });
+
+      expect(screen.getByTestId('review-panel')).toHaveAttribute('data-tableid', 'beta');
+      expect(global.__REVIEW_PANEL_PROPS__.onNext).toBeNull();
+      // eslint-disable-next-line
+      await act(async () => {
+        global.__REVIEW_PANEL_PROPS__.onPrevious();
+      });
+
+      expect(screen.getByTestId('review-panel')).toHaveAttribute('data-tableid', 'alpha');
+    });
+
+    test('Next skips a deleted table', async () => {
+      getMetadata.mockResolvedValue({
+        ...MODE_METADATA,
+        tables: [
+          MODE_METADATA.tables[0],
+          { ...gamma, deleted: true },
+          ...MODE_METADATA.tables.slice(1),
+        ],
+      });
+      await renderModes();
+      await openReviewOf('Alpha');
+
+      // eslint-disable-next-line
+      await act(async () => {
+        global.__REVIEW_PANEL_PROPS__.onNext();
+      });
+
+      expect(screen.getByTestId('review-panel')).toHaveAttribute('data-tableid', 'beta');
+    });
+
     test('onExport does not save a clean document', async () => {
       await renderModes();
       await openReviewOf('Alpha');

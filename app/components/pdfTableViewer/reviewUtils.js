@@ -198,3 +198,12 @@ export const reviewRowNumbers = (rowCount, headerCount, splitRows) => {
 // empty first or last line; a non-string value is returned alone, unchanged.
 export const cellTextLines = (text, pattern) =>
   typeof text === 'string' ? text.split(pattern) : [text];
+
+// The id of the non-deleted table `step` places from `tableId` in `tables`' order, or null
+// when there is none.
+export const adjacentReviewTableId = (tables, tableId, step) => {
+  const reviewable = (tables ?? []).filter((t) => !t.deleted);
+  const index = reviewable.findIndex((t) => t.tableId === tableId);
+  if (index === -1) return null;
+  return reviewable[index + step]?.tableId ?? null;
+};

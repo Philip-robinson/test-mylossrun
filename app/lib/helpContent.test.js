@@ -40,6 +40,8 @@ import {
   reviewTableScreenId,
   reviewTableNameHelpId,
   reviewFontScaleHelpId,
+  reviewPreviousHelpId,
+  reviewNextHelpId,
   specialToolJoinedEndRowHelpId,
   specialToolMergedHelpId,
   tableLinkLabelHelpId,
@@ -319,6 +321,11 @@ describe('the cell-edit dialog', () => {
 // The review screen's header row: the table name on the left and the font zoom on the right,
 // described first and in that order, since they are the first things on the screen.
 describe("the review screen's header row", () => {
+  it('describes Previous and Next on the review screen', () => {
+    const ids = helpScreens()[reviewTableScreenId()].tips.map((tip) => tip.helpId);
+    expect(ids).toEqual(expect.arrayContaining([reviewPreviousHelpId(), reviewNextHelpId()]));
+  });
+
   it('is described first by the review screen, name then zoom', () => {
     expect(
       helpScreens()[reviewTableScreenId()].tips.slice(0, 2).map((tip) => tip.helpId),

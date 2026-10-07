@@ -94,6 +94,10 @@ import {
   reviewCloseLabel,
   reviewExportLabel,
   reviewExportingLabel,
+  reviewPreviousLabel,
+  reviewNextLabel,
+  reviewPreviousHelpId,
+  reviewNextHelpId,
   cellLineBreakPattern,
   reviewDefaultFontScalePercent,
   reviewFontScalePercentOptions,
@@ -234,6 +238,8 @@ export default function ReviewTablePanel({
   onExit,
   onSave,
   onExport,
+  onPrevious = null,
+  onNext = null,
 }) {
   // Every table the extraction returned, and which of them is on screen. Deliberately not
   // called `tables`: that prop is the editor's list of PDFTables and is something else.
@@ -678,6 +684,16 @@ export default function ReviewTablePanel({
     if (saved) onExit();
   };
 
+  // Save, then move the review to another table once the save has landed. Guarded like
+  // Close, whose lock and overlay it shares.
+  const handleStep = async (move) => {
+    if (operation !== null) return;
+    setOperation(reviewClosingOperation());
+    const saved = await onSave();
+    setOperation(null);
+    if (saved) move();
+  };
+
   // Ask the host to export this table. A rejection is swallowed: the host reports its own
   // errors.
   const handleExport = async () => {
@@ -1110,16 +1126,38 @@ export default function ReviewTablePanel({
           p: 1,
         }}
       >
-        <Button
-          data-testid={'review-export'}
-          data-help-id={reviewExportHelpId()}
-          variant={'outlined'}
-          size={'small'}
-          disabled={busy}
-          onClick={handleExport}
-        >
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            data-testid={'review-export'}
+            data-help-id={reviewExportHelpId()}
+            variant={'outlined'}
+            size={'small'}
+            disabled={busy}
+            onClick={handleExport}
+          >
           {reviewExportLabel()}
-        </Button>
+          </Button>
+          <Button
+            data-testid={'review-previous'}
+            data-help-id={reviewPreviousHelpId()}
+            variant={'outlined'}
+            size={'small'}
+            disabled={busy || !onPrevious}
+            onClick={() => handleStep(onPrevious)}
+          >
+            {reviewPreviousLabel()}
+          </Button>
+          <Button
+            data-testid={'review-next'}
+            data-help-id={reviewNextHelpId()}
+            variant={'outlined'}
+            size={'small'}
+            disabled={busy || !onNext}
+            onClick={() => handleStep(onNext)}
+          >
+            {reviewNextLabel()}
+          </Button>
+        </Box>
         <Button
           data-testid={'review-exit'}
           data-help-id={reviewCloseHelpId()}

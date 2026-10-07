@@ -6,10 +6,33 @@ import { excelFileSuffix } from 'config';
 // replaced. Mirrors the back end, which names both the stored object and the sheet from the
 // same stem. A name with no extension, or a dotfile, keeps what it has and gains the suffix.
 export function excelFilename(originalFilename) {
+  return `${documentStem(originalFilename)}${excelFileSuffix()}`;
+}
+
+// Name a single table's workbook is offered under: `{stem}{separator}{table name}` plus the
+// suffix, with matches of `pathSeparatorPattern` in the table name replaced by
+// `pathSeparatorReplacement`. A blank or missing table name gives the document workbook's name.
+export function tableExcelFilename(
+  originalFilename,
+  tableName,
+  separator,
+  pathSeparatorPattern,
+  pathSeparatorReplacement
+) {
+  const name = (tableName ?? '').trim()
+    ? tableName.replace(pathSeparatorPattern, pathSeparatorReplacement)
+    : '';
+  if (!name) {
+    return excelFilename(originalFilename);
+  }
+  return `${documentStem(originalFilename)}${separator}${name}${excelFileSuffix()}`;
+}
+
+// The document's name without its last extension; a dotfile keeps its whole name.
+function documentStem(originalFilename) {
   const name = originalFilename ?? '';
   const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  return `${stem}${excelFileSuffix()}`;
+  return dot > 0 ? name.slice(0, dot) : name;
 }
 
 // The tables an export should cover: every table still in the document, in the order the

@@ -3,6 +3,7 @@ import {
   firstKnownHelpId,
   holeRect,
   isMeasurable,
+  nextHelpId,
   tipPlacement,
 } from 'components/help/helpTargetUtils';
 
@@ -280,5 +281,42 @@ describe('tipPlacement where neither the named side nor its opposite is deep eno
       left: 400 + GAP,
       side: 'right',
     });
+  });
+});
+
+describe('nextHelpId', () => {
+  const TIPS = ['first', 'second', 'third', 'fourth'];
+  const all = () => true;
+  const none = () => false;
+  const except = (...missing) => (id) => !missing.includes(id);
+
+  it('answers the first available id from the entry card', () => {
+    expect(nextHelpId(TIPS, null, except('first'))).toBe('second');
+  });
+
+  it('answers the first available id from an id with no tip', () => {
+    expect(nextHelpId(TIPS, 'unknown', all)).toBe('first');
+  });
+
+  it('skips unavailable ids', () => {
+    expect(nextHelpId(TIPS, 'first', except('second', 'third'))).toBe('fourth');
+  });
+
+  it('answers the entry card after the last available id', () => {
+    expect(nextHelpId(TIPS, 'third', except('fourth'))).toBeNull();
+  });
+
+  it('answers the next available id after a current tip that is itself unavailable', () => {
+    expect(nextHelpId(TIPS, 'second', except('second', 'third'))).toBe(
+      'fourth',
+    );
+  });
+
+  it('answers the entry card from the entry card when no id is available', () => {
+    expect(nextHelpId(TIPS, null, none)).toBeNull();
+  });
+
+  it('answers the entry card from a tip when no id is available', () => {
+    expect(nextHelpId(TIPS, 'second', none)).toBeNull();
   });
 });

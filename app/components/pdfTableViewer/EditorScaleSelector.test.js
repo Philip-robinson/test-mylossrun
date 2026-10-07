@@ -34,6 +34,26 @@ describe('EditorScaleSelector', () => {
     expect(screen.getByTestId('scale-zoom-out')).not.toBeDisabled();
   });
 
+  it('steps through the options it is given instead of the editor ones', () => {
+    const onChange = jest.fn();
+    render(
+      <EditorScaleSelector percent={85} onChange={onChange} options={[70, 85, 100]} />
+    );
+    fireEvent.click(screen.getByTestId('scale-zoom-in'));
+    expect(onChange).toHaveBeenCalledWith(100);
+    fireEvent.click(screen.getByTestId('scale-zoom-out'));
+    expect(onChange).toHaveBeenCalledWith(70);
+  });
+
+  it('carries the help id it is given', () => {
+    const { container } = render(
+      <EditorScaleSelector percent={100} onChange={() => {}} helpId={'other-scale'} />
+    );
+    expect(container.querySelector('[data-help-id="other-scale"]')).toContainElement(
+      screen.getByTestId('scale-zoom-in')
+    );
+  });
+
   // The overlay measures its tip's hole from this attribute and the copy module keys the
   // same tip by the same function, so the id is a literal on neither side.
   it('carries the scale help id on the whole control, not one of its buttons', () => {

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import LayersPanel from 'components/pdfTableViewer/LayersPanel';
 import {
+  layersBordersHelpId,
   layersColoursHelpId,
   layersColumnsHelpId,
   layersNextHelpId,
@@ -165,6 +166,18 @@ describe('LayersPanel', () => {
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 
+  it('spreads Previous and Next to the two ends of their row', () => {
+    renderPanel();
+    const prev = screen.getByTestId('layers-prev');
+    const next = screen.getByTestId('layers-next');
+    const row = prev.parentElement;
+
+    expect(next.parentElement).toBe(row);
+    expect(row.firstElementChild).toBe(prev);
+    expect(row.lastElementChild).toBe(next);
+    expect(row).toHaveStyle({ justifyContent: 'space-between' });
+  });
+
   // The overlay measures its tip's hole from this attribute and the copy module keys the
   // same tip by the same function, so the id is a literal on neither side.
   it('carries the help ids of the panel and of its three buttons', () => {
@@ -188,15 +201,14 @@ describe('LayersPanel', () => {
     );
   });
 
-  // The contents pass describes each of its four layers, in the order the panel lists
-  // them. Borders heads that list and is described by the pass's own tips, not as a layer.
-  it('carries a help id on every contents layer row it lists in gridMode', () => {
+  // The contents pass describes each of its five layers, in the order the panel lists them.
+  it('carries a help id on every layer row it lists in gridMode', () => {
     renderPanel({ editorMode: 'grid' });
 
     expect(
       screen.getAllByTestId('layer-row').map((row) => row.getAttribute('data-help-id')),
     ).toEqual([
-      null,
+      layersBordersHelpId(),
       layersRowsHelpId(),
       layersColumnsHelpId(),
       layersSpecialHelpId(),
@@ -205,10 +217,13 @@ describe('LayersPanel', () => {
   });
 
   // Borders is described through the passes' own tips rather than as a layer.
-  it('leaves the Borders row unannotated', () => {
+  it('carries the borders help id on the Borders row in borderMode', () => {
     renderPanel();
 
-    expect(screen.getByTestId('layer-row')).not.toHaveAttribute('data-help-id');
+    expect(screen.getByTestId('layer-row')).toHaveAttribute(
+      'data-help-id',
+      layersBordersHelpId()
+    );
   });
 
   // The pass switch wears one label in each pass and each pass describes the label it

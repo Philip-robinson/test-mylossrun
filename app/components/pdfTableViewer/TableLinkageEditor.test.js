@@ -34,6 +34,9 @@ import {
   confirmedTableStage,
   linkAvailableTablesHelpId,
   linkCancelHelpId,
+  linkExportHelpId,
+  linkExportLabel,
+  linkExportingLabel,
   linkLinkedTablesHelpId,
   linkSaveHelpId,
   linkTableCellWidth,
@@ -1892,7 +1895,7 @@ describe('TableLinkageEditor component', () => {
     const order = Array.from(container.querySelectorAll('button[data-testid]')).map(
       (el) => el.getAttribute('data-testid'),
     );
-    expect(order).toEqual(['link-unlink', 'link-cancel', 'link-save']);
+    expect(order).toEqual(['link-unlink', 'link-cancel', 'link-export', 'link-save']);
   });
 
   it('Unlink returns every linked table to Available and leaves Root alone in the grid', async () => {
@@ -1943,6 +1946,62 @@ describe('TableLinkageEditor component', () => {
     fireEvent.click(screen.getByTestId('link-cancel'));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  describe('onRegisterSave', () => {
+    const renderRegistering = (root, tables) => {
+      getTableImages.mockResolvedValue({ images: {} });
+      const onSave = jest.fn();
+      const onRegisterSave = jest.fn();
+      const utils = render(
+        <TableLinkageEditor
+          pdfId={'pdf-1'}
+          rootTable={root}
+          tables={tables}
+          onCancel={jest.fn()}
+          onSave={onSave}
+          onRegisterSave={onRegisterSave}
+        />,
+      );
+      return { ...utils, onSave, onRegisterSave };
+    };
+    const registered = (onRegisterSave) =>
+      onRegisterSave.mock.calls.find(([fn]) => typeof fn === 'function')[0];
+
+    it('registers a function returning what Save hands onSave', async () => {
+      const { root, tables } = buildFixture();
+      const { onSave, onRegisterSave } = renderRegistering(root, tables);
+      await waitFor(() => expect(getTableImages).toHaveBeenCalledTimes(1));
+
+      const savedTables = registered(onRegisterSave);
+      fireEvent.click(screen.getByTestId('link-save'));
+
+      expect(savedTables()).toEqual(onSave.mock.calls[0][0]);
+    });
+
+    it('returns the current arrangement after the grid changes', async () => {
+      const { root, a } = buildFixture();
+      const linkedRoot = { ...root, grid: [['root'], ['a']], next: { a } };
+      const { onSave, onRegisterSave } = renderRegistering(linkedRoot, [linkedRoot]);
+      await waitFor(() => expect(getTableImages).toHaveBeenCalledTimes(1));
+
+      const savedTables = registered(onRegisterSave);
+      fireEvent.click(screen.getByTestId('link-unlink'));
+      fireEvent.click(screen.getByTestId('link-save'));
+
+      expect(savedTables()).toEqual(onSave.mock.calls[0][0]);
+      expect(savedTables().find((t) => t.tableId === 'root').grid).toBeNull();
+    });
+
+    it('registers null on unmount', async () => {
+      const { root, tables } = buildFixture();
+      const { onRegisterSave, unmount } = renderRegistering(root, tables);
+      await waitFor(() => expect(getTableImages).toHaveBeenCalledTimes(1));
+
+      unmount();
+
+      expect(onRegisterSave).toHaveBeenLastCalledWith(null);
+    });
   });
 
   // Clearing the grid clears the LAYOUT, not the group: which tables belong to the root is
@@ -2056,6 +2115,200 @@ describe('TableLinkageEditor component', () => {
     fireEvent.click(screen.getByTestId('link-save'));
 
     expect(savedRootFrom(onSave).confirmationStage).toBe(aboveConfirmedStage);
+  });
+
+  describe('joined end row wavy border', () => {
+    // Saved grid root -> a -> c, with b and d in Available. `joined` lists the tables whose
+    // splitBottomRow is true; `absent` lists the ones built with no splitBottomRow at all.
+    const renderJoined = async ({ joined, absent = [] }) => {
+      const flag = (t) => {
+        if (absent.includes(t.tableId)) return t;
+        return { ...t, splitBottomRow: joined.includes(t.tableId) };
+      };
+      const a = flag(
+        withBounds(mkTable({ tableId: 'a', name: 'Alpha', pdfPage: 1, cols: 2, rows: 5 }), 2),
+      );
+      const c = flag(
+        withBounds(mkTable({ tableId: 'c', name: 'Gamma', pdfPage: 3, cols: 2, rows: 5 }), 3),
+      );
+      const b = flag(
+        withBounds(mkTable({ tableId: 'b', name: 'Beta', pdfPage: 2, cols: 2, rows: 4 }), 4),
+      );
+      const d = flag(
+        withBounds(mkTable({ tableId: 'd', name: 'Delta', pdfPage: 4, cols: 2, rows: 4 }), 5),
+      );
+      const root = flag(
+        withBounds(
+          mkTable({
+            tableId: 'root',
+            name: 'Root',
+            pdfPage: 0,
+            cols: 2,
+            rows: 3,
+            grid: [['root'], ['a'], ['c']],
+            next: { a, c, b, d },
+          }),
+          1,
+        ),
+      );
+      getTableImages.mockResolvedValue({ images: {} });
+      render(
+        <TableLinkageEditor
+          pdfId={'pdf-1'}
+          rootTable={root}
+          tables={[root]}
+          onCancel={jest.fn()}
+          onSave={jest.fn()}
+        />,
+      );
+      await waitFor(() => expect(getTableImages).toHaveBeenCalled());
+    };
+
+    const cellIn = (containerId, tableId) =>
+      screen.getByTestId(containerId).querySelector(`[data-tableid="${tableId}"]`);
+
+    const waveIn = (cell) => cell.querySelector('[data-testid="link-cell-wavy-border"]');
+
+    it('marks a joined table in the Available list and draws its wave', async () => {
+      await renderJoined({ joined: ['b'] });
+      const cell = cellIn('select-column', 'b');
+      expect(cell).toHaveAttribute('data-joined-end-row', 'true');
+      expect(waveIn(cell)).not.toBeNull();
+    });
+
+    it('leaves an unjoined table in the Available list straight', async () => {
+      await renderJoined({ joined: ['b'] });
+      const cell = cellIn('select-column', 'd');
+      expect(cell).toHaveAttribute('data-joined-end-row', 'false');
+      expect(waveIn(cell)).toBeNull();
+    });
+
+    it('draws the wave on a joined non-root table in the Linked grid only', async () => {
+      await renderJoined({ joined: ['a'] });
+      const joinedCell = cellIn('linked-grid', 'a');
+      expect(joinedCell).toHaveAttribute('data-joined-end-row', 'true');
+      expect(waveIn(joinedCell)).not.toBeNull();
+      const plainCell = cellIn('linked-grid', 'c');
+      expect(plainCell).toHaveAttribute('data-joined-end-row', 'false');
+      expect(waveIn(plainCell)).toBeNull();
+    });
+
+    it('draws the wave on a joined root', async () => {
+      await renderJoined({ joined: ['root'] });
+      const cell = screen
+        .getByTestId('linked-grid')
+        .querySelector('[data-testid="link-cell"][data-row="0"][data-col="0"]');
+      expect(cell).toHaveAttribute('data-tableid', 'root');
+      expect(cell).toHaveAttribute('data-joined-end-row', 'true');
+      expect(waveIn(cell)).not.toBeNull();
+    });
+
+    it('reads a table with no splitBottomRow as not joined', async () => {
+      await renderJoined({ joined: [], absent: ['d'] });
+      const cell = cellIn('select-column', 'd');
+      expect(cell).toHaveAttribute('data-joined-end-row', 'false');
+      expect(waveIn(cell)).toBeNull();
+    });
+  });
+
+  describe('Export', () => {
+    const footerIds = ['link-unlink', 'link-cancel', 'link-export', 'link-save'];
+
+    const renderEditor = async (props = {}) => {
+      const { root, tables } = buildFixture();
+      getTableImages.mockResolvedValue({ images: {} });
+      render(
+        <TableLinkageEditor
+          pdfId={'pdf-1'}
+          rootTable={root}
+          tables={tables}
+          onCancel={jest.fn()}
+          onSave={jest.fn()}
+          {...props}
+        />,
+      );
+      await waitFor(() => expect(getTableImages).toHaveBeenCalled());
+    };
+
+    // A promise with its resolve and reject exposed, so the test decides when it settles.
+    const deferred = () => {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+
+    it('shows its label and carries its help id', async () => {
+      await renderEditor({ onExport: jest.fn() });
+      const button = screen.getByTestId('link-export');
+      expect(button).toHaveTextContent(linkExportLabel());
+      expect(button).toHaveAttribute('data-help-id', linkExportHelpId());
+    });
+
+    it('calls onExport once with no arguments when clicked', async () => {
+      const onExport = jest.fn().mockResolvedValue(undefined);
+      await renderEditor({ onExport });
+      fireEvent.click(screen.getByTestId('link-export'));
+      await waitFor(() =>
+        expect(screen.getByTestId('link-export')).not.toBeDisabled(),
+      );
+      expect(onExport).toHaveBeenCalledTimes(1);
+      expect(onExport).toHaveBeenCalledWith();
+    });
+
+    it('disables the footer and shows the exporting label while the export is pending', async () => {
+      const pending = deferred();
+      const onExport = jest.fn(() => pending.promise);
+      await renderEditor({ onExport });
+
+      fireEvent.click(screen.getByTestId('link-export'));
+      await waitFor(() =>
+        expect(screen.getByTestId('link-export')).toHaveTextContent(
+          linkExportingLabel(),
+        ),
+      );
+      for (const id of footerIds) {
+        expect(screen.getByTestId(id)).toBeDisabled();
+      }
+
+      fireEvent.click(screen.getByTestId('link-export'));
+      expect(onExport).toHaveBeenCalledTimes(1);
+
+      pending.resolve();
+      await waitFor(() =>
+        expect(screen.getByTestId('link-export')).toHaveTextContent(
+          linkExportLabel(),
+        ),
+      );
+      for (const id of footerIds) {
+        expect(screen.getByTestId(id)).not.toBeDisabled();
+      }
+    });
+
+    it('swallows a rejecting onExport and re-enables the button', async () => {
+      const onExport = jest.fn().mockRejectedValue(new Error('boom'));
+      await renderEditor({ onExport });
+
+      fireEvent.click(screen.getByTestId('link-export'));
+      await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+      await waitFor(() => {
+        const button = screen.getByTestId('link-export');
+        expect(button).toHaveTextContent(linkExportLabel());
+        expect(button).not.toBeDisabled();
+      });
+    });
+
+    it('throws nothing when clicked without an onExport', async () => {
+      await renderEditor();
+      expect(() => fireEvent.click(screen.getByTestId('link-export'))).not.toThrow();
+      await waitFor(() =>
+        expect(screen.getByTestId('link-export')).not.toBeDisabled(),
+      );
+      expect(screen.getByTestId('link-export')).toHaveTextContent(linkExportLabel());
+    });
   });
 });
 

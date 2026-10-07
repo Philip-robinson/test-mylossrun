@@ -285,4 +285,65 @@ describe('DocumentList', () => {
       document.querySelectorAll(`[data-help-id="${documentListStatusHelpId()}"]`),
     ).toHaveLength(2);
   });
+
+  describe('the row actions column', () => {
+    const mixedRows = [
+      row({ pdfId: '1', name: 'done.pdf', status: 'COMPLETED', tableCount: 2 }),
+      row({ pdfId: '2', name: 'ready.pdf', status: 'READY_FOR_REVIEW' }),
+      row({ pdfId: '3', name: 'new.pdf', status: 'ALLOCATED' }),
+    ];
+
+    function renderList(props = {}) {
+      const handlers = {
+        onSelectPdf: jest.fn(),
+        onDownloadOriginal: jest.fn().mockResolvedValue(undefined),
+        onExport: jest.fn().mockResolvedValue(undefined),
+      };
+      render(<DocumentList hasLoaded pdfs={mixedRows} {...handlers} {...props} />);
+      return handlers;
+    }
+
+    const bodyRows = () => within(screen.getAllByRole('rowgroup')[1]).getAllByRole('row');
+
+    test('every body row, active or not, has a menu button', () => {
+      renderList();
+
+      expect(screen.getAllByTestId('document-row-menu-button')).toHaveLength(3);
+      for (const bodyRow of bodyRows()) {
+        expect(within(bodyRow).getByTestId('document-row-menu-button')).toBeInTheDocument();
+      }
+    });
+
+    test('the header gains a sixth, empty cell', () => {
+      renderList();
+
+      const headerRow = within(screen.getAllByRole('rowgroup')[0]).getByRole('row');
+      const headerCells = within(headerRow).getAllByRole('columnheader');
+      expect(headerCells).toHaveLength(6);
+      expect(headerCells[5]).toHaveTextContent('');
+    });
+
+    test('every body row has six cells', () => {
+      renderList();
+
+      for (const bodyRow of bodyRows()) {
+        expect(within(bodyRow).getAllByRole('cell')).toHaveLength(6);
+      }
+    });
+
+    test('the menu actions receive the row pdf and do not open the document', async () => {
+      const handlers = renderList();
+      const [completedRow] = bodyRows();
+
+      await userEvent.click(within(completedRow).getByTestId('document-row-menu-button'));
+      await userEvent.click(screen.getByTestId('document-row-download-original'));
+      expect(handlers.onDownloadOriginal).toHaveBeenCalledWith(mixedRows[0]);
+
+      await userEvent.click(within(completedRow).getByTestId('document-row-menu-button'));
+      await userEvent.click(screen.getByTestId('document-row-export'));
+      expect(handlers.onExport).toHaveBeenCalledWith(mixedRows[0]);
+
+      expect(handlers.onSelectPdf).not.toHaveBeenCalled();
+    });
+  });
 });

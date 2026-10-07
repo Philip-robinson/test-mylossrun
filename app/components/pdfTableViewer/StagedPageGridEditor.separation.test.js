@@ -101,7 +101,6 @@ function baseProps(overrides = {}) {
     layerVisibility: { rows: true, columns: true, special: true, colours: true },
     dim: false,
     onEditTables: jest.fn(),
-    onCreatedTable: jest.fn(),
     pdfId: 'pdf-1',
     ...overrides,
   };

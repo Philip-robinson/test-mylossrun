@@ -16,6 +16,8 @@ import {
   mergeCalcCellsResponse,
   mergeFindGridLines,
   mapAllTables,
+  softDeleteTables,
+  deleteTablesUnlinking,
   mergeMap,
   mergeRolesByTableId,
   mergeTargetSpan,
@@ -43,6 +45,7 @@ import {
   withCellSpan,
   leadingSquaresBounds,
   linkedTablesWithParents,
+  linkLabelToggleTarget,
   additionalTables,
   tableSetChanged,
   linkLabelText,
@@ -52,6 +55,9 @@ import {
   LINK_LABEL_ROOT,
   LINK_LABEL_JOINED,
   LINK_LABEL_PLAIN,
+  nearestTableToPoint,
+  overviewEntryTableId,
+  pointFractionInRect,
 } from 'components/pdfTableViewer/tableSupportUtils';
 
 // A metadata table whose bounds already equal its column/row sums, so the idempotent
@@ -132,6 +138,124 @@ describe('overlapArea', () => {
         { left: 0.1, top: 0, width: 0.1, height: 0.1 }
       )
     ).toBe(0);
+  });
+});
+
+describe('pointFractionInRect', () => {
+  const rect = { left: 100, top: 50, width: 200, height: 400 };
+
+  it('is the fraction of an interior point', () => {
+    expect(pointFractionInRect(150, 150, rect)).toEqual({
+      x: 0.25,
+      y: 0.25,
+      width: 200,
+      height: 400,
+    });
+  });
+
+  it('clamps points left of / above the rect to 0', () => {
+    const p = pointFractionInRect(10, 0, rect);
+    expect(p.x).toBe(0);
+    expect(p.y).toBe(0);
+  });
+
+  it('clamps points right of / below the rect to 1', () => {
+    const p = pointFractionInRect(1000, 2000, rect);
+    expect(p.x).toBe(1);
+    expect(p.y).toBe(1);
+  });
+
+  it('gives 0 rather than NaN for a zero-size rect', () => {
+    const p = pointFractionInRect(5, 5, { left: 0, top: 0, width: 0, height: 0 });
+    expect(p.x).toBe(0);
+    expect(p.y).toBe(0);
+    expect(Number.isNaN(p.x)).toBe(false);
+    expect(Number.isNaN(p.y)).toBe(false);
+  });
+
+  it('passes the rect width and height through', () => {
+    const p = pointFractionInRect(0, 0, { left: 0, top: 0, width: 640, height: 480 });
+    expect(p.width).toBe(640);
+    expect(p.height).toBe(480);
+  });
+});
+
+describe('nearestTableToPoint', () => {
+  const at = (tableId, left, top, width, height) => ({
+    tableId,
+    bounds: { left, top, width, height },
+  });
+
+  it('is null for an empty or missing list', () => {
+    const point = { x: 0.5, y: 0.5, width: 100, height: 100 };
+    expect(nearestTableToPoint([], point)).toBeNull();
+    expect(nearestTableToPoint(undefined, point)).toBeNull();
+  });
+
+  it('selects the table containing the point over a neighbour with a nearer edge', () => {
+    const big = at('big', 0, 0, 0.5, 0.5);
+    const neighbour = at('neighbour', 0.5, 0, 0.5, 0.5);
+    // Point is inside `big` but only 0.01 from `neighbour`'s left edge.
+    const point = { x: 0.49, y: 0.25, width: 100, height: 100 };
+    expect(nearestTableToPoint([neighbour, big], point)).toBe(big);
+  });
+
+  it('selects the closest table by pixel distance when the point is outside every table', () => {
+    const a = at('a', 0, 0, 0.2, 0.2);
+    const b = at('b', 0.6, 0.6, 0.2, 0.2);
+    const point = { x: 0.5, y: 0.5, width: 100, height: 100 };
+    expect(nearestTableToPoint([a, b], point)).toBe(b);
+  });
+
+  it('measures distance in pixels, not page fractions', () => {
+    // Fraction distance: horizontal 0.2 to `side`, vertical 0.3 to `below` -> `side`
+    // is nearer in fractions. Pixels (width 100, height 10): 20 to `side`, 3 to `below`.
+    const side = at('side', 0.7, 0.4, 0.2, 0.2);
+    const below = at('below', 0.4, 0.8, 0.2, 0.2);
+    const point = { x: 0.5, y: 0.5, width: 100, height: 10 };
+    expect(nearestTableToPoint([side, below], point)).toBe(below);
+  });
+
+  it('selects the smaller of two nested tables containing the point', () => {
+    const outer = at('outer', 0, 0, 1, 1);
+    const inner = at('inner', 0.4, 0.4, 0.2, 0.2);
+    const point = { x: 0.5, y: 0.5, width: 100, height: 100 };
+    expect(nearestTableToPoint([outer, inner], point)).toBe(inner);
+  });
+
+  it('selects the earlier of two equal-area tables at equal distance', () => {
+    const left = at('left', 0, 0.4, 0.2, 0.2);
+    const right = at('right', 0.8, 0.4, 0.2, 0.2);
+    const point = { x: 0.5, y: 0.5, width: 100, height: 100 };
+    expect(nearestTableToPoint([left, right], point)).toBe(left);
+    expect(nearestTableToPoint([right, left], point)).toBe(right);
+  });
+});
+
+describe('overviewEntryTableId', () => {
+  const deep = { tableId: 'deep' };
+  const child = { tableId: 'child', next: { deep } };
+  const root = { tableId: 'root', next: { child } };
+  const other = { tableId: 'other' };
+  const tables = [other, root];
+
+  it('returns a top-level id itself', () => {
+    expect(overviewEntryTableId(tables, 'root')).toBe('root');
+    expect(overviewEntryTableId(tables, 'other')).toBe('other');
+  });
+
+  it("returns the root for a member of the root's next map", () => {
+    expect(overviewEntryTableId(tables, 'child')).toBe('root');
+  });
+
+  it('returns the top-level root for a member nested two levels deep', () => {
+    expect(overviewEntryTableId(tables, 'deep')).toBe('root');
+  });
+
+  it('is null for an unknown id, a null id or a missing list', () => {
+    expect(overviewEntryTableId(tables, 'nope')).toBeNull();
+    expect(overviewEntryTableId(tables, null)).toBeNull();
+    expect(overviewEntryTableId(undefined, 'root')).toBeNull();
   });
 });
 
@@ -2406,6 +2530,31 @@ describe('linkLabelText', () => {
   });
 });
 
+describe('linkLabelToggleTarget', () => {
+  const child = tbl('c', 1, 0.1, 0.1, 0.2, 0.2);
+  const rootTable = { ...tbl('r', 0, 0.1, 0.1, 0.2, 0.2), name: 'Root', next: { c: child } };
+  const loner = tbl('x', 0, 0.6, 0.6, 0.2, 0.2);
+  const parents = linkedTablesWithParents([rootTable, loner]);
+
+  it('starts a session on a Selected or Linked table', () => {
+    expect(linkLabelToggleTarget(loner, LINK_LABEL_PLAIN, parents, null)).toBe('x');
+    expect(linkLabelToggleTarget(rootTable, LINK_LABEL_ROOT, parents, null)).toBe('r');
+  });
+
+  it('ends the session from End Linking', () => {
+    expect(linkLabelToggleTarget(loner, LINK_LABEL_END_LINKING, parents, 'x')).toBeNull();
+  });
+
+  it('starts a session on the root of a joined table', () => {
+    expect(linkLabelToggleTarget(child, LINK_LABEL_JOINED, parents, null)).toBe('r');
+    expect(linkLabelToggleTarget(child, LINK_LABEL_JOINED, parents, 'x')).toBe('r');
+  });
+
+  it('ends the session open on the root of a joined table', () => {
+    expect(linkLabelToggleTarget(child, LINK_LABEL_JOINED, parents, 'r')).toBeNull();
+  });
+});
+
 // ---- canJoinLinkGroup ----------------------------------------------------------------
 
 describe('canJoinLinkGroup', () => {
@@ -2761,5 +2910,246 @@ describe('buildCalcReplacement — split bottom row', () => {
     const resultTable = tbl('R', 0, 0, 0, 0.1, 0.1);
     delete resultTable.splitBottomRow;
     expect(buildCalcReplacement(menuTable, resultTable).splitBottomRow).toBe(true);
+  });
+});
+
+describe('softDeleteTables', () => {
+  const t = (tableId, pdfPage, extra = {}) => ({ tableId, pdfPage, next: null, ...extra });
+
+  it('deletes every table on every page when the page is null', () => {
+    const list = [t('a', 0, { next: { c: t('c', 1) } }), t('b', 1)];
+    const out = softDeleteTables(list, null);
+    // The root is deleted, so its member is unlinked first and comes back top-level.
+    expect(out.map((x) => x.tableId)).toEqual(['a', 'b', 'c']);
+    expect(out.every((x) => x.deleted === true)).toBe(true);
+    expect(out[0].next).toBeNull();
+  });
+
+  it("deletes only the given page's tables and keeps the other page's by reference", () => {
+    const other = t('b', 1);
+    const out = softDeleteTables([t('a', 0), other], 0);
+    expect(out[0].deleted).toBe(true);
+    expect(out[1]).toBe(other);
+    expect(out[1].deleted).toBeUndefined();
+  });
+
+  it('removes a member joined on the given page from its root on another page, and deletes it', () => {
+    const root = t('r', 0, { next: { m: t('m', 1) }, grid: [['r'], ['m']] });
+    const out = softDeleteTables([root], 1);
+    expect(out.map((x) => x.tableId)).toEqual(['r', 'm']);
+    expect(out[0].deleted).toBeUndefined();
+    expect(out[0].next).toBeNull();
+    expect(out[0].grid).toBeNull();
+    expect(out[1].deleted).toBe(true);
+  });
+
+  it('unlinks the members of a root deleted on the given page, leaving them undeleted', () => {
+    const member = t('m', 1);
+    const out = softDeleteTables(
+      [t('r', 0, { next: { m: member }, grid: [['r'], ['m']] })],
+      0
+    );
+    expect(out[0].deleted).toBe(true);
+    expect(out[0].next).toBeNull();
+    expect(out[0].grid).toBeNull();
+    expect(out[1]).toBe(member);
+  });
+
+  it('returns the very same list when every matching table is already deleted', () => {
+    const list = [t('a', 0, { deleted: true }), t('b', 1)];
+    expect(softDeleteTables(list, 0)).toBe(list);
+  });
+});
+
+describe('deleteTablesUnlinking', () => {
+  const t = (tableId, pdfPage, tableInPage = 0, extra = {}) => ({
+    tableId,
+    pdfPage,
+    tableInPage,
+    next: null,
+    ...extra,
+  });
+  const byId = (list, id) => list.find((x) => x.tableId === id);
+  const ids = (list) => list.map((x) => x.tableId);
+  const only = (id) => (x) => x.tableId === id;
+
+  const above = t('a', 0, 0);
+  const m1 = t('m1', 1);
+  const m2 = t('m2', 2);
+  const m3 = t('m3', 3);
+  const below = t('z', 4);
+  const group = (extra = {}) => [
+    above,
+    t('r', 0, 1, {
+      next: { m1, m2, m3 },
+      grid: [['r'], ['m1'], ['m2'], ['m3']],
+      ...extra,
+    }),
+    below,
+  ];
+
+  it('returns the very same list when nothing is selected', () => {
+    const list = group();
+    expect(deleteTablesUnlinking(list, () => false)).toBe(list);
+  });
+
+  it('deletes a plain top-level table and keeps the others by reference', () => {
+    const out = deleteTablesUnlinking([above, below], only('a'));
+    expect(out[0].deleted).toBe(true);
+    expect(out[1]).toBe(below);
+  });
+
+  describe('deleting a root', () => {
+    const out = () => deleteTablesUnlinking(group(), only('r'));
+
+    it('returns every member to the top-level list in document order', () => {
+      expect(ids(out())).toEqual(['a', 'r', 'm1', 'm2', 'm3', 'z']);
+    });
+
+    it("nulls the root's next and grid and deletes it", () => {
+      const r = byId(out(), 'r');
+      expect(r.next).toBeNull();
+      expect(r.grid).toBeNull();
+      expect(r.deleted).toBe(true);
+    });
+
+    it('leaves the members undeleted, by reference', () => {
+      const list = out();
+      expect(byId(list, 'm1')).toBe(m1);
+      expect(byId(list, 'm2')).toBe(m2);
+      expect(byId(list, 'm3')).toBe(m3);
+    });
+  });
+
+  describe('deleting one member of a surviving group', () => {
+    it("removes it from the root's next and returns it top-level, deleted", () => {
+      const out = deleteTablesUnlinking(group(), only('m2'));
+      expect(ids(out)).toEqual(['a', 'r', 'm2', 'z']);
+      expect(Object.keys(byId(out, 'r').next)).toEqual(['m1', 'm3']);
+      expect(byId(out, 'r').deleted).toBeUndefined();
+      expect(byId(out, 'm2').deleted).toBe(true);
+    });
+
+    it('compacts the single-column grid around the removed member', () => {
+      const out = deleteTablesUnlinking(group(), only('m2'));
+      expect(byId(out, 'r').grid).toEqual([['r'], ['m1'], ['m3']]);
+    });
+
+    it("keeps the other members' places in a multi-column grid", () => {
+      const out = deleteTablesUnlinking(
+        group({
+          grid: [
+            ['r', 'm1'],
+            ['m2', 'm3'],
+          ],
+        }),
+        only('m1')
+      );
+      // m1's column still holds m3, so it is not dropped: the cell is left blank.
+      expect(byId(out, 'r').grid).toEqual([
+        ['r', ''],
+        ['m2', 'm3'],
+      ]);
+    });
+
+    it('drops a column the removed member leaves empty', () => {
+      const out = deleteTablesUnlinking(
+        group({
+          grid: [
+            ['r', 'm1', ''],
+            ['m2', '', 'm3'],
+          ],
+        }),
+        only('m1')
+      );
+      expect(byId(out, 'r').grid).toEqual([
+        ['r', ''],
+        ['m2', 'm3'],
+      ]);
+    });
+
+    it('leaves a null grid null', () => {
+      const out = deleteTablesUnlinking(group({ grid: null }), only('m1'));
+      expect(byId(out, 'r').grid).toBeNull();
+      expect(Object.keys(byId(out, 'r').next)).toEqual(['m2', 'm3']);
+    });
+
+    it('nulls the grid when only the root would be left in it', () => {
+      const out = deleteTablesUnlinking(
+        group({ grid: [['r'], ['m1']] }),
+        only('m1')
+      );
+      expect(byId(out, 'r').grid).toBeNull();
+      expect(Object.keys(byId(out, 'r').next)).toEqual(['m2', 'm3']);
+    });
+  });
+
+  it("nulls the root's next and grid when its last member is deleted", () => {
+    const list = [t('r', 0, 0, { next: { m1 }, grid: [['r'], ['m1']] })];
+    const out = deleteTablesUnlinking(list, only('m1'));
+    expect(ids(out)).toEqual(['r', 'm1']);
+    expect(out[0].next).toBeNull();
+    expect(out[0].grid).toBeNull();
+    expect(out[1].deleted).toBe(true);
+  });
+
+  it("unlinks a deleted root's members and deletes a selected one with it", () => {
+    const out = deleteTablesUnlinking(
+      group(),
+      (x) => x.tableId === 'r' || x.tableId === 'm2'
+    );
+    expect(ids(out)).toEqual(['a', 'r', 'm1', 'm2', 'm3', 'z']);
+    expect(byId(out, 'r').deleted).toBe(true);
+    expect(byId(out, 'r').next).toBeNull();
+    expect(byId(out, 'm2').deleted).toBe(true);
+    expect(byId(out, 'm1')).toBe(m1);
+    expect(byId(out, 'm3')).toBe(m3);
+  });
+
+  describe('a member that carries its own group', () => {
+    const g = t('g', 5);
+    const nested = (extra = {}) => [
+      t('r', 0, 0, {
+        next: { m1: t('m1', 1, 0, { next: { g }, grid: [['m1'], ['g']], ...extra }) },
+        grid: [['r'], ['m1']],
+      }),
+    ];
+
+    it('removes a selected grandchild from its direct parent', () => {
+      const out = deleteTablesUnlinking(nested(), only('g'));
+      expect(ids(out)).toEqual(['r', 'g']);
+      const mid = out[0].next.m1;
+      expect(mid.next).toBeNull();
+      expect(mid.grid).toBeNull();
+      expect(out[0].grid).toEqual([['r'], ['m1']]);
+      expect(out[1].deleted).toBe(true);
+    });
+
+    it('unlinks the grandchildren of a deleted member', () => {
+      const out = deleteTablesUnlinking(nested(), only('m1'));
+      expect(ids(out)).toEqual(['r', 'm1', 'g']);
+      expect(out[0].next).toBeNull();
+      expect(out[1].next).toBeNull();
+      expect(out[1].deleted).toBe(true);
+      expect(out[2]).toBe(g);
+    });
+  });
+});
+
+describe('mergeFindGridLines — keepIds', () => {
+  // The returned rect covers A fully and clips B, so A is matched and B is an overlapper.
+  const tables = () => [
+    tbl('A', 0, 0, 0, 0.3, 0.3),
+    tbl('B', 0, 0.25, 0, 0.1, 0.3),
+  ];
+
+  it('never hard-deletes an overlapper whose id is kept', () => {
+    const result = mergeFindGridLines(tables(), 0, [ret(0, 0, 0.3, 0.3)], new Set(['B']));
+    expect(result.map((x) => x.tableId)).toEqual(['A', 'B']);
+  });
+
+  it('still hard-deletes the overlapper without keepIds', () => {
+    const result = mergeFindGridLines(tables(), 0, [ret(0, 0, 0.3, 0.3)]);
+    expect(result.map((x) => x.tableId)).toEqual(['A']);
   });
 });

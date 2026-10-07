@@ -3,6 +3,7 @@ import {
   exportableTables,
   exportableTableIds,
   saveBlob,
+  tableExcelFilename,
 } from './exportUtils';
 
 describe('excelFilename', () => {
@@ -26,6 +27,44 @@ describe('excelFilename', () => {
   it('still names a file when there is no original to name it after', () => {
     expect(excelFilename(undefined)).toBe('.xlsx');
     expect(excelFilename(null)).toBe('.xlsx');
+  });
+});
+
+describe('tableExcelFilename', () => {
+  const separator = ' - ';
+  const pathSeparatorPattern = /[/\\]/g;
+  const pathSeparatorReplacement = '-';
+  const filename = (originalFilename, tableName) =>
+    tableExcelFilename(
+      originalFilename,
+      tableName,
+      separator,
+      pathSeparatorPattern,
+      pathSeparatorReplacement
+    );
+
+  it('joins the document stem and the table name', () => {
+    expect(filename('report.pdf', 'Claims')).toBe('report - Claims.xlsx');
+  });
+
+  it('replaces each path separator in the table name with a hyphen', () => {
+    expect(filename('report.pdf', 'a/b\\c')).toBe('report - a-b-c.xlsx');
+  });
+
+  it('falls back to the document workbook name for a blank or missing table name', () => {
+    for (const tableName of ['', '   ', null, undefined]) {
+      expect(filename('report.pdf', tableName)).toBe(excelFilename('report.pdf'));
+    }
+  });
+
+  it('replaces path separators with the replacement it is given', () => {
+    expect(
+      tableExcelFilename('report.pdf', 'a/b', separator, /[/]/g, '_')
+    ).toBe('report - a_b.xlsx');
+  });
+
+  it('keeps the whole document name as the stem when it has no extension', () => {
+    expect(filename('report', 'Claims')).toBe('report - Claims.xlsx');
   });
 });
 

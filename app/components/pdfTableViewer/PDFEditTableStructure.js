@@ -35,13 +35,18 @@ import {
   exportableTableIds,
   exportableTables,
   saveBlob,
+  tableExcelFilename,
 } from 'components/pdfTableViewer/exportUtils';
 import {
+  boundaryPassEditorMode,
   boundaryPassScreenId,
   confirmedTableStage,
+  contentsPassEditorMode,
   contentsPassScreenId,
+  documentOverviewButtonFontSize,
   documentOverviewEntryHelpId,
   documentOverviewExportHelpId,
+  documentOverviewExportTableHelpId,
   documentOverviewHelpId,
   documentOverviewLinkHelpId,
   documentOverviewReviewHelpId,
@@ -52,9 +57,14 @@ import {
   resizeDebounceMs,
   reviewTableScreenId,
   sectionTitlePlaceholderColumnName,
+  selectionScrollIntoViewOptions,
   stagedGridEditorEnabled,
+  tableExportFilenameSeparator,
+  tableExportFilenamePathSeparatorPattern,
+  tableExportFilenamePathSeparatorReplacement,
 } from 'config';
 import useScreenHelp from 'components/help/useScreenHelp';
+import { gridArrangementChanged } from 'components/pdfTableViewer/unsavedChangesUtils';
 import { useEditorPass } from 'components/EditorPassProvider';
 import {
   linkedMembers,
@@ -67,8 +77,10 @@ import {
   fillGridCells,
   mergeCalcCellsResponse,
   mergeRolesByTableId,
+  nearestTableToPoint,
   normaliseTableBounds,
   overlaps,
+  overviewEntryTableId,
   removeFromLinkGroup,
   tableCountLabel,
   tableSizeLabel,
@@ -257,7 +269,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // editor-pass context. Absent outside a provider, which a test that renders this
   // component alone is.
   const editorPass = useEditorPass();
-  const setEditorPass = editorPass ? editorPass.setPass : null;
+  const setEditorScreen = editorPass ? editorPass.setScreen : null;
+  const setPassActions = editorPass ? editorPass.setPassActions : null;
   // tableId of the root whose linked-tables list is expanded in the Document Overview, or
   // null when none is. Either size line opens it — "Additional tables N" and "A × B
   // Tables" behave the same way. Only one is open at a time: the list is a way of reaching a linked
@@ -275,12 +288,41 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // Per-entry refs keyed by tableId so the selected entry can be scrolled into
   // the left panel's scroll area.
   const entryRefs = useRef({});
+  // The tableId a Document Overview click is selecting, so the scroll effect leaves the list
+  // where the user clicked it. Null when the latest selection came from anywhere else.
+  const overviewClickedTableIdRef = useRef(null);
+  // Per-thumbnail refs keyed by page index so the selected page can be scrolled into the
+  // Pages column, and the page a thumbnail click is moving to, so that click is not scrolled.
+  const thumbnailRefs = useRef({});
+  const thumbnailClickedPageRef = useRef(null);
   // The centre editor's `leaveFor`, registered by it. Null while the editor is not mounted
   // (the review and linking panels), in which case there is nothing held to settle.
   const leaveEditorRef = useRef(null);
   const registerLeave = useCallback((fn) => {
     leaveEditorRef.current = fn;
   }, []);
+  // The centre editor's pass switch, registered by it. Null while the editor is not mounted.
+  const passSwitchRef = useRef(null);
+  const registerPassSwitch = useCallback((fn) => {
+    passSwitchRef.current = fn;
+  }, []);
+  // The Grid Editor's save list, registered by it. Null while that panel is not mounted.
+  // What it would save when it opened is kept beside it, because an arrangement the panel
+  // laid out for itself is not a change the user made.
+  const savedTablesRef = useRef(null);
+  const linkOpenedWithRef = useRef(null);
+  const registerLinkSave = useCallback((fn) => {
+    savedTablesRef.current = fn;
+    linkOpenedWithRef.current = fn ? fn() : null;
+  }, []);
+  // Whether a full panel is up, read after an await, when this render's centreMode is stale.
+  const panelOpenRef = useRef(false);
+  // Set while a Validate tab is leaving a full panel. A ref, because `saving` only reaches a
+  // second action fired in the same tick after a re-render.
+  const leavingPanelRef = useRef(false);
+  // The pass the page editor is to mount in after a Validate tab moved off a full panel, or
+  // null. Cleared once the editor reports that pass.
+  const [requestedEditorMode, setRequestedEditorMode] = useState(null);
   const rightRef = useRef(null);
   const [rightWidth, setRightWidth] = useState(0);
 
@@ -338,6 +380,9 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     setReviewTableId(null);
     setError(null);
     entryRefs.current = {};
+    overviewClickedTableIdRef.current = null;
+    thumbnailRefs.current = {};
+    thumbnailClickedPageRef.current = null;
   }, [pdfId]);
 
   // Load thumbnails on mount and whenever the pdf or measured right-pane width
@@ -403,15 +448,38 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     };
   }, [pdfId]);
 
-  // Scroll the selected left entry into view (block: 'nearest' keeps the page
-  // from scrolling). Keyed on selectedTableId so it only fires on a new hover.
+  // Scroll the Document Overview entry holding the selected table into view — the table's own
+  // entry, or its root's when it is a linked member, since only top-level entries carry refs.
+  // A selection made by clicking the list itself is not scrolled: the user is already looking
+  // at the entry they clicked. The 'nearest' options keep the page itself from scrolling.
+  //
+  // `tables` is read but deliberately not a dependency, so an edit does not scroll the list;
+  // only a new selection does.
   useEffect(() => {
+    const clicked = overviewClickedTableIdRef.current;
+    overviewClickedTableIdRef.current = null;
     if (selectedTableId == null) return;
-    const el = entryRefs.current[selectedTableId];
+    if (clicked === selectedTableId) return;
+    const el = entryRefs.current[overviewEntryTableId(tables, selectedTableId)];
     if (el && typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ block: 'nearest' });
+      el.scrollIntoView(selectionScrollIntoViewOptions());
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTableId]);
+
+  // Scroll the selected page's thumbnail into the Pages column on a page change, on the
+  // thumbnails arriving, and on returning to the boundary pass (the column is absent in the
+  // contents pass, so there is no element to scroll). A page chosen by clicking its own
+  // thumbnail is not scrolled.
+  useEffect(() => {
+    const clicked = thumbnailClickedPageRef.current;
+    thumbnailClickedPageRef.current = null;
+    if (clicked === selectedPage) return;
+    const el = thumbnailRefs.current[selectedPage];
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView(selectionScrollIntoViewOptions());
+    }
+  }, [selectedPage, editorMode, thumbnails.length]);
 
   // Default the selection to the first non-deleted table on the displayed page whenever the
   // current selection is not a live table on that page — i.e. on initial load, on a page
@@ -767,8 +835,10 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
 
   // Move to `nextPage`, recalculating every table that changed on the page being left and
   // clearing the change set. The page advances FIRST (synchronously) so navigation is never
-  // blocked by the backgrounded calculate-cells call.
-  const recalcAndGoToPage = (nextPage) => {
+  // blocked by the backgrounded calculate-cells call. A `selectTableId` is selected together
+  // with the page change, once the centre editor has settled, so the default-selection effect
+  // sees it on the new page rather than replacing it with that page's first table.
+  const recalcAndGoToPage = (nextPage, selectTableId) => {
     const recalcPage = selectedPage;
     const changedIds = Object.keys(changedTableIds);
 
@@ -784,6 +854,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
       // moves before the save so navigation is never blocked on the round trip.
       setChangedTableIds({});
       setSelectedPage(nextPage);
+      if (selectTableId !== undefined) setSelectedTableId(selectTableId);
 
       recalcPageTables(recalcPage, changedIds);
       // Persist what leaving settled. Requested rather than called, so the flush above is in
@@ -806,33 +877,48 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     recalcAndGoToPage(selectedPage >= last ? 0 : selectedPage + 1);
   };
 
-  // A right-column thumbnail click is a page change like Prev/Next, so it recalculates the
-  // page being left too. Clicking the page already displayed leaves no page, so it does
-  // nothing.
+  // A right-column thumbnail click selects a table: the one nearest `point` on the image, or
+  // the page's first table when the click carried no point (the page title). On another page
+  // it is a page change like Prev/Next, recalculating the page being left, with the table
+  // selected along with the move; on the page already displayed it only selects the table.
   // While a panel (grid editor / review) owns the middle panel there is no page editor to
   // move, so a thumbnail click is ignored rather than silently changing the page behind the
   // panel — which would also fire a recalculation for a page the user cannot see.
-  const onThumbnailClick = (index) => {
+  const onThumbnailClick = (index, point) => {
     if (centreMode !== 'editor') return;
     // While a linking session is open a thumbnail click picks a table to join the group, so
     // the normal page-changing function of the click is disabled.
     if (linkingRootId != null) return;
-    if (index === selectedPage) return;
-    recalcAndGoToPage(index);
+    const onPage = tablesOnPage(tables, index);
+    const target =
+      point != null ? nearestTableToPoint(onPage, point) : onPage[0] ?? null;
+    if (index !== selectedPage) {
+      thumbnailClickedPageRef.current = index;
+      if (target) recalcAndGoToPage(index, target.tableId);
+      else recalcAndGoToPage(index);
+    } else if (target) {
+      setSelectedTableId(target.tableId);
+    }
   };
 
   // A Document Overview entry click selects that table for editing. The list spans the whole
   // document, so an entry off the displayed page moves the page with it — a page change like
-  // any other, recalculating what changed on the page being left. Without the move the
-  // default-selection effect would take the selection straight back.
+  // any other, recalculating what changed on the page being left — and is selected with the
+  // move, which may be held until the centre editor settles. Selected any earlier, the
+  // default-selection effect would take it straight back on the old page. The click is
+  // recorded so the list is not scrolled under the user's pointer.
   //
   // A deleted row is not selectable: it is not editable, and its own click opens the
   // Reinstate menu. Clicking the name selects too, and starts the inline rename with it —
   // renaming a table is a reason to be looking at it.
   const onTableEntryClick = (table) => {
     if (table.deleted) return;
-    if (table.pdfPage !== selectedPage) recalcAndGoToPage(table.pdfPage);
-    setSelectedTableId(table.tableId);
+    overviewClickedTableIdRef.current = table.tableId;
+    if (table.pdfPage !== selectedPage) {
+      recalcAndGoToPage(table.pdfPage, table.tableId);
+    } else {
+      setSelectedTableId(table.tableId);
+    }
   };
 
   // Review the extracted output of a table: SAVE FIRST, then hand the middle panel over
@@ -852,25 +938,79 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     settle(async (flushed) => {
       const saved = await handleSave(flushed);
       if (!saved) return;
-      setLinkRootId(null);
       setReviewTableId(tableId);
     });
   };
+
+  // Leave the Review screen with the reviewed table selected, moving to its page if need be.
+  // The updates are made together so they batch, and the default-selection effect sees the
+  // new selection on the new page rather than overriding it. The page is set directly: Close
+  // has just saved and review edits are text-only, so there is nothing to recalculate.
+  const handleReviewExit = () => {
+    const table = tables.find((t) => t.tableId === reviewTableId);
+    if (table) {
+      if (table.pdfPage !== selectedPage) setSelectedPage(table.pdfPage);
+      setSelectedTableId(reviewTableId);
+    }
+    setReviewTableId(null);
+  };
+
+  // The workbook name for one table's export.
+  const tableFilename = (table) =>
+    tableExcelFilename(
+      pdfName,
+      table?.name,
+      tableExportFilenameSeparator(),
+      tableExportFilenamePathSeparatorPattern(),
+      tableExportFilenamePathSeparatorReplacement()
+    );
+
+  // Exports one root table (with its linked group), saving first when there is something to save.
+  const exportSingleTable = async (tableId, committed) => {
+    if (saving || exporting) return false;
+    setExporting(true);
+    try {
+      if (committed || dirty) {
+        const saved = await handleSave(
+          committed ? { tables: committed } : undefined
+        );
+        if (!saved) return false;
+      }
+      const table = (committed ?? tables).find((t) => t.tableId === tableId);
+      const filename = tableFilename(table);
+      const workbook = await tableToExcel({
+        pdfId,
+        rootTableIds: [tableId],
+        filename,
+      });
+      saveBlob(workbook, filename);
+      return true;
+    } catch (err) {
+      toast.error(err.message);
+      return false;
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Export the reviewed table alone; the user stays on the Review screen.
+  const handleExportTable = () => exportSingleTable(reviewTableId, null);
+
   // Leaving the editor for the PDF list unmounts everything, and the document's state goes
   // with it. Settle and save first, for the same reason a page change does; the move is made
   // whether or not the save succeeded, because the failed save has raised its own toast and
   // refusing to navigate would trap the user in the editor.
+  // Leave the editor for the PDF list. Settles what the centre editor holds, then the
+  // leaveRequest effect saves in the background only when there is something to save. The
+  // move never waits for, and is never stopped by, a save — a failed one raises its own toast.
+  const [leaveRequest, setLeaveRequest] = useState(0);
   const handleAllFiles = () => {
     const settle = leaveEditorRef.current ?? ((move) => move(null));
-    settle(async (flushed) => {
-      await handleSave(flushed);
-      onAllFiles();
-    });
+    settle(() => setLeaveRequest((n) => n + 1));
   };
 
 
-  // Export the whole document: SAVE FIRST, then build one workbook covering every table
-  // still in the document.
+  // Settle the centre editor, SAVE, then build one workbook of rootTableIds under filename.
   //
   // The save is not optional, for the reason handleReview's is not: the back end rebuilds
   // every table from this document's metadata in S3, so anything still local would be
@@ -878,9 +1018,9 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // A failed save has already raised its own toast, so the export is simply abandoned.
   //
   // Unlike the Export this replaces, it does not leave for the PDF list. The export is now
-  // a document-level action reachable at any time, and taking the user out of the editor
-  // for saving a copy of their work would be surprising.
-  const handleExport = async () => {
+  // reachable at any time, and taking the user out of the editor for saving a copy of their
+  // work would be surprising.
+  const settleSaveAndExport = async (rootTableIds, filename) => {
     if (saving || exporting) return;
     setExporting(true);
     try {
@@ -890,12 +1030,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
       const flushed = await new Promise((resolve) => settle(resolve));
       const saved = await handleSave(flushed);
       if (!saved) return;
-      const filename = excelFilename(pdfName);
-      const workbook = await tableToExcel({
-        pdfId,
-        rootTableIds: exportableTableIds(tables),
-        filename,
-      });
+      const workbook = await tableToExcel({ pdfId, rootTableIds, filename });
       saveBlob(workbook, filename);
     } catch (err) {
       toast.error(err.message);
@@ -904,11 +1039,22 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
     }
   };
 
+  // Export the whole document: one workbook covering every table still in the document.
+  const handleExport = () =>
+    settleSaveAndExport(exportableTableIds(tables), excelFilename(pdfName));
+
+  // Export one Document Overview entry's table (a linked root exports its merged group).
+  // It saves first because the centre editor is mounted, and leaves page and selection
+  // unchanged.
+  const handleExportEntry = (table) =>
+    settleSaveAndExport([table.tableId], tableFilename(table));
+
   // Take the pass the centre editor reports. Entering the contents pass ends any open linking
   // session: its End Linking label is inert there and the Pages list it picks from is gone, so
   // a session left open could not be ended.
   const handleEditorModeChange = useCallback((mode) => {
     setEditorMode(mode);
+    setRequestedEditorMode((current) => (current === mode ? null : current));
     if (mode !== 'border') setLinkingRootId(null);
   }, []);
 
@@ -1011,8 +1157,9 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // Which component owns the middle panel: the page editor, the grid editor, or the review
   // panel. The two targets are the single source of truth, resolved against the LIVE table
   // list, so a target that no longer names a table (a reload, a deletion) falls back to the
-  // editor rather than mounting a panel with nothing to show. Review wins over link because
-  // handleReview clears the link target as it switches.
+  // editor rather than mounting a panel with nothing to show. Review wins over link because it
+  // is tested first; a retained link target is how a review opened from the grid editor
+  // returns to it on exit.
   const linkRootTable =
     linkRootId != null
       ? tables.find((t) => t.tableId === linkRootId) ?? null
@@ -1031,20 +1178,127 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
   // One registration for all four editor screens: which one it is follows the centre mode
   // and the pass the page editor reports through onEditorModeChange, so the pass is not a
   // second call site of its own.
-  useScreenHelp(editorHelpScreenId(centreMode, editorMode));
+  const editorScreenId = editorHelpScreenId(centreMode, editorMode);
+  useScreenHelp(editorScreenId);
+  panelOpenRef.current = centreMode !== 'editor';
 
-  // The toolbar's two pass tabs are drawn from this. Reported from here rather than from
-  // the page editor, because the pass is still the pass while a full panel stands over
-  // that editor — and this is the component that knows both.
+  // The Grid Editor's save list when the user has changed it since the panel opened, else
+  // null.
+  const changedLinkArrangement = () => {
+    if (centreMode !== 'link' || !savedTablesRef.current) return null;
+    const current = savedTablesRef.current();
+    return gridArrangementChanged(current, linkOpenedWithRef.current ?? tables)
+      ? current
+      : null;
+  };
+
+  // Export the Grid Editor's root table, committing and saving a changed arrangement first;
+  // the user stays in the Grid Editor.
+  const handleExportLinkRoot = async () => {
+    if (saving || exporting) return;
+    const committed = changedLinkArrangement();
+    if (committed) onEditTables(committed);
+    const exported = await exportSingleTable(linkRootId, committed);
+    // The saved arrangement becomes the baseline, so it is not treated as a new change.
+    if (exported && committed) linkOpenedWithRef.current = committed;
+  };
+
+  // The toolbar's tabs are drawn from this. Reported from here rather than from the page
+  // editor, because this is the component that knows whether a full panel stands over it.
   useEffect(() => {
-    if (!setEditorPass) {
+    if (!setEditorScreen) {
       return undefined;
     }
 
-    setEditorPass(editorMode);
+    setEditorScreen(editorScreenId);
 
-    return () => setEditorPass(null);
-  }, [setEditorPass, editorMode]);
+    return () => setEditorScreen(null);
+  }, [setEditorScreen, editorScreenId]);
+
+  // Leave Review or the Grid Editor for the page editor in `mode`, on the panel's table. A
+  // Grid Editor arrangement the user changed is committed exactly as its own Save does, and
+  // the document is saved; a failed save keeps the panel, its toast being the feedback, and a
+  // panel the user closed by its own route while the save was pending is left closed. An
+  // unconfirmed cell edit open in the review panel is discarded.
+  const goToPassFromPanel = async (mode) => {
+    if (saving || leavingPanelRef.current) return;
+    leavingPanelRef.current = true;
+    const targetId = centreMode === 'review' ? reviewTableId : linkRootId;
+    const committed = changedLinkArrangement();
+    if (committed) onEditTables(committed);
+    let saved;
+    try {
+      saved = await handleSave(committed ? { tables: committed } : undefined);
+    } finally {
+      leavingPanelRef.current = false;
+    }
+    if (!saved || !panelOpenRef.current) return;
+    const target = (committed ?? tables).find((t) => t.tableId === targetId);
+    setReviewTableId(null);
+    setLinkRootId(null);
+    if (target) {
+      // Set directly rather than through recalcAndGoToPage: the save has just cleared the
+      // change set, so there is nothing to recalculate on the page being left.
+      setSelectedPage(target.pdfPage);
+      setSelectedTableId(target.tableId);
+    }
+    setRequestedEditorMode(mode);
+  };
+
+  // Runs in the render after All Files settled, so it sees what the settle flushed.
+  useEffect(() => {
+    if (leaveRequest === 0) return;
+    const committed = changedLinkArrangement();
+    if (dirty || committed) {
+      handleSave(committed ? { tables: committed } : undefined);
+    }
+    onAllFiles?.();
+    // handleSave and onAllFiles are redefined every render; depending on them would leave on
+    // every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaveRequest]);
+
+  // The toolbar's pass tabs. On the editor screen they make the centre editor's own switch;
+  // on a full panel they leave it for that pass.
+  const handleTabValidateBorders = () => {
+    if (saving) return;
+    if (centreMode === 'editor') {
+      passSwitchRef.current?.validateBorders();
+    } else {
+      goToPassFromPanel(boundaryPassEditorMode());
+    }
+  };
+  const handleTabValidateTables = () => {
+    if (saving) return;
+    if (centreMode === 'editor') {
+      passSwitchRef.current?.validateTables();
+    } else {
+      goToPassFromPanel(contentsPassEditorMode());
+    }
+  };
+
+  // The toolbar's tab actions, registered once through a ref so the context is not
+  // re-rendered on every edit, and cleared as this component goes.
+  const tabActionsRef = useRef({});
+  tabActionsRef.current = {
+    allFiles: handleAllFiles,
+    validateBorders: handleTabValidateBorders,
+    validateTables: handleTabValidateTables,
+  };
+
+  useEffect(() => {
+    if (!setPassActions) {
+      return undefined;
+    }
+
+    setPassActions({
+      allFiles: () => tabActionsRef.current.allFiles(),
+      validateBorders: () => tabActionsRef.current.validateBorders(),
+      validateTables: () => tabActionsRef.current.validateTables(),
+    });
+
+    return () => setPassActions(null);
+  }, [setPassActions]);
 
   // Empty only once a fetch has completed and returned no pages — not during the
   // initial pre-measurement window when thumbnails is still its empty default.
@@ -1322,13 +1576,17 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                 {/* Button row, below every text line and a SIBLING of the name Box (never
                     inside it) — the name Box's onClick starts the inline rename, so a
                     nested control would begin a rename when clicked. Rendered only for
-                    non-deleted rows: a deleted row offers no Review button and no Link
+                    non-deleted rows: a deleted row offers no Review, Export or Link
                     button, its click opening the Reinstate menu instead.
 
                     The Review button is offered on every non-deleted row, at whatever
                     stage, and always reads "Review": reviewing is a look at the extracted
                     values, not a declaration that the table is finished, so nothing is
                     gained by withholding it or by relabelling it once the values are clean.
+
+                    The Export button beside it is likewise offered on every non-deleted
+                    row, whatever its stage, and exports that row's table alone (a linked
+                    root as its merged group).
 
                     A root holding linked tables is no exception, even before its grid has
                     been laid out. The merge takes the root and whichever members the grid
@@ -1353,13 +1611,35 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                       data-help-id={documentOverviewReviewHelpId()}
                       size={'small'}
                       variant={'outlined'}
-                      sx={{ fontSize: '11px', py: 0, minWidth: 0 }}
+                      sx={{
+                        fontSize: documentOverviewButtonFontSize(),
+                        py: 0,
+                        minWidth: 0,
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleReview(t.tableId);
                       }}
                     >
                       {'Review'}
+                    </Button>
+                    <Button
+                      data-testid={'export-table'}
+                      data-help-id={documentOverviewExportTableHelpId()}
+                      size={'small'}
+                      variant={'outlined'}
+                      sx={{
+                        fontSize: documentOverviewButtonFontSize(),
+                        py: 0,
+                        minWidth: 0,
+                      }}
+                      disabled={saving || exporting}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExportEntry(t);
+                      }}
+                    >
+                      {'Export'}
                     </Button>
                     {/* Spacer so the Link button sits at the right-hand end of the row. */}
                     <Box sx={{ flexGrow: 1 }} />
@@ -1538,6 +1818,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
             onToggleLinking={setLinkingRootId}
             onEditorModeChange={handleEditorModeChange}
             onRegisterLeave={registerLeave}
+            onRegisterPassSwitch={registerPassSwitch}
+            initialEditorMode={requestedEditorMode ?? editorMode}
             deletedPreview={
               tables.find(
                 (t) => t.tableId === hoveredDeletedTableId && t.deleted
@@ -1589,8 +1871,11 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
           {thumbnails.map((thumb, index) => (
             <Box
               key={index}
+              ref={(el) => {
+                thumbnailRefs.current[index] = el;
+              }}
               data-testid={'thumbnail'}
-              onClick={() => onThumbnailClick(index)}
+              onClick={() => onThumbnailClick(index, null)}
               sx={{
                 cursor: 'pointer',
                 p: 0.5,
@@ -1625,6 +1910,11 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
                 onThumbnailTableClick={
                   linkingRootId != null ? handleJoinLinkGroup : null
                 }
+                onThumbnailPointClick={
+                  linkingRootId == null
+                    ? (point) => onThumbnailClick(index, point)
+                    : null
+                }
                 withGrid={false}
               />
             </Box>
@@ -1651,7 +1941,8 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
           every other edit here commits, it leaves the existing Save button as the single
           persistence point, and a text-only edit classifies as not geometry-changed, so nothing
           is recalculated. Its Exit saves the document through the host's own save before it
-          hands the panel back, hence onSave; exporting lives on the Document Overview. */}
+          hands the panel back, hence onSave, and it is handed onExport for a single-table
+          export of the reviewed table. */}
       {!error && centreMode !== 'editor' && (
         <Box
           data-testid={'full-panel'}
@@ -1670,7 +1961,9 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
               pdfId={pdfId}
               rootTable={linkRootTable}
               tables={tables}
+              onRegisterSave={registerLinkSave}
               onCancel={() => setLinkRootId(null)}
+              onExport={handleExportLinkRoot}
               onSave={(nextTables) => {
                 onEditTables(nextTables); // sets tables + dirty
                 setLinkRootId(null);
@@ -1682,8 +1975,9 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
               tableId={reviewTableId}
               tables={tables}
               onEditTables={onEditTables}
-              onExit={() => setReviewTableId(null)}
+              onExit={handleReviewExit}
               onSave={handleSave}
+              onExport={handleExportTable}
             />
           )}
         </Box>

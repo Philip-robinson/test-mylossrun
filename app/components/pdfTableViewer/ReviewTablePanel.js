@@ -14,10 +14,8 @@
 // metadata. `onEditTables` marks the document dirty and the editor's Save button stays
 // the persistence point for ordinary editing.
 //
-// The Save button at the foot is the only way out, and it is labelled for the part that
-// can fail: it saves through `onSave` and leaves only if that worked, because the export
-// the Document Overview offers is built from what the SERVER holds. Exporting itself
-// lives there rather than here — one workbook covers the whole document.
+// The footer holds two buttons. Close saves through `onSave` and leaves only if the save
+// worked. Export asks the host, through `onExport`, to export only this table.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -34,6 +32,13 @@ import toast from 'react-hot-toast';
 import { extractTable, getCellImages } from 'services/images';
 import CellEditDialog from 'components/pdfTableViewer/CellEditDialog';
 import ReviewCellEditor from 'components/pdfTableViewer/ReviewCellEditor';
+import ReviewCellText from 'components/pdfTableViewer/ReviewCellText';
+import ReviewHeaderRow from 'components/pdfTableViewer/ReviewHeaderRow';
+import {
+  browserStorage,
+  readFontScale,
+  writeFontScale,
+} from 'components/pdfTableViewer/reviewFontScaleStorage';
 import ReviewTableTabs from 'components/pdfTableViewer/ReviewTableTabs';
 import SplitRowWave from 'components/pdfTableViewer/SplitRowWave';
 import {
@@ -63,7 +68,8 @@ import {
   reviewFlaggedCountHelpId,
   reviewGridHelpId,
   reviewPoorCellsHelpId,
-  reviewSaveHelpId,
+  reviewCloseHelpId,
+  reviewExportHelpId,
   reviewSectionTitleHelpId,
   reviewTitleHelpId,
   reviewColumnMaxWidthPx,
@@ -85,6 +91,15 @@ import {
   reviewTitleLabel,
   reviewWideCellMinCharacters, emphasiseLowQualityCells,
   singleCellSpan,
+  reviewCloseLabel,
+  reviewExportLabel,
+  reviewExportingLabel,
+  cellLineBreakPattern,
+  reviewDefaultFontScalePercent,
+  reviewFontScalePercentOptions,
+  reviewFontScaleStorageKey,
+  reviewClosingOperation,
+  reviewExportingOperation,
 } from 'config';
 
 // Columns are content-sized but capped, and over-long content wraps at word boundaries
@@ -112,7 +127,11 @@ import {
 const cellStyle = (cell, poor, joined, columnSpan) => ({
   ...(joined ? { position: 'relative' } : {}),
   maxWidth: reviewColumnMaxWidthPx() * columnSpan,
-  minWidth: isWideText(cell.text, reviewWideCellMinCharacters())
+  minWidth: isWideText(
+    cell.text,
+    reviewWideCellMinCharacters(),
+    cellLineBreakPattern()
+  )
     ? reviewColumnMaxWidthPx()
     : undefined,
   whiteSpace: 'normal',
@@ -214,6 +233,7 @@ export default function ReviewTablePanel({
   onEditTables,
   onExit,
   onSave,
+  onExport,
 }) {
   // Every table the extraction returned, and which of them is on screen. Deliberately not
   // called `tables`: that prop is the editor's list of PDFTables and is something else.
@@ -221,9 +241,23 @@ export default function ReviewTablePanel({
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
-  // Whether the save Exit runs is in flight, which locks the panel behind a spinner so a
-  // second click cannot start a second save.
-  const [exiting, setExiting] = useState(false);
+  // The footer operation in flight: null, reviewClosingOperation() or
+  // reviewExportingOperation(). Any non-null value locks the panel behind a spinner so a
+  // second click cannot start a second operation.
+  const [operation, setOperation] = useState(null);
+  // The grid's font size as a percent of 1rem, remembered across loads.
+  const [fontScale, setFontScale] = useState(() =>
+    readFontScale(
+      browserStorage(),
+      reviewFontScaleStorageKey(),
+      reviewFontScalePercentOptions(),
+      reviewDefaultFontScalePercent()
+    )
+  );
+  const handleFontScaleChange = (percent) => {
+    setFontScale(percent);
+    writeFontScale(browserStorage(), reviewFontScaleStorageKey(), percent);
+  };
   // The cell being corrected: the cell itself, the on-screen rectangle it occupies (the
   // dialog is placed against it), where it is in the grid — `{ rowIndex, columnIndex }`,
   // or `title: true` for the title — and the text as it currently stands in the field
@@ -635,14 +669,31 @@ export default function ReviewTablePanel({
   // quietly export the wrong document. A failed save has already raised its own toast, so
   // there is nothing to add here — the panel simply stays put.
   //
-  // The lock is what stops a second click starting a second save.
+  // The lock is what stops a second click starting a second save or an export.
   const handleExit = async () => {
-    if (exiting) return;
-    setExiting(true);
+    if (operation !== null) return;
+    setOperation(reviewClosingOperation());
     const saved = await onSave();
-    setExiting(false);
+    setOperation(null);
     if (saved) onExit();
   };
+
+  // Ask the host to export this table. A rejection is swallowed: the host reports its own
+  // errors.
+  const handleExport = async () => {
+    if (operation !== null) return;
+    setOperation(reviewExportingOperation());
+    try {
+      await onExport();
+    } catch {
+      // Reported by the host.
+    } finally {
+      setOperation(null);
+    }
+  };
+
+  const busy = operation !== null;
+  const rootTableName = tables?.find((t) => t.tableId === tableId)?.name?.trim();
 
   return (
     <Box
@@ -656,6 +707,12 @@ export default function ReviewTablePanel({
         position: 'relative',
       }}
     >
+      {/* Shown whatever state the extraction is in. */}
+      <ReviewHeaderRow
+        name={rootTableName}
+        fontScale={fontScale}
+        onFontScaleChange={handleFontScaleChange}
+      />
       {/* How much of this table is worth checking, stated before the user starts
           reading it. Outside the scrolling region, so the number stays in view while
           the grid moves under it, and derived from the DISPLAYED grid, so it falls as
@@ -896,7 +953,13 @@ export default function ReviewTablePanel({
           </Typography>
         )}
         {!loading && !error && (
-          <Box component={'table'} sx={{ borderCollapse: 'collapse' }}>
+          <Box
+            component={'table'}
+            sx={{
+              borderCollapse: 'collapse',
+              fontSize: `${fontScale / 100}rem`,
+            }}
+          >
             <tbody>
               {/* The column-letter ruler, one cell per grid column plus the corner. */}
               <tr>
@@ -1014,11 +1077,11 @@ export default function ReviewTablePanel({
                                   onEsc={handleEsc}
                                 />
                               ) : (
-                                cell.text
+                                <ReviewCellText text={cell.text} />
                               )}
                             </div>
                           ) : (
-                            cell.text
+                            <ReviewCellText text={cell.text} />
                           )}
                         </div>
                         {joined && <SplitRowWave />}
@@ -1042,28 +1105,42 @@ export default function ReviewTablePanel({
         sx={{
           flexShrink: 0,
           display: 'flex',
-          justifyContent: 'flex-end',
+          justifyContent: 'space-between',
           gap: 1,
           p: 1,
         }}
       >
         <Button
-          data-testid={'review-exit'}
-          data-help-id={reviewSaveHelpId()}
+          data-testid={'review-export'}
+          data-help-id={reviewExportHelpId()}
           variant={'outlined'}
           size={'small'}
-          disabled={exiting}
+          disabled={busy}
+          onClick={handleExport}
+        >
+          {reviewExportLabel()}
+        </Button>
+        <Button
+          data-testid={'review-exit'}
+          data-help-id={reviewCloseHelpId()}
+          variant={'outlined'}
+          size={'small'}
+          disabled={busy}
           onClick={handleExit}
         >
-          {'Save'}
+          {reviewCloseLabel()}
         </Button>
       </Box>
-      {/* The save lock. It covers the whole panel — bar, grid and buttons — because what is
-          being sent is the document as it stands, so nothing may be changed while it goes.
-          Opaque rather than a tint, so it also reads as "wait". */}
-      {exiting && (
+      {/* The lock for a close-save or an export. It covers the whole panel — bar, grid and
+          buttons — so nothing may be changed while the document is being saved or the
+          table exported. Opaque rather than a tint, so it also reads as "wait". */}
+      {busy && (
         <Box
-          data-testid={'review-exiting'}
+          data-testid={
+            operation === reviewExportingOperation()
+              ? 'review-exporting'
+              : 'review-exiting'
+          }
           sx={{
             position: 'absolute',
             top: 0,
@@ -1080,7 +1157,11 @@ export default function ReviewTablePanel({
           }}
         >
           <CircularProgress />
-          <Typography variant={'body2'}>{'Saving…'}</Typography>
+          <Typography variant={'body2'}>
+            {operation === reviewExportingOperation()
+              ? reviewExportingLabel()
+              : 'Saving…'}
+          </Typography>
         </Box>
       )}
       {/* Mounting IS opening: the dialog owns no open state, so it exists only while

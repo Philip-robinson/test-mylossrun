@@ -5,6 +5,7 @@ import DropBox from 'components/DropBox';
 import DocumentList from 'components/DocumentList';
 import { getPdfDisplayList, sleep } from 'services/pdfDisplayList';
 import { awaitEntryChange } from 'services/awaitEntryChange';
+import { downloadOriginalPdf, exportDocumentWorkbook } from 'services/documentActions';
 import { documentListScreenId, pollIntervalMs, entryWatchTotalMs } from 'config';
 import useScreenHelp from 'components/help/useScreenHelp';
 import { readPdfListCache, writePdfListCache } from './pdfListCache';
@@ -142,10 +143,33 @@ export default function PDFLoader({ onSelectPdf }) {
     [upsertRow],
   );
 
+  // Row menu actions. Each reports its own failure and resolves, never rejects.
+  const handleDownloadOriginal = useCallback(async (pdf) => {
+    try {
+      await downloadOriginalPdf(pdf);
+    } catch (error) {
+      toast.error(error.message);
+    }
+  }, []);
+
+  const handleExport = useCallback(async (pdf) => {
+    try {
+      await exportDocumentWorkbook(pdf);
+    } catch (error) {
+      toast.error(error.message);
+    }
+  }, []);
+
   return (
     <>
       <DropBox onUploaded={handleUploaded} />
-      <DocumentList pdfs={pdfs} hasLoaded={hasLoaded} onSelectPdf={onSelectPdf} />
+      <DocumentList
+        pdfs={pdfs}
+        hasLoaded={hasLoaded}
+        onSelectPdf={onSelectPdf}
+        onDownloadOriginal={handleDownloadOriginal}
+        onExport={handleExport}
+      />
     </>
   );
 }

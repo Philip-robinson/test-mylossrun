@@ -16,6 +16,10 @@
 import {
   accountButtonHelpId,
   boundaryCreateTableHelpId,
+  boundaryCutCancelHelpId,
+  boundaryCutEndHelpId,
+  boundaryCutStartHelpId,
+  boundaryDeleteAllTablesHelpId,
   boundaryDeleteTableHelpId,
   boundaryPassScreenId,
   cellEditCancelHelpId,
@@ -24,21 +28,25 @@ import {
   cellEditImageHelpId,
   cellEditNextHelpId,
   contentsPassScreenId,
+  documentListActionsHelpId,
   documentListCountsHelpId,
   documentListScreenId,
   documentListStatusHelpId,
   documentListTableHelpId,
   documentOverviewEntryHelpId,
   documentOverviewExportHelpId,
+  documentOverviewExportTableHelpId,
   documentOverviewHelpId,
   documentOverviewLinkHelpId,
   documentOverviewReviewHelpId,
   documentOverviewSaveHelpId,
+  downloadOriginalLabel,
   dropBoxHelpId,
   editorDimDocumentHelpId,
   editorPageTableHelpId,
   editorPageTitleHelpId,
   editorScaleHelpId,
+  exportDocumentLabel,
   gridToolColumnsHelpId,
   gridToolRailHelpId,
   gridToolRowsHelpId,
@@ -47,12 +55,14 @@ import {
   layersNextHelpId,
   layersColoursHelpId,
   layersColumnsHelpId,
+  layersBordersHelpId,
   layersPanelHelpId,
   layersPreviousHelpId,
   layersRowsHelpId,
   layersSpecialHelpId,
   linkAvailableTablesHelpId,
   linkCancelHelpId,
+  linkExportHelpId,
   linkLinkedTablesHelpId,
   linkSaveHelpId,
   linkTablesScreenId,
@@ -61,7 +71,10 @@ import {
   reviewFlaggedCountHelpId,
   reviewGridHelpId,
   reviewPoorCellsHelpId,
-  reviewSaveHelpId,
+  reviewCloseHelpId,
+  reviewExportHelpId,
+  reviewTableNameHelpId,
+  reviewFontScaleHelpId,
   reviewSectionTitleHelpId,
   reviewTableScreenId,
   reviewTabsHelpId,
@@ -116,7 +129,7 @@ function validateBordersTitle() {
 
 function validateBordersBody() {
   return [
-    'Switch to the validate borders page to allow table borders to be modified ',
+    'Switch to the Validate Borders page to allow table borders to be modified ',
     'and table linking to be redefined.',
   ];
 }
@@ -145,6 +158,24 @@ function accountTips() {
       ],
     },
   ];
+}
+
+// The Layers panel's Borders row, described in the same words by both editor passes.
+function showBordersTip() {
+  return {
+    helpId: layersBordersHelpId(),
+    title: 'Show Borders',
+    body: ['When selected table borders are shown in blue'],
+  };
+}
+
+// The toolbar's All Files tab, described in the same words by both editor passes.
+function allFilesTip() {
+  return {
+    helpId: toolbarAllFilesHelpId(),
+    title: 'All files',
+    body: ['This button returns to the PDF file list page.'],
+  };
 }
 
 // The toolbar's two pass tabs. The toolbar stands over every screen the editor has, so
@@ -296,6 +327,7 @@ function documentOverviewTips() {
               }
             ],
             ["The ", {bold: "Review"}, " button invokes the review screen to examine and edit cell values"],
+            ["The ", {bold: "Export"}, " button exports just this table"],
             "The link (-) icon invokes the table link grid editor to modify how linked tables as aranged",
           ],
         },
@@ -320,6 +352,15 @@ function documentOverviewTips() {
       ],
     },
     {
+      helpId: documentOverviewExportTableHelpId(),
+      title: 'Table Export button',
+      body: [
+        'Clicking it will create an Excel Workbook of this table alone; ',
+        'a linked group of tables is exported as its single merged table. ',
+        'The document is saved first.',
+      ],
+    },
+    {
       helpId: documentOverviewExportHelpId(),
       title: 'Export button',
       body: [
@@ -339,9 +380,26 @@ function documentOverviewTips() {
 // calling the screen and does not describe what the screen does. Its summary is
 // settled.
 export function helpScreens() {
+  // The boundary pass orders the shared tips one by one, so it takes them apart here.
+  const [selectedPage, dimDocument, scalePage] = editorToolbarTips();
+  const [titleLabel] = tableNameLabelTips();
+  const [validateBordersTab, validateTablesTab] = toolbarValidateTips();
+  const [previous, next] = layersPageStepTips();
+  const [
+    overviewSave,
+    includeDeleted,
+    documentOverview,
+    tableEntry,
+    linkReview,
+    reviewButton,
+    exportTableButton,
+    exportButton,
+  ] = documentOverviewTips();
+  const [account] = accountTips();
+
   return {
     [documentListScreenId()]: {
-      version: 2,
+      version: 3,
       name: 'Your documents',
       summary: [
         'Every loss run you have uploaded is listed here with the stage it has reached. ',
@@ -395,12 +453,31 @@ export function helpScreens() {
             ]}
           ],
         },
+        {
+          helpId: documentListActionsHelpId(),
+          title: 'Document actions',
+          body: [
+            'The ⋮ button at the end of a row opens a menu of actions for that document:',
+            {
+              list: [
+                [{ bold: downloadOriginalLabel() },
+                  ' saves a copy of the PDF exactly as you uploaded it. ',
+                  'It is available once the upload has finished, unless the document is in error.'],
+                [{ bold: exportDocumentLabel() },
+                  ' builds an Excel workbook from the document\'s tables and saves it, ',
+                  'just as Export does in the editor, and marks the document Complete. ',
+                  'It is available once a document is ready to open.'],
+              ],
+            },
+            'Opening this menu does not open the document.',
+          ],
+        },
         ...accountTips(),
       ],
     },
     [boundaryPassScreenId()]: {
-      version: 8,
-      name: 'Table Borders',
+      version: 11,
+      name: 'Validate Borders',
       summary: [
         "This pass is about where the tables are on the page and how they inter-relate. ",
         { list:[
@@ -412,7 +489,57 @@ export function helpScreens() {
           ]
         ]}
       ],
+      // Listed in the order help's Next steps through them.
       tips: [
+        allFilesTip(),
+        validateBordersTab,
+        validateTablesTab,
+        dimDocument,
+        scalePage,
+        overviewSave,
+        documentOverview,
+        includeDeleted,
+        tableEntry,
+        reviewButton,
+        exportTableButton,
+        titleLabel,
+        linkReview,
+        {
+          helpId: tableLinkLabelHelpId(),
+          title: 'Selected/Link button',
+          body: [
+            'If labelled ',
+            { list: [
+            [{ bold: 'Selected' },
+            ' the table to which it is attached is a single table.'],
+            [{ bold: 'Linked' },
+            ' then this table is the first in a group of linked tables that together ',
+              'form a larger table.'],
+            [{ bold: 'Linked to' },
+            ' and a table name, this table is part of a group of tables, ',
+              'the first being the named table. Clicking it acts on that group exactly as ',
+              "clicking the named table's ",
+              { bold: 'Linked' },
+              ' (or ',
+              { bold: 'End Linking' },
+              ') button does.'],
+            [{ bold: 'Selected' },
+            ' or ',
+            { bold: 'Linked' },
+            ' it is clickable, and clicking changes it to be red and labelled ',
+            { bold: 'End Linking' }],
+            [{ bold: 'End Linking' },
+            '. This mode is for gethering together a group of tables into a tables group.',
+              ' The table group modification is achieved by clicking on other tables within the ',
+              { bold: 'Pages list'},
+              '. If they are selected shown by a red border, then clicking will remove them, ',
+              'Otherwise clicking will add them. Once editing is finished, click on the ',
+            { bold: 'End Linking' },
+            ' button.'],
+            ]}
+          ],
+        },
+        exportButton,
         {
           helpId: editorPageTableHelpId(),
           title: 'Selected Table Boundary',
@@ -434,6 +561,7 @@ export function helpScreens() {
             },
           ],
         },
+        showBordersTip(),
         {
           helpId: boundaryDeleteTableHelpId(),
           title: 'Delete the current table',
@@ -445,14 +573,55 @@ export function helpScreens() {
           ],
         },
         {
+          helpId: boundaryCutStartHelpId(),
+          title: 'Cut the current table',
+          body: [
+            'Clicking this button starts drawing horizontal cut lines across the selected ',
+            'table. Within the table a press places a line, dragging a line moves it, and a ',
+            'click on a line removes it. It is unavailable for a linked table unless it is ',
+            'the last table in its group; any other linked table must be unlinked first.',
+          ],
+        },
+        {
+          helpId: boundaryCutEndHelpId(),
+          title: 'Split the table at the cut lines',
+          body: [
+            'Clicking this button splits the table along the cut lines, the top piece keeping ',
+            "the table's name. Each piece's grid is detected again when the table, the page ",
+            'or the pass is left.',
+          ],
+        },
+        {
+          helpId: boundaryCutCancelHelpId(),
+          title: 'Discard the cut lines',
+          body: [
+            'Clicking this button discards the cut lines and leaves the table as it was.',
+          ],
+        },
+        {
+          helpId: boundaryDeleteAllTablesHelpId(),
+          title: 'Delete all tables',
+          body: [
+            'Clicking this button asks whether to delete every table in the PDF or only the tables on this page.',
+          ],
+        },
+        {
           helpId: boundaryCreateTableHelpId(),
           title: 'Create a new table',
           body: [
             'Clicking this button will allow a rectangle to be drawn ',
-            'on the screen which will be the border of a new table.',
+            'on the screen which will be the border of a new table. ',
+            "The new table's rows and columns are detected when the table, the page or the ",
+            'pass is left.',
           ],
         },
-        ...editorToolbarTips(),
+        previous,
+        next,
+        {
+          helpId: validateTablesHelpId(),
+          title: validateTablesTitle(),
+          body: validateTablesBody(),
+        },
         {
           helpId: pagesColumnHelpId(),
           title: 'The Pages column',
@@ -461,150 +630,40 @@ export function helpScreens() {
             'All PDF pages are shown, with known tables highlighted ',
             'with a blue border and title. Clicking on a page will show ',
             'that page in the centre of the screen. ',
+            'Clicking a page image also selects the table on it nearest to where you clicked, ',
+            "and clicking the page title selects the page's first table. ",
             'If a table has a red border it has been selected as part of a linked table group.',
           ],
         },
-        {
-          helpId: tableLinkLabelHelpId(),
-          title: 'Selected/Link button',
-          body: [
-            'If labelled ',
-            { list: [
-            [{ bold: 'Selected' },
-            ' the table to which it is attached is a single table. If labelled '],
-            [{ bold: 'Linked' },
-            ' then this table is the first in a group of linked tables that together ',
-              'form a larger table. If labelled '],
-            [{ bold: 'Linked to' },
-            ' and a table name, this table is part of a group of tables, ',
-              'the first being the named table. When this is labelled '],
-            [{ bold: 'Selected' },
-            ' or ',
-            { bold: 'Linked' },
-            ' it is clickable, and clicking changes it to be red and labelled ',
-            { bold: 'End Linking' }],
-            [{ bold: 'End Linking' },
-            '. This mode is for gethering together a group of tables into a tables group.',
-              ' The table group modification is achieved by clicking on other tables within the ',
-              { bold: 'Pages list'},
-              '. If they are selected shown by a red border, then clicking will remove them, ',
-              'Otherwise clicking will add them. Once editing is finished, click on the ',
-            { bold: 'End Linking' },
-            ' button.'],
-            ]}
-          ],
-        },
-        ...tableNameLabelTips(),
-        {
-          helpId: toolbarAllFilesHelpId(),
-          title: 'All files',
-          body: ['This button returns to the PDF file list page.'],
-        },
-        ...toolbarValidateTips(),
-        {
-          helpId: validateTablesHelpId(),
-          title: validateTablesTitle(),
-          body: validateTablesBody(),
-        },
-        ...layersPageStepTips(),
-        ...documentOverviewTips(),
-        ...accountTips(),
+        selectedPage,
+        account,
       ],
     },
     [contentsPassScreenId()]: {
-      version: 15,
-      name: 'Table contents',
+      version: 17,
+      name: 'Validate Tables',
       summary: [
         'This pass is about the inside of one table — its rows, ',
         'its columns and its special areas. ',
         'Validate Borders saves and goes back to the boundaries.',
       ],
+      // Listed in the order help's Next steps through them.
       tips: [
-        ...toolbarValidateTips(),
-        {
-          helpId: editorPageTableHelpId(),
-          title: 'Table',
-          body: ['This is a table: ',
-            'The boundary is fixed, to change the boundary click on ',
-            {bold: 'Validate Boundary'},
-            ' The grid lines can be moved by dragging and can be deleted or new ones added ',
-            'using the edit mode buttons to the left. ',
-            'The contents shown is the original PDF image with grid lines and ',
-            'special areas drawn on top'],
-        },
-        ...tableNameLabelTips(),
-        {
-          helpId: tableLinkLabelHelpId(),
-          title: 'Table status',
-          body: [
-            'This describes the table type, it is not a button. It can be one of:',
-            {
-              list: [
-                [{ bold: 'Selected' },
-                  ': the table to which it is attached is a single table.'],
-                [{ bold: 'Linked' },
-                  ': this table is the first in a group of linked tables that ',
-                  'together form a larger table.'],
-                [{ bold: 'Linked to' },
-                  ' and a table name (for example ',
-                  { bold: 'Linked to Page 1, table 1' },
-                  '): this table is part of a group of tables, ',
-                  'the first being the named table.'],
-              ],
-            },
-          ],
-        },
-        ...editorToolbarTips(),
-        {
-          helpId: layersPanelHelpId(),
-          title: 'Layers',
-          body: [
-            'This allows grid lines and other features to be highlighted or dimmed to grey.',
-          ],
-        },
-        {
-          helpId: layersRowsHelpId(),
-          title: 'Show Rows',
-          body: [
-            'When selected horizontal grid lines in the currently selected table ',
-            'will be shown in orange, otherwise they will be in grey.',
-          ],
-          side: "left"
-        },
-        {
-          helpId: layersColumnsHelpId(),
-          title: 'Show Columns',
-          body: [
-            'When selected vertical grid lines in the currently selected table ',
-            'will be shown in dark red, otherwise they will be in grey.',
-          ],
-          side: "left"
-        },
-        {
-          helpId: layersSpecialHelpId(),
-          title: 'Show special areas',
-          body: [
-            'When selected special areas which includes header area, hidden rows, ',
-            'section title rows and the title are identified by being surrounded by ',
-            'dotted lines, when off they are not shown.',
-          ],
-          side: "left"
-        },
-        {
-          helpId: layersColoursHelpId(),
-          title: 'Coloured areas',
-          body: [
-            'When selected known coloured areas are converted to grey scale for clarity, ',
-            'when not selected the original colouring is shown.',
-          ],
-          side: "left"
-        },
-        {
-          helpId: validateBordersHelpId(),
-          title: validateBordersTitle(),
-          body: validateBordersBody(),
-        },
-        ...layersPageStepTips(),
+        allFilesTip(),
+        validateBordersTab,
+        validateTablesTab,
+        selectedPage,
+        dimDocument,
+        scalePage,
+        overviewSave,
+        includeDeleted,
+        documentOverview,
+        tableEntry,
+        linkReview,
+        reviewButton,
+        exportTableButton,
+        exportButton,
+        account,
         {
           helpId: gridToolRailHelpId(),
           title: 'Edit mode buttons',
@@ -724,10 +783,10 @@ export function helpScreens() {
         },
         {
           helpId: specialToolMergedHelpId(),
-          title: 'Merged button',
+          title: 'Merge Cells button',
           body: [
-            'Clicking this sets Merged mode, clicking again clears it.',
-            'When in Merged mode:',
+            'Clicking this sets Merge Cells mode, clicking again clears it.',
+            'When in Merge Cells mode:',
             {
               list: [
                 'Horizontal and vertical grid line dragging is disabled.',
@@ -774,6 +833,23 @@ export function helpScreens() {
                     ],
                   },
                 ],
+              ],
+            },
+          ],
+          side: "right"
+        },
+        {
+          helpId: specialToolColouredTableHelpId(),
+          title: 'Tables colouring button',
+          body: [
+            'Clicking this sets Tables colouring mode, clicking again clears it.',
+            'When in Tables colouring mode:',
+            {
+              list: [
+                'Horizontal and vertical grid line dragging is disabled.',
+                'In the Layers panel foreground and background colours are guessed, ',
+                'and can be modified by clicking on them and then picking colours ',
+                'within the middle panel.',
               ],
             },
           ],
@@ -852,23 +928,6 @@ export function helpScreens() {
           side: "right"
         },
         {
-          helpId: specialToolColouredTableHelpId(),
-          title: 'Tables colouring button',
-          body: [
-            'Clicking this sets Tables colouring mode, clicking again clears it.',
-            'When in Tables colouring mode:',
-            {
-              list: [
-                'Horizontal and vertical grid line dragging is disabled.',
-                'In the Layers panel foreground and background colours are guessed, ',
-                'and can be modified by clicking on them and then picking colours ',
-                'within the middle panel.',
-              ],
-            },
-          ],
-          side: "right"
-        },
-        {
           helpId: specialToolHideRowHelpId(),
           title: 'Hide Row button',
           body: [
@@ -885,12 +944,97 @@ export function helpScreens() {
           ],
           side: "right"
         },
-        ...documentOverviewTips(),
-        ...accountTips(),
+        titleLabel,
+        {
+          helpId: tableLinkLabelHelpId(),
+          title: 'Table status',
+          body: [
+            'This describes the table type, it is not a button. It can be one of:',
+            {
+              list: [
+                [{ bold: 'Selected' },
+                  ': the table to which it is attached is a single table.'],
+                [{ bold: 'Linked' },
+                  ': this table is the first in a group of linked tables that ',
+                  'together form a larger table.'],
+                [{ bold: 'Linked to' },
+                  ' and a table name (for example ',
+                  { bold: 'Linked to Page 1, table 1' },
+                  '): this table is part of a group of tables, ',
+                  'the first being the named table. In ',
+                  { bold: 'Validate Borders' },
+                  " clicking it acts on the named first table's group."],
+              ],
+            },
+          ],
+        },
+        {
+          helpId: editorPageTableHelpId(),
+          title: 'Table',
+          body: ['This is a table: ',
+            'The boundary is fixed, to change the boundary click on ',
+            {bold: 'Validate Borders'},
+            ' The grid lines can be moved by dragging and can be deleted or new ones added ',
+            'using the edit mode buttons to the left. ',
+            'The contents shown is the original PDF image with grid lines and ',
+            'special areas drawn on top'],
+        },
+        {
+          helpId: layersPanelHelpId(),
+          title: 'Layers',
+          body: [
+            'This allows grid lines and other features to be highlighted or dimmed to grey.',
+          ],
+        },
+        showBordersTip(),
+        {
+          helpId: layersRowsHelpId(),
+          title: 'Show Rows',
+          body: [
+            'When selected horizontal grid lines in the currently selected table ',
+            'will be shown in orange, otherwise they will be in grey.',
+          ],
+          side: "left"
+        },
+        {
+          helpId: layersColumnsHelpId(),
+          title: 'Show Columns',
+          body: [
+            'When selected vertical grid lines in the currently selected table ',
+            'will be shown in dark red, otherwise they will be in grey.',
+          ],
+          side: "left"
+        },
+        {
+          helpId: layersSpecialHelpId(),
+          title: 'Show special areas',
+          body: [
+            'When selected special areas which includes header area, hidden rows, ',
+            'section title rows and the title are identified by being surrounded by ',
+            'dotted lines, when off they are not shown.',
+          ],
+          side: "left"
+        },
+        {
+          helpId: layersColoursHelpId(),
+          title: 'Coloured areas',
+          body: [
+            'When selected known coloured areas are converted to grey scale for clarity, ',
+            'when not selected the original colouring is shown.',
+          ],
+          side: "left"
+        },
+        next,
+        previous,
+        {
+          helpId: validateBordersHelpId(),
+          title: validateBordersTitle(),
+          body: validateBordersBody(),
+        },
       ],
     },
     [linkTablesScreenId()]: {
-      version: 5,
+      version: 6,
       name: 'Grid Editor',
       summary: [
         'For grouped tables examine if they can form a single table and arrange the ',
@@ -958,6 +1102,14 @@ export function helpScreens() {
           body: ['Return to the validate screen without saving.'],
         },
         {
+          helpId: linkExportHelpId(),
+          title: 'Export button',
+          body: [
+            'Save the current arrangement and any unsaved changes, then export only the root ',
+            'table, with the tables linked to it, to an Excel workbook.',
+          ],
+        },
+        {
           helpId: linkSaveHelpId(),
           title: 'Save button',
           body: ['Exit this screen saving the current state.'],
@@ -967,7 +1119,7 @@ export function helpScreens() {
       ],
     },
     [reviewTableScreenId()]: {
-      version: 5,
+      version: 7,
       name: 'Extraction review',
       summary: emphasiseLowQualityCells()?[
         'This is the data that will be written out to the workbook. Every cell is editable — ',
@@ -979,6 +1131,18 @@ export function helpScreens() {
         'click one to edit it.',
       ],
       tips: [
+        {
+          helpId: reviewTableNameHelpId(),
+          title: 'Table name',
+          body: ['The name of the table being reviewed.'],
+        },
+        {
+          helpId: reviewFontScaleHelpId(),
+          title: 'Text size',
+          body: [
+            'Makes the text in the grid smaller or larger. ',
+          ],
+        },
         {
           helpId: reviewFlaggedCountHelpId(),
           title: 'Low quality entry count',
@@ -1080,11 +1244,21 @@ export function helpScreens() {
           ],
         },
         {
-          helpId: reviewSaveHelpId(),
-          title: 'Save button',
+          helpId: reviewExportHelpId(),
+          title: 'Export button',
           body: [
+            'The export button saves any unsaved changes and then exports only the ',
+            'table being reviewed to an Excel workbook.',
+          ],
+        },
+        {
+          helpId: reviewCloseHelpId(),
+          title: 'Close button',
+          body: [
+            'The close button saves the current state and returns to the screen the ',
+            'review was opened from, with the reviewed table selected.',
             'The save button saves the current state and returns to the ',
-            { bold: 'Validate borders' },
+            { bold: 'Validate Borders' },
             ' screen.',
           ],
         },
@@ -1108,7 +1282,12 @@ export function helpExitLabel() {
 // Button that puts the card away without leaving help, for when the card is
 // covering the very thing the reader wants to look at.
 export function helpHideLabel() {
-  return 'Hide';
+  return 'Show full screen';
+}
+
+// Button that moves the card on to the screen's next available tip.
+export function helpNextLabel() {
+  return 'Next';
 }
 
 // Flag on the toolbar button when a screen's tips have changed since the user

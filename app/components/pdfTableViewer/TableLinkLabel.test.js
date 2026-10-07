@@ -46,12 +46,24 @@ describe('TableLinkLabel', () => {
     expect(onClick).toHaveBeenCalledWith(table);
   });
 
-  it('is inert while the table is joined into another table group', () => {
+  it('reports its table when clicked while joined into another table group', () => {
     const onClick = jest.fn();
     renderLabel({
       state: LINK_LABEL_JOINED,
       text: 'Linked to Root',
       onClick,
+    });
+    fireEvent.click(screen.getByTestId('link-label'));
+    expect(onClick).toHaveBeenCalledWith(table);
+  });
+
+  it('is inert, joined or not, while not interactive', () => {
+    const onClick = jest.fn();
+    renderLabel({
+      state: LINK_LABEL_JOINED,
+      text: 'Linked to Root',
+      onClick,
+      interactive: false,
     });
     fireEvent.click(screen.getByTestId('link-label'));
     expect(onClick).not.toHaveBeenCalled();

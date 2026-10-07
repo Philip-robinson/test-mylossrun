@@ -11,13 +11,17 @@
 // `gridUtilities.js`; this file imports the ones the component needs.
 
 import { useEffect, useRef, useState } from 'react';
-import { Box, Button, CircularProgress, Typography } from '@mui/material';
+import { Box, Button, Typography } from '@mui/material';
 import toast from 'react-hot-toast';
 import { getTableImages } from 'services/images';
+import LinkCell from 'components/pdfTableViewer/LinkCell';
 import {
   confirmedTableStage,
   linkAvailableTablesHelpId,
   linkCancelHelpId,
+  linkExportHelpId,
+  linkExportLabel,
+  linkExportingLabel,
   linkLinkedTablesHelpId,
   linkSaveHelpId,
   linkTableCellWidth,
@@ -42,58 +46,6 @@ import {
 // ---------------------------------------------------------------------------
 
 const CELL_WIDTH = linkTableCellWidth();
-
-// One rendered table cell: its name plus the cropped image (or a placeholder
-// spinner while the image is still loading). Draggable unless it is Root.
-// The image renders at its natural pixel size — the back end serves every
-// table at one shared dpi, so on-screen sizes reflect the tables' true
-// relative scale and must not be stretched to a fixed cell width.
-function LinkCell({ table, image, draggable, onDragStart, row, col }) {
-  return (
-    <Box
-      data-testid={'link-cell'}
-      data-tableid={table.tableId}
-      // Set for a cell in the grid and left off one in the Available column, which has no
-      // grid position: a drop reads these to work out which column it landed on, and every
-      // grid cell must answer, not only the empty ones.
-      data-row={row}
-      data-col={col}
-      draggable={draggable}
-      onDragStart={onDragStart}
-      sx={{
-        border: '1px solid #ccc',
-        p: 0.5,
-        boxSizing: 'border-box',
-        cursor: draggable ? 'grab' : 'default',
-        flexShrink: 0,
-        alignSelf: 'flex-start',
-      }}
-    >
-      <Typography variant={'caption'} noWrap display={'block'}>
-        {table.name ?? table.tableId}
-      </Typography>
-      {image ? (
-        <img
-          src={`data:image/png;base64,${image}`}
-          alt={table.name ?? table.tableId}
-          style={{ display: 'block', maxWidth: '100%' }}
-        />
-      ) : (
-        <Box
-          sx={{
-            width: CELL_WIDTH,
-            minHeight: 40,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <CircularProgress size={20} />
-        </Box>
-      )}
-    </Box>
-  );
-}
 
 // The grid column a drop landed on: the column of the cell whose horizontal band holds
 // `clientX`, or the nearest column when the drop falls past the end of a row. Reads the
@@ -124,6 +76,11 @@ export default function TableLinkageEditor({
   tables,
   onCancel,
   onSave,
+  // Exports the root table; the host reports its own errors.
+  onExport = async () => {},
+  // Registers a function returning this panel's save list, so the host can save the
+  // arrangement on a move it drives; registered null on unmount.
+  onRegisterSave = () => {},
 }) {
   const [{ grid, select }, setState] = useState(() => {
     const init = buildInitialState(
@@ -132,6 +89,7 @@ export default function TableLinkageEditor({
     return { grid: padForDisplay(init.grid), select: init.select };
   });
   const [images, setImages] = useState({});
+  const [exporting, setExporting] = useState(false);
   const requestedRef = useRef(new Set());
 
   // The set of tableIds currently on screen: Root + non-null grid cells + select.
@@ -170,6 +128,14 @@ export default function TableLinkageEditor({
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayedIds, pdfId, rootTable]);
+
+  // Assigned savedTables once it is defined below; read only when the host calls the
+  // registered function.
+  const savedTablesRef = useRef(null);
+  useEffect(() => {
+    onRegisterSave(() => savedTablesRef.current());
+    return () => onRegisterSave(null);
+  }, [onRegisterSave]);
 
   if (!rootTable) return null;
 
@@ -323,6 +289,22 @@ export default function TableLinkageEditor({
     });
   };
 
+  // Asks the host to export the root table; a rejection is swallowed.
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      await onExport();
+    } catch {
+      // Reported by the host.
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // The latest savedTables, so the registered function always reads the current grid.
+  savedTablesRef.current = savedTables;
+
   return (
     <Box
       sx={{
@@ -474,6 +456,7 @@ export default function TableLinkageEditor({
             data-testid={'link-unlink'}
             data-help-id={linkUnlinkHelpId()}
             variant={'contained'}
+            disabled={exporting}
             onClick={handleUnlink}
           >
             {'Unlink'}
@@ -481,9 +464,18 @@ export default function TableLinkageEditor({
           <Button
             data-testid={'link-cancel'}
             data-help-id={linkCancelHelpId()}
+            disabled={exporting}
             onClick={onCancel}
           >
             {'Cancel'}
+          </Button>
+          <Button
+            data-testid={'link-export'}
+            data-help-id={linkExportHelpId()}
+            disabled={exporting}
+            onClick={handleExport}
+          >
+            {exporting ? linkExportingLabel() : linkExportLabel()}
           </Button>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
@@ -491,6 +483,7 @@ export default function TableLinkageEditor({
             data-testid={'link-save'}
             data-help-id={linkSaveHelpId()}
             variant={'contained'}
+            disabled={exporting}
             onClick={() => onSave(savedTables())}
           >
             {'Save'}

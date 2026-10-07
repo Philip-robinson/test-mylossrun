@@ -30,6 +30,7 @@ import {
   layersColoursHelpId,
   layersColumnsHelpId,
   layersNextHelpId,
+  layersBordersHelpId,
   layersPanelHelpId,
   layersPanelWidthPx,
   layersPreviousHelpId,
@@ -41,11 +42,11 @@ import {
 
 // The five rows in display order: Borders first, because the boundary pass comes first,
 // and Colours last. `countKey` selects the row's count from `layerCounts`. `helpId` is the
-// id the help overlay describes the row by — the four contents layers have one, Borders
-// none.
+// id the help overlay describes the row by.
 const LAYER_DEFS = [
   {
     key: 'border',
+    helpId: layersBordersHelpId,
     label: 'Borders',
     colour: layerBorderColour,
     backgroundColour: layerBorderBackgroundColour,
@@ -98,7 +99,6 @@ export default function LayersPanel({
   onNext,
   onValidateTables,
   onValidateBorders,
-  isCreatedUnconfirmed,
   ...optionsCallbacks
 }) {
   const counts = layerCounts({
@@ -164,7 +164,6 @@ export default function LayersPanel({
         editorMode={editorMode}
         tool={tool}
         specialTool={specialTool}
-        isCreatedUnconfirmed={isCreatedUnconfirmed}
         {...optionsCallbacks}
       />
 
@@ -172,7 +171,7 @@ export default function LayersPanel({
           leftover height (and scrolls within it), which keeps Previous / Next pinned to
           the bottom whether the active options are short or long. */}
       <Stack spacing={1} sx={{ flexShrink: 0 }}>
-        <Stack direction={'row'} spacing={1}>
+        <Stack direction={'row'} spacing={1} sx={{ justifyContent: 'space-between' }}>
           <Button
             data-testid={'layers-prev'}
             data-help-id={layersPreviousHelpId()}

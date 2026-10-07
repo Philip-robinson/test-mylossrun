@@ -1,8 +1,9 @@
 'use client';
 
 // The overlay's card: the HELP chip, one thing's title and the words describing it,
-// and the two buttons on its foot — Hide, which puts the card away without leaving
-// help, and Exit Help, which leaves. Presentational and told where to go — `position` is
+// and the three buttons on its foot — Show full screen, which puts the card away without
+// leaving help, Next, which moves on to the screen's next tip, and Exit Help, which
+// leaves. Presentational and told where to go — `position` is
 // the viewport point tipPlacement settled on, and `side` the side of the hole the
 // card settled on, which is the edge the caret points back from. `cardRef` reaches
 // its root element, which is how the overlay reads back the height the words came to
@@ -14,9 +15,9 @@
 //
 // The card swallows its own clicks. It is drawn inside the scrim, and the scrim treats
 // a click as a question about what lies under the pointer — which, for a point on the
-// card, is whatever the card happens to be covering. Without this, clicking Hide would
-// be undone by the same click, and clicking the card's own words would move the
-// highlight to whatever is behind them.
+// card, is whatever the card happens to be covering. Without this, clicking Show full
+// screen would be undone by the same click, and clicking the card's own words would
+// move the highlight to whatever is behind them.
 
 import { Box, Button, Typography } from '@mui/material';
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
@@ -29,7 +30,12 @@ import {
   helpCardWidthPx,
   helpChipBackgroundColour,
 } from 'config';
-import { helpChipLabel, helpExitLabel, helpHideLabel } from 'app/lib/helpContent';
+import {
+  helpChipLabel,
+  helpExitLabel,
+  helpHideLabel,
+  helpNextLabel,
+} from 'app/lib/helpContent';
 import { helpSegmentNodes } from 'components/help/helpSegments';
 
 export default function HelpTipCard({
@@ -40,6 +46,7 @@ export default function HelpTipCard({
   position,
   onExit,
   onHide,
+  onNext,
 }) {
   return (
     <Box
@@ -91,8 +98,9 @@ export default function HelpTipCard({
       >
         {helpSegmentNodes(body)}
       </Typography>
-      {/* Hide sits at the far left of the foot and Exit Help at the far right, so the
-          button that keeps you in help cannot be mistaken for the one that ends it. */}
+      {/* Show full screen sits at the far left of the foot and Exit Help at the far
+          right, so the button that keeps you in help cannot be mistaken for the one that
+          ends it. Next stands immediately to the left of Exit Help. */}
       <Box sx={{ mt: 2, display: 'flex', justifyContent: 'space-between' }}>
         <Button
           type={'button'}
@@ -103,15 +111,26 @@ export default function HelpTipCard({
         >
           {helpHideLabel()}
         </Button>
-        <Button
-          type={'button'}
-          variant={'outlined'}
-          size={'small'}
-          onClick={onExit}
-          sx={{ color: helpCardTextColour(), borderColor: helpCardTextColour() }}
-        >
-          {helpExitLabel()}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            type={'button'}
+            variant={'text'}
+            size={'small'}
+            onClick={onNext}
+            sx={{ color: helpCardTextColour() }}
+          >
+            {helpNextLabel()}
+          </Button>
+          <Button
+            type={'button'}
+            variant={'outlined'}
+            size={'small'}
+            onClick={onExit}
+            sx={{ color: helpCardTextColour(), borderColor: helpCardTextColour() }}
+          >
+            {helpExitLabel()}
+          </Button>
+        </Box>
       </Box>
     </Box>
   );

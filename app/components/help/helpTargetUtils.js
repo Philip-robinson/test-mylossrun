@@ -33,6 +33,31 @@ export function firstKnownHelpId(idChains, knownIds) {
   return null;
 }
 
+// The help id after `currentId` among the ids of `tipIds` that `isAvailable` accepts,
+// in authored order, or null for the entry card. From the entry card or an id with no
+// tip it answers the first available id; after the last available id it wraps to the
+// entry card.
+export function nextHelpId(tipIds, currentId, isAvailable) {
+  const ids = tipIds || [];
+  const available = ids.filter((id) => isAvailable(id));
+
+  if (available.length === 0) {
+    return null;
+  }
+
+  const position = ids.indexOf(currentId);
+
+  if (position === -1) {
+    return available[0];
+  }
+
+  const following = ids
+    .slice(position + 1)
+    .find((id) => available.includes(id));
+
+  return following === undefined ? null : following;
+}
+
 // The described element's rect grown by the padding on all four sides, as plain
 // numbers.
 export function holeRect(targetRect, paddingPx) {

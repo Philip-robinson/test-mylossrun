@@ -13,6 +13,7 @@ import {
 } from 'config';
 import {
   comesAfter,
+  compactGrid,
   hasSavedGrid,
   isAmalgamated,
   singleColumnGrid,
@@ -362,7 +363,7 @@ export function withCellSpan(table, row, column, spans) {
   };
 }
 
-// Apply the block the Merged tool drew to the table.
+// Apply the block the Merge Cells tool drew to the table.
 //
 // A block matching an existing merged cell EXACTLY — same anchor, same two spans — DELETES
 // that merge: drawing a merge a second time over the same squares is how it is undone. Any
@@ -501,12 +502,17 @@ export function tableSizeLabel(t) {
 
 // Every table nested inside another table's `next` map (a saved link grid removes the
 // linked tables from the top-level metadata list), each paired with the name of the
-// table it is linked under. Recurses in case a linked table itself carries a grid.
+// table it is linked under and that table's id. Recurses in case a linked table itself
+// carries a grid.
 export function linkedTablesWithParents(tables) {
   const out = [];
   const collect = (parent) => {
     Object.values(parent.next ?? {}).forEach((child) => {
-      out.push({ table: child, parentName: parent.name ?? parent.tableId });
+      out.push({
+        table: child,
+        parentName: parent.name ?? parent.tableId,
+        parentId: parent.tableId,
+      });
       collect(child);
     });
   };
@@ -552,6 +558,97 @@ export function mapAllTables(tables, fn) {
     return mapped;
   });
   return changed ? out : list;
+}
+
+// Soft-delete every table, at any depth, on `page`, or on every page when `page` is null,
+// undoing the linking each deleted table took part in (see deleteTablesUnlinking).
+export function softDeleteTables(tables, page = null) {
+  return deleteTablesUnlinking(
+    tables,
+    (t) => !t.deleted && (page === null || t.pdfPage === page)
+  );
+}
+
+// `grid` with the ids in `removedIds` blanked and every emptied row and column dropped, the
+// other members keeping their places. Blank cells are written '' as buildSaveTables writes
+// them. Null when only the owning table at (0,0) would remain.
+const gridWithout = (grid, removedIds) => {
+  if (!Array.isArray(grid)) return grid ?? null;
+  const blanked = grid.map((row) =>
+    row.map((cell) => (cell == null || cell === '' || removedIds.has(cell) ? null : cell))
+  );
+  const compact = compactGrid(blanked);
+  const placed = compact.flat().filter((cell) => cell != null).length;
+  if (placed <= 1) return null;
+  return compact.map((row) => row.map((cell) => cell ?? ''));
+};
+
+// Detach every selected table from the group holding it, and every member from a selected
+// table, at any depth below `table`. Returns the rebuilt table and the tables freed from it,
+// which the caller returns to the top-level list.
+const detachSelected = (table, selectedIds) => {
+  const kids = Object.entries(table.next ?? {});
+  if (kids.length === 0) return { table, freed: [] };
+  const freed = [];
+  if (selectedIds.has(table.tableId)) {
+    kids.forEach(([, child]) => {
+      const done = detachSelected(child, selectedIds);
+      freed.push(done.table, ...done.freed);
+    });
+    return { table: { ...table, next: null, grid: null }, freed };
+  }
+  const keep = {};
+  const removedIds = new Set();
+  let changed = false;
+  kids.forEach(([key, child]) => {
+    const done = detachSelected(child, selectedIds);
+    if (selectedIds.has(child.tableId)) {
+      removedIds.add(key);
+      freed.push(done.table, ...done.freed);
+    } else {
+      keep[key] = done.table;
+      freed.push(...done.freed);
+      if (done.table !== child || done.freed.length > 0) changed = true;
+    }
+  });
+  if (!changed && removedIds.size === 0) return { table, freed: [] };
+  if (removedIds.size === 0) return { table: { ...table, next: keep }, freed };
+  const remaining = Object.keys(keep).length > 0;
+  return {
+    table: {
+      ...table,
+      next: remaining ? keep : null,
+      grid: remaining ? gridWithout(table.grid, removedIds) : null,
+    },
+    freed,
+  };
+};
+
+// Soft-delete every table, at any depth, for which `shouldDelete` is true, undoing linking
+// first: a deleted root's members return to the top-level list undeleted, and a deleted
+// member leaves its surviving root's `next` and `grid` and returns to the top-level list.
+// Freed tables are placed in document order. The very same list comes back when nothing is
+// selected.
+export function deleteTablesUnlinking(tables, shouldDelete) {
+  const list = tables ?? [];
+  const selectedIds = new Set(
+    allTablesDeep(list)
+      .filter((t) => shouldDelete(t))
+      .map((t) => t.tableId)
+  );
+  if (selectedIds.size === 0) return list;
+
+  let out = [];
+  const freed = [];
+  list.forEach((t) => {
+    const done = detachSelected(t, selectedIds);
+    out.push(done.table);
+    freed.push(...done.freed);
+  });
+  freed.forEach((t) => {
+    out = insertInDocumentOrder(out, t);
+  });
+  return out.map((t) => (selectedIds.has(t.tableId) ? { ...t, deleted: true } : t));
 }
 
 // A table's part in a merge, as reported by mergeRolesByTableId.
@@ -627,6 +724,16 @@ export function linkLabelText(table, roles, parents, linkingRootId) {
   return { state: LINK_LABEL_PLAIN, text: 'Selected' };
 }
 
+// The tableId a click on `table`'s Link label in `state` starts a linking session on, or null
+// when the click ends the open one. A joined table's label acts as its parent's would.
+export function linkLabelToggleTarget(table, state, parents, linkingRootId) {
+  if (state === LINK_LABEL_END_LINKING) return null;
+  if (state !== LINK_LABEL_JOINED) return table.tableId;
+  const parentId = (parents ?? []).find((e) => e.table.tableId === table.tableId)?.parentId;
+  if (parentId == null) return table.tableId;
+  return parentId === linkingRootId ? null : parentId;
+}
+
 // Whether `table` may join the linked group rooted at `root`: it must not be the root, must
 // be in no group already, and must come after the root in document order.
 export function canJoinLinkGroup(table, root, roles) {
@@ -668,10 +775,16 @@ export function removeFromLinkGroup(tables, rootId, tableId) {
       : t
   );
 
-  const at = withoutMember.findIndex((t) => comesAfter(t, removed));
+  return insertInDocumentOrder(withoutMember, removed);
+}
+
+// A new list with `table` placed before the first entry of `list` that comes after it, else
+// appended.
+export function insertInDocumentOrder(list, table) {
+  const at = list.findIndex((t) => comesAfter(t, table));
   return at === -1
-    ? [...withoutMember, removed]
-    : [...withoutMember.slice(0, at), removed, ...withoutMember.slice(at)];
+    ? [...list, table]
+    : [...list.slice(0, at), table, ...list.slice(at)];
 }
 
 // The table carrying `tableId`, looked for at the top level and then inside each table's
@@ -898,13 +1011,14 @@ export function pageTableName(page, index) {
 // soft `deleted` flag, which records a deliberate manual deselection and is therefore never
 // matched, resurrected, or hard-deleted here. A returned table that overlaps nothing on the
 // page is APPENDED.
+// A table whose id is in `keepIds` is never hard-deleted.
 //
 // `tableInPage` is then re-derived for the page's live tables — nested ones included — by
 // ordering on bounds.top (with bounds.left as the tie-break). Finally the idempotent
 // normaliseTableBounds + fillGridCells passes run over every top-level table and over any
 // nested table this merge changed, so the I1/I2 geometry invariant holds and every drawn
 // grid square has a cell.
-export function mergeFindGridLines(tables, page, responseTables) {
+export function mergeFindGridLines(tables, page, responseTables, keepIds = new Set()) {
   let list = [...(tables ?? [])];
   // Which ids sit on the TOP-LEVEL list. A joined member is not among them, and that is what
   // gates the hard-delete below. Ids never move between levels here, so one capture holds.
@@ -969,7 +1083,9 @@ export function mergeFindGridLines(tables, page, responseTables) {
       // A joined member is never pulled out of its group by a re-detection. Only a top-level
       // neighbour can be a spurious duplicate: a left-behind duplicate is visible and
       // removable, a dissolved group is neither.
-      if (o.tableId !== match.tableId && topLevelIds.has(o.tableId)) toDelete.add(o.tableId);
+      if (o.tableId !== match.tableId && topLevelIds.has(o.tableId) && !keepIds.has(o.tableId)) {
+        toDelete.add(o.tableId);
+      }
     }
   }
 
@@ -1670,6 +1786,58 @@ export const overlapArea = (a, b) => {
   const h = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
   return w > 0 && h > 0 ? w * h : 0;
 };
+
+const clampUnit = (v) => Math.min(1, Math.max(0, v));
+
+// Fraction of a client point within `rect`, each axis clamped to [0, 1] (0 on a zero-size
+// axis), with the rect's pixel width/height carried alongside.
+export function pointFractionInRect(clientX, clientY, rect) {
+  const { left, top, width, height } = rect;
+  return {
+    x: width ? clampUnit((clientX - left) / width) : 0,
+    y: height ? clampUnit((clientY - top) / height) : 0,
+    width,
+    height,
+  };
+}
+
+// The table whose bounds lie nearest `point` in pixels (zero inside or on an edge); ties go to
+// the smaller pixel area, then the earlier table. Null for an empty or missing list.
+export function nearestTableToPoint(tables, point) {
+  const { width, height } = point;
+  const px = point.x * width;
+  const py = point.y * height;
+  let best = null;
+  let bestDistance = Infinity;
+  let bestArea = Infinity;
+  for (const table of tables ?? []) {
+    const left = table.bounds.left * width;
+    const top = table.bounds.top * height;
+    const w = table.bounds.width * width;
+    const h = table.bounds.height * height;
+    const dx = Math.max(left - px, 0, px - (left + w));
+    const dy = Math.max(top - py, 0, py - (top + h));
+    const distance = Math.hypot(dx, dy);
+    const area = w * h;
+    if (distance < bestDistance || (distance === bestDistance && area < bestArea)) {
+      best = table;
+      bestDistance = distance;
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
+// The top-level table id under which `tableId` appears: itself when top-level, otherwise the
+// root whose `next` map holds it at any depth. Null when nothing carries the id.
+export function overviewEntryTableId(tables, tableId) {
+  if (tableId == null) return null;
+  for (const table of tables ?? []) {
+    if (table.tableId === tableId) return tableId;
+    if (findTableById(Object.values(table.next ?? {}), tableId)) return table.tableId;
+  }
+  return null;
+}
 
 // True when rectangles a and b overlap in fraction space. Edge-touching is NOT an
 // overlap (strict inequalities). a/b are {left, top, width, height}.

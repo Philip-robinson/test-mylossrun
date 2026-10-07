@@ -45,11 +45,13 @@ import {
 // expected style), never asserted as literals, so these tests keep passing when a
 // constant changes.
 import {
+  boundaryPassEditorMode,
   boundaryPassScreenId,
   confirmedTableStage,
   confirmedTickBadgeColour,
   confirmedTickBadgeSizePx,
   confirmedTickColour,
+  contentsPassEditorMode,
   contentsPassScreenId,
   gridLineColour,
   highConfidence,
@@ -57,6 +59,7 @@ import {
   lowConfidence,
   mergeLinkRootBadgeColour,
   reviewTableScreenId,
+  selectionScrollIntoViewOptions,
   documentOverviewEntryHelpId,
   documentOverviewExportHelpId,
   documentOverviewHelpId,
@@ -65,6 +68,7 @@ import {
   documentOverviewSaveHelpId,
   includeDeletedHelpId,
   pagesColumnHelpId,
+  tableExportFilenameSeparator,
 } from 'config';
 
 // One confidence in the middle of the ORANGE band, derived from the thresholds rather
@@ -124,8 +128,17 @@ jest.mock('config', () => {
 jest.mock('components/pdfTableViewer/TableLinkageEditor', () => ({
   __esModule: true,
   ...jest.requireActual('components/pdfTableViewer/TableLinkageEditor'),
-  default: (props) =>
-    props.rootTable ? (
+  default: function MockTableLinkageEditor(props) {
+    global.__LINK_PANEL_PROPS__ = props;
+    const React = require('react');
+    const { onRegisterSave } = props;
+    const tablesRef = React.useRef(props.tables);
+    tablesRef.current = props.tables;
+    React.useEffect(() => {
+      onRegisterSave(() => global.__LINK_SAVE_TABLES__ ?? tablesRef.current);
+      return () => onRegisterSave(null);
+    }, [onRegisterSave]);
+    return props.rootTable ? (
       <div data-testid={'link-dialog'}>
         <button data-testid={'link-dialog-cancel'} onClick={props.onCancel}>
           {'cancel'}
@@ -139,7 +152,8 @@ jest.mock('components/pdfTableViewer/TableLinkageEditor', () => ({
           {'save'}
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 // The review panel is mounted by the host in review mode (Task 16). These tests exercise the
@@ -1548,12 +1562,12 @@ describe('PDFEditTableStructure', () => {
     fireEvent.mouseMove(overlayBox, { clientX: 25, clientY: 12 });
 
     // The matching left entry (t-1 == first entry) gets the bounding box and is
-    // scrolled into view with block: 'nearest'.
+    // scrolled into view with the selection scroll options.
     await waitFor(() => {
       const entries = screen.getAllByTestId('table-entry');
       expect(entries[0]).toHaveStyle({ border: '2px solid #1976d2' });
     });
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(scrollIntoView).toHaveBeenCalledWith(selectionScrollIntoViewOptions());
 
     // The hover label shows the name and the cols × rows cells in separate
     // segments, divided by a 1px vertical line.
@@ -5776,15 +5790,15 @@ describe('tableSizeLabel', () => {
 });
 
 describe('linkedTablesWithParents', () => {
-  test('returns every table nested in a next map with its parent name, recursively', () => {
+  test('returns every table nested in a next map with its parent name and id, recursively', () => {
     const grandchild = { tableId: 'g', name: 'Grand' };
     const child = { tableId: 'c', name: 'Child', next: { g: grandchild } };
     const root = { tableId: 'r', name: 'Root', next: { c: child } };
     const plain = { tableId: 'p', name: 'Plain' };
 
     expect(linkedTablesWithParents([root, plain])).toEqual([
-      { table: child, parentName: 'Root' },
-      { table: grandchild, parentName: 'Child' },
+      { table: child, parentName: 'Root', parentId: 'r' },
+      { table: grandchild, parentName: 'Child', parentId: 'c' },
     ]);
   });
 
@@ -7549,9 +7563,9 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
 
   // The row's own buttons keep their actions: the click never reaches the entry.
   //
-  // The Review button hands the middle panel to the review panel, so the page editor's
-  // selection cannot be read while the panel is open. Exiting it remounts the editor, and
-  // what it comes back on is what the click left behind.
+  // A successful Review hands the middle panel over, and leaving the Review screen selects the
+  // reviewed table on purpose, so the click is read with the review's save failing: the page
+  // editor stays mounted and shows what the click alone left behind.
   test('clicking a row button does not select its table', async () => {
     const [root, other] = NAV_METADATA.tables;
     getMetadata.mockResolvedValue({
@@ -7569,16 +7583,14 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
       )
     );
 
+    saveTables.mockRejectedValueOnce(new Error('save exploded'));
     await userEvent.click(within(entryFor('Beta')).getByTestId('review-table'));
 
-    // The button did its job: the review panel opened on Beta.
-    expect(await screen.findByTestId('review-panel')).toHaveAttribute(
-      'data-tableid',
-      'beta'
+    // The button did its job: it tried to save for the review.
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('save exploded')
     );
-
-    await userEvent.click(screen.getByTestId('review-panel-exit'));
-    await screen.findByTestId('mock-pte');
+    expect(screen.queryByTestId('review-panel')).not.toBeInTheDocument();
 
     // The selection and the page stayed where they were.
     expect(screen.getByTestId('mock-selected')).toHaveTextContent('edit-target');
@@ -8122,6 +8134,203 @@ describe('PDFEditTableStructure — Task 14 host nav / selection / change-tracki
         ],
       },
     ]);
+  });
+
+  // The Document Overview follows the selection: a selection made anywhere else scrolls the
+  // entry that holds it into view, and a click on the list itself does not move the list.
+  describe('the Document Overview scroll', () => {
+    // alpha (holding alpha-a) and gamma on page 0; beta and delta on page 1.
+    const SCROLL_METADATA = {
+      name: 'scroll.pdf',
+      tables: [
+        {
+          ...NAV_METADATA.tables[0],
+          tableId: 'alpha',
+          name: 'Alpha',
+          next: {
+            'alpha-a': {
+              ...NAV_METADATA.tables[1],
+              tableId: 'alpha-a',
+              name: 'Alpha joined',
+              pdfPage: 0,
+              tableInPage: 1,
+            },
+          },
+        },
+        {
+          ...NAV_METADATA.tables[0],
+          tableId: 'gamma',
+          name: 'Gamma',
+          tableInPage: 2,
+          bounds: { left: 0.6, top: 0.1, width: 0.2, height: 0.2 },
+        },
+        { ...NAV_METADATA.tables[1], tableId: 'beta', name: 'Beta' },
+        {
+          ...NAV_METADATA.tables[1],
+          tableId: 'delta',
+          name: 'Delta',
+          tableInPage: 1,
+          bounds: { left: 0.6, top: 0.1, width: 0.2, height: 0.2 },
+        },
+      ],
+      pages: NAV_METADATA.pages,
+    };
+
+    // Reports the page and selection it was given, selects a table the way Previous/Next or
+    // a centre click does, and registers `global.__PTE_LEAVE__` as its leaveFor when set.
+    function SelectingPageTableEditor(props) {
+      // eslint-disable-next-line global-require
+      const React = require('react');
+      const { onRegisterLeave } = props;
+      React.useEffect(() => {
+        onRegisterLeave((move) =>
+          global.__PTE_LEAVE__ ? global.__PTE_LEAVE__(move) : move(null)
+        );
+        return () => onRegisterLeave(null);
+      }, [onRegisterLeave]);
+      return (
+        <div data-testid={'mock-pte'}>
+          <div data-testid={'mock-page'}>{String(props.page)}</div>
+          <div data-testid={'mock-selected'}>
+            {props.selectedTableId ?? 'none'}
+          </div>
+          {['alpha', 'alpha-a', 'gamma'].map((id) => (
+            <button
+              key={id}
+              data-testid={`mock-select-${id}`}
+              onClick={() => props.onSelectTable(id)}
+            >
+              {id}
+            </button>
+          ))}
+        </div>
+      );
+    }
+
+    let scrolled = [];
+
+    beforeEach(() => {
+      global.__PTE_MOCK__ = SelectingPageTableEditor;
+      global.__PTE_LEAVE__ = null;
+      global.__REVIEW_PANEL_PROPS__ = null;
+      getMetadata.mockResolvedValue(SCROLL_METADATA);
+      saveTables.mockResolvedValue({});
+      scrolled = [];
+      Element.prototype.scrollIntoView = jest.fn(function record() {
+        scrolled.push(this);
+      });
+    });
+
+    afterEach(() => {
+      global.__PTE_LEAVE__ = null;
+      global.__REVIEW_PANEL_PROPS__ = null;
+    });
+
+    const entryOf = (name) =>
+      screen.getByText(name).closest('[data-testid="table-entry"]');
+    // The size line rather than the name, whose click also starts the inline rename.
+    const sizeLineOf = (entry) =>
+      entry.querySelector('[data-testid="table-entry-size"]');
+
+    async function renderScroll() {
+      await renderNav({ pageCount: 2 });
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('alpha')
+      );
+      scrolled = [];
+      Element.prototype.scrollIntoView.mockClear();
+    }
+
+    test('a selection made by the editor scrolls that table entry into view', async () => {
+      await renderScroll();
+
+      await userEvent.click(screen.getByTestId('mock-select-gamma'));
+
+      await waitFor(() => expect(scrolled).toContain(entryOf('Gamma')));
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith(
+        selectionScrollIntoViewOptions()
+      );
+    });
+
+    test('clicking an entry selects it without scrolling that entry', async () => {
+      await renderScroll();
+
+      const gamma = entryOf('Gamma');
+      await userEvent.click(sizeLineOf(gamma));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('gamma')
+      );
+      expect(scrolled).not.toContain(gamma);
+    });
+
+    test('selecting a linked member from the editor scrolls its root entry', async () => {
+      await renderScroll();
+      await userEvent.click(screen.getByTestId('mock-select-gamma'));
+      scrolled = [];
+
+      await userEvent.click(screen.getByTestId('mock-select-alpha-a'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('alpha-a')
+      );
+      expect(scrolled).toContain(entryOf('Alpha'));
+    });
+
+    test('clicking a linked member in the additional tables list does not scroll its root entry', async () => {
+      await renderScroll();
+      await userEvent.click(screen.getByTestId('mock-select-gamma'));
+      scrolled = [];
+
+      fireEvent.click(screen.getByTestId('table-entry-tables'));
+      await userEvent.click(
+        within(screen.getByTestId('additional-tables-list')).getByText(
+          /Alpha joined/
+        )
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('alpha-a')
+      );
+      expect(scrolled).not.toContain(entryOf('Alpha'));
+    });
+
+    test('leaving the Review screen for another table scrolls the reviewed table entry', async () => {
+      await renderScroll();
+
+      await userEvent.click(
+        entryOf('Gamma').querySelector('[data-testid="review-table"]')
+      );
+      await screen.findByTestId('review-panel');
+      scrolled = [];
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      await screen.findByTestId('mock-pte');
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('gamma');
+      expect(scrolled).toContain(entryOf('Gamma'));
+    });
+
+    test('an entry clicked on another page is still selected once a held move runs', async () => {
+      let held = null;
+      global.__PTE_LEAVE__ = (move) => {
+        held = move;
+      };
+      await renderScroll();
+
+      const delta = entryOf('Delta');
+      await userEvent.click(sizeLineOf(delta));
+      expect(held).not.toBeNull();
+      // eslint-disable-next-line
+      await act(async () => {
+        held(null);
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+      );
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('delta');
+      expect(scrolled).not.toContain(delta);
+    });
   });
 });
 
@@ -8991,10 +9200,32 @@ describe('PDFEditTableStructure — Task 11 recalculation triggers, hints and re
 // panels' internals.
 describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () => {
   // Minimal stand-in for PageTableEditor: reports the page and selection it was given so the
-  // tests can prove a panel mode neither changes the page nor loses the selection.
-  function MockPageTableEditor({ page, selectedTableId }) {
+  // tests can prove a panel mode neither changes the page nor loses the selection. It also
+  // records what it was mounted with, and reports its initial pass up on mount as the real
+  // editor does.
+  function MockPageTableEditor({
+    page,
+    selectedTableId,
+    initialEditorMode,
+    onEditorModeChange,
+  }) {
+    // eslint-disable-next-line global-require
+    const React = require('react');
+    const [mounted] = React.useState(() => ({
+      page,
+      selectedTableId,
+      initialEditorMode,
+    }));
+    React.useEffect(() => {
+      onEditorModeChange(mounted.initialEditorMode);
+    }, [mounted, onEditorModeChange]);
     return (
-      <div data-testid={'mock-pte'}>
+      <div
+        data-testid={'mock-pte'}
+        data-initial-mode={mounted.initialEditorMode}
+        data-mounted-page={String(mounted.page)}
+        data-mounted-selected={mounted.selectedTableId ?? 'none'}
+      >
         <div data-testid={'mock-page'}>{String(page)}</div>
         <div data-testid={'mock-selected'}>{selectedTableId ?? 'none'}</div>
       </div>
@@ -9061,6 +9292,7 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     global.__LINK_SAVE_TABLES__ = null;
     global.__REVIEW_EDIT_TABLES__ = null;
     global.__REVIEW_PANEL_PROPS__ = null;
+    global.__LINK_PANEL_PROPS__ = null;
     getMetadata.mockResolvedValue(MODE_METADATA);
     getThumbnails.mockResolvedValue({
       images: [
@@ -9079,6 +9311,7 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     global.__LINK_SAVE_TABLES__ = null;
     global.__REVIEW_EDIT_TABLES__ = null;
     global.__REVIEW_PANEL_PROPS__ = null;
+    global.__LINK_PANEL_PROPS__ = null;
     // eslint-disable-next-line global-require
     require('config').stagedGridEditorEnabled.mockReturnValue(false);
   });
@@ -9144,7 +9377,7 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     expect(screen.queryByTestId('full-panel')).not.toBeInTheDocument();
   });
 
-  test('the review panel is handed the host save path, and nothing to export with', async () => {
+  test('the review panel is handed the host save path and a single-table export', async () => {
     const onAllFiles = jest.fn();
     render(<PDFEditTableStructure pdfId={PDF_ID} onAllFiles={onAllFiles} />);
     await screen.findByTestId('mock-pte');
@@ -9153,10 +9386,11 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     await screen.findByTestId('review-panel');
 
     const props = global.__REVIEW_PANEL_PROPS__;
-    // The panel no longer exports, so it is given neither the document's name nor the way
-    // back to the file list.
+    // The host builds the export itself, so the panel is given neither the document's name
+    // nor the way back to the file list, only the export to call.
     expect(props.originalFilename).toBeUndefined();
     expect(props.onAllFiles).toBeUndefined();
+    expect(typeof props.onExport).toBe('function');
     // onSave is the host's own save: it PUTs the document and reports whether the server
     // was reached. Review already saved once, so this is the second call.
     let saved;
@@ -9312,6 +9546,148 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
 
       expect(exportButton()).toBeDisabled();
     });
+
+    // The per-entry Export in each Document Overview row: one table's workbook, saved first.
+    describe('exporting one entry', () => {
+      const entryOf = (name) =>
+        screen.getByText(name).closest('[data-testid="table-entry"]');
+      const entryExport = (name) =>
+        entryOf(name).querySelector('[data-testid="export-table"]');
+      const betaFilename = () =>
+        `modes${tableExportFilenameSeparator()}Beta.xlsx`;
+
+      test('every non-deleted entry has one Export button, directly after its Review button', async () => {
+        await renderModes();
+
+        const entries = screen.getAllByTestId('table-entry');
+        expect(entries).toHaveLength(MODE_METADATA.tables.length);
+        entries.forEach((entry) => {
+          const exports = entry.querySelectorAll('[data-testid="export-table"]');
+          expect(exports).toHaveLength(1);
+          const review = entry.querySelector('[data-testid="review-table"]');
+          expect(review.nextElementSibling).toBe(exports[0]);
+          expect(exports[0]).toHaveTextContent('Export');
+        });
+      });
+
+      test('a deleted entry has no Export button', async () => {
+        const [alpha, beta] = MODE_METADATA.tables;
+        getMetadata.mockResolvedValue({
+          ...MODE_METADATA,
+          tables: [{ ...alpha, deleted: true }, beta],
+        });
+        await renderModes();
+
+        // A deleted entry is listed only on the displayed page, which is alpha's.
+        fireEvent.click(screen.getByRole('checkbox', { name: 'Include deleted' }));
+
+        await waitFor(() => expect(screen.getByText('Alpha')).toBeInTheDocument());
+        expect(entryExport('Alpha')).toBeNull();
+        expect(entryExport('Beta')).not.toBeNull();
+      });
+
+      test('saves, then exports that table alone under its own filename', async () => {
+        await renderModes();
+
+        await userEvent.click(entryExport('Beta'));
+
+        await waitFor(() => expect(handedOver).toEqual([betaFilename()]));
+        expect(saveTables).toHaveBeenCalledTimes(1);
+        expect(tableToExcel).toHaveBeenCalledTimes(1);
+        expect(tableToExcel).toHaveBeenCalledWith({
+          pdfId: PDF_ID,
+          rootTableIds: ['beta'],
+          filename: betaFilename(),
+        });
+      });
+
+      test('leaves the selected entry and the editor unchanged', async () => {
+        await renderModes();
+        const selectedBefore = screen.getByTestId('mock-selected').textContent;
+
+        await userEvent.click(entryExport('Beta'));
+
+        await waitFor(() => expect(tableToExcel).toHaveBeenCalledTimes(1));
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent(
+          selectedBefore
+        );
+        expect(screen.getByTestId('mock-pte')).toBeInTheDocument();
+      });
+
+      test('settles the centre editor before saving, and saves what it flushed', async () => {
+        const order = [];
+        const flushed = MODE_METADATA.tables.map((t) =>
+          t.tableId === 'beta' ? { ...t, name: 'Flushed Beta' } : t
+        );
+        global.__PTE_MOCK__ = function LeavingPageTableEditor(props) {
+          // eslint-disable-next-line global-require
+          const React = require('react');
+          const { onRegisterLeave, onEditorModeChange, initialEditorMode } =
+            props;
+          React.useEffect(() => {
+            onEditorModeChange(initialEditorMode);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+          }, []);
+          React.useEffect(() => {
+            onRegisterLeave((move) => {
+              order.push('settle');
+              move({ tables: flushed });
+            });
+            return () => onRegisterLeave(null);
+          }, [onRegisterLeave]);
+          return <div data-testid={'mock-pte'} />;
+        };
+        saveTables.mockImplementation(async () => {
+          order.push('save');
+          return {};
+        });
+        await renderModes();
+
+        await userEvent.click(entryExport('Beta'));
+
+        await waitFor(() => expect(tableToExcel).toHaveBeenCalledTimes(1));
+        expect(order).toEqual(['settle', 'save']);
+        expect(saveTables.mock.calls[0][1]).toEqual(flushed);
+      });
+
+      test('a failed save abandons the export', async () => {
+        saveTables.mockRejectedValueOnce(new Error('save exploded'));
+        await renderModes();
+
+        await userEvent.click(entryExport('Beta'));
+
+        await waitFor(() => expect(entryExport('Beta')).toBeEnabled());
+        expect(saveTables).toHaveBeenCalledTimes(1);
+        expect(tableToExcel).not.toHaveBeenCalled();
+        expect(handedOver).toEqual([]);
+      });
+
+      test('every Export button is disabled while an export is in flight, so no second one starts', async () => {
+        let finish;
+        tableToExcel.mockReturnValue(
+          new Promise((resolve) => {
+            finish = resolve;
+          })
+        );
+        await renderModes();
+
+        await userEvent.click(entryExport('Beta'));
+
+        await waitFor(() => expect(tableToExcel).toHaveBeenCalledTimes(1));
+        screen
+          .getAllByTestId('export-table')
+          .forEach((button) => expect(button).toBeDisabled());
+        fireEvent.click(entryExport('Alpha'));
+        expect(tableToExcel).toHaveBeenCalledTimes(1);
+
+        // eslint-disable-next-line
+        await act(async () => {
+          finish(workbook);
+        });
+        await waitFor(() => expect(entryExport('Alpha')).toBeEnabled());
+        expect(tableToExcel).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   test('Cancel in the grid editor returns to the page editor', async () => {
@@ -9452,6 +9828,773 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta');
   });
 
+  // The toolbar's Validate tabs on Review and the Grid Editor: each saves, closes the panel and
+  // lands the page editor in the asked-for pass on the panel's table.
+  describe('the Validate tabs from a full panel', () => {
+    let actions = null;
+
+    function ActionsProbe() {
+      actions = useEditorPass().actions;
+      return null;
+    }
+
+    async function renderWithActions() {
+      render(
+        <EditorPassProvider>
+          <ActionsProbe />
+          <PDFEditTableStructure pdfId={PDF_ID} />
+        </EditorPassProvider>
+      );
+      await screen.findByTestId('mock-pte');
+      await waitFor(() => expect(actions).not.toBeNull());
+    }
+
+    const reviewButtonFor = (name) =>
+      screen
+        .getByText(name)
+        .closest('[data-testid="table-entry"]')
+        .querySelector('[data-testid="review-table"]');
+
+    const mountedEditor = () => screen.getByTestId('mock-pte');
+
+    async function openBetaReview() {
+      await userEvent.click(reviewButtonFor('Beta'));
+      await screen.findByTestId('review-panel');
+      saveTables.mockClear();
+    }
+
+    beforeEach(() => {
+      actions = null;
+    });
+
+    test('validateTables from Review saves once and opens the contents pass on the reviewed table', async () => {
+      await renderWithActions();
+      await openBetaReview();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+
+      await screen.findByTestId('mock-pte');
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('review-panel')).not.toBeInTheDocument();
+      expect(mountedEditor()).toHaveAttribute(
+        'data-initial-mode',
+        contentsPassEditorMode()
+      );
+      expect(mountedEditor()).toHaveAttribute('data-mounted-page', '1');
+      expect(mountedEditor()).toHaveAttribute('data-mounted-selected', 'beta');
+    });
+
+    test('validateBorders from Review opens the boundary pass on the reviewed table', async () => {
+      await renderWithActions();
+      await openBetaReview();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateBorders();
+      });
+
+      await screen.findByTestId('mock-pte');
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('review-panel')).not.toBeInTheDocument();
+      expect(mountedEditor()).toHaveAttribute(
+        'data-initial-mode',
+        boundaryPassEditorMode()
+      );
+      expect(mountedEditor()).toHaveAttribute('data-mounted-page', '1');
+      expect(mountedEditor()).toHaveAttribute('data-mounted-selected', 'beta');
+    });
+
+    test("validateTables from the Grid Editor saves its arrangement and lands on the root's page", async () => {
+      await renderWithActions();
+      // Off the root's page first, so landing on it is a move.
+      await userEvent.click(screen.getAllByTestId('thumbnail')[1]);
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+      );
+      const arrangement = MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, grid: [['alpha'], ['alpha-a']] } : t
+      );
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      global.__LINK_SAVE_TABLES__ = arrangement;
+      saveTables.mockClear();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+
+      await screen.findByTestId('mock-pte');
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(saveTables.mock.calls[0][1]).toEqual(arrangement);
+      expect(screen.queryByTestId('link-dialog')).not.toBeInTheDocument();
+      expect(mountedEditor()).toHaveAttribute(
+        'data-initial-mode',
+        contentsPassEditorMode()
+      );
+      expect(mountedEditor()).toHaveAttribute('data-mounted-page', '0');
+      expect(mountedEditor()).toHaveAttribute('data-mounted-selected', 'alpha');
+    });
+
+    test('validateTables from the Grid Editor does not save an arrangement it opened with', async () => {
+      await renderWithActions();
+      const opened = MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, grid: [['alpha'], ['alpha-a']] } : t
+      );
+      global.__LINK_SAVE_TABLES__ = opened;
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      saveTables.mockClear();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+
+      await screen.findByTestId('mock-pte');
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(saveTables.mock.calls[0][1]).not.toEqual(opened);
+    });
+
+    test('a panel closed by its own exit while the tab save is pending leaves no pass request behind', async () => {
+      await renderWithActions();
+      await openBetaReview();
+      let finishSave;
+      saveTables.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSave = resolve;
+          })
+      );
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+      // eslint-disable-next-line
+      await act(async () => {
+        finishSave({});
+      });
+      expect(mountedEditor()).toHaveAttribute(
+        'data-initial-mode',
+        boundaryPassEditorMode()
+      );
+
+      await openBetaReview();
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      expect(mountedEditor()).toHaveAttribute(
+        'data-initial-mode',
+        boundaryPassEditorMode()
+      );
+    });
+
+    test('a failed save leaves the panel open', async () => {
+      await renderWithActions();
+      await openBetaReview();
+      saveTables.mockRejectedValueOnce(new Error('save exploded'));
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('save exploded')
+      );
+      expect(screen.getByTestId('review-panel')).toBeInTheDocument();
+      expect(screen.queryByTestId('mock-pte')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+      expect(await screen.findByTestId('mock-pte')).toHaveAttribute(
+        'data-initial-mode',
+        boundaryPassEditorMode()
+      );
+    });
+
+    test('the request clears once the editor reports it, so a plain exit returns to the pass the review was opened from', async () => {
+      await renderWithActions();
+      await openBetaReview();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+      await screen.findByTestId('mock-pte');
+
+      await userEvent.click(reviewButtonFor('Beta'));
+      await screen.findByTestId('review-panel');
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      expect(await screen.findByTestId('mock-pte')).toHaveAttribute(
+        'data-initial-mode',
+        contentsPassEditorMode()
+      );
+    });
+
+    test('a second action while the first save is pending saves only once', async () => {
+      await renderWithActions();
+      await openBetaReview();
+      let finishSave;
+      saveTables.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSave = resolve;
+          })
+      );
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+      });
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateBorders();
+      });
+
+      expect(saveTables).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line
+      await act(async () => {
+        finishSave({});
+      });
+      expect(await screen.findByTestId('mock-pte')).toHaveAttribute(
+        'data-initial-mode',
+        contentsPassEditorMode()
+      );
+      expect(saveTables).toHaveBeenCalledTimes(1);
+    });
+
+    test('two actions fired in the same tick save only once', async () => {
+      await renderWithActions();
+      await openBetaReview();
+      let finishSave;
+      saveTables.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSave = resolve;
+          })
+      );
+
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.validateTables();
+        actions.validateBorders();
+      });
+
+      expect(saveTables).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line
+      await act(async () => {
+        finishSave({});
+      });
+      expect(await screen.findByTestId('mock-pte')).toHaveAttribute(
+        'data-initial-mode',
+        contentsPassEditorMode()
+      );
+      expect(saveTables).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('All Files saves in the background', () => {
+    let actions = null;
+
+    function ActionsProbe() {
+      actions = useEditorPass().actions;
+      return null;
+    }
+
+    const renamed = (name) =>
+      MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, name } : t
+      );
+
+    // Offers an Edit control that commits `global.__PTE_EDIT_TABLES__`, and registers
+    // `global.__PTE_LEAVE__` (given its props) as the editor's leaveFor.
+    function EditingPageTableEditor(props) {
+      // eslint-disable-next-line global-require
+      const React = require('react');
+      const propsRef = React.useRef(props);
+      propsRef.current = props;
+      const { onRegisterLeave, onEditorModeChange, initialEditorMode } = props;
+      React.useEffect(() => {
+        onEditorModeChange(initialEditorMode);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+      React.useEffect(() => {
+        onRegisterLeave((move) =>
+          global.__PTE_LEAVE__
+            ? global.__PTE_LEAVE__(propsRef.current, move)
+            : move(null)
+        );
+        return () => onRegisterLeave(null);
+      }, [onRegisterLeave]);
+      return (
+        <div data-testid={'mock-pte'}>
+          <button
+            data-testid={'pte-edit'}
+            onClick={() => props.onChange(global.__PTE_EDIT_TABLES__)}
+          >
+            {'edit'}
+          </button>
+        </div>
+      );
+    }
+
+    async function renderAllFiles() {
+      const onAllFiles = jest.fn();
+      render(
+        <EditorPassProvider>
+          <ActionsProbe />
+          <PDFEditTableStructure pdfId={PDF_ID} onAllFiles={onAllFiles} />
+        </EditorPassProvider>
+      );
+      await screen.findByTestId('mock-pte');
+      await waitFor(() => expect(actions).not.toBeNull());
+      return onAllFiles;
+    }
+
+    async function leave() {
+      // eslint-disable-next-line
+      await act(async () => {
+        actions.allFiles();
+      });
+    }
+
+    beforeEach(() => {
+      actions = null;
+      global.__PTE_MOCK__ = EditingPageTableEditor;
+      global.__PTE_EDIT_TABLES__ = null;
+      global.__PTE_LEAVE__ = null;
+    });
+
+    afterEach(() => {
+      global.__PTE_EDIT_TABLES__ = null;
+      global.__PTE_LEAVE__ = null;
+    });
+
+    test('a clean document leaves without saving', async () => {
+      const onAllFiles = await renderAllFiles();
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).not.toHaveBeenCalled();
+    });
+
+    test('an edited document is saved once and left', async () => {
+      const onAllFiles = await renderAllFiles();
+      global.__PTE_EDIT_TABLES__ = renamed('Edited Alpha');
+      await userEvent.click(screen.getByTestId('pte-edit'));
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(saveTables.mock.calls[0][1]).toEqual(renamed('Edited Alpha'));
+    });
+
+    test('leaves before the save resolves', async () => {
+      let finishSave;
+      saveTables.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishSave = resolve;
+          })
+      );
+      const onAllFiles = await renderAllFiles();
+      global.__PTE_EDIT_TABLES__ = renamed('Edited Alpha');
+      await userEvent.click(screen.getByTestId('pte-edit'));
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line
+      await act(async () => {
+        finishSave({});
+      });
+    });
+
+    test('an edit only the settle flushes is saved', async () => {
+      const onAllFiles = await renderAllFiles();
+      const flushed = renamed('Flushed Alpha');
+      global.__PTE_LEAVE__ = (props, move) => {
+        props.onChange(flushed);
+        move({ tables: flushed });
+      };
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(saveTables.mock.calls[0][1]).toEqual(flushed);
+    });
+
+    test('a failed save still leaves and raises the error toast', async () => {
+      saveTables.mockRejectedValueOnce(new Error('save exploded'));
+      const onAllFiles = await renderAllFiles();
+      global.__PTE_EDIT_TABLES__ = renamed('Edited Alpha');
+      await userEvent.click(screen.getByTestId('pte-edit'));
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith('save exploded')
+      );
+    });
+
+    test("the Grid Editor's changed arrangement is saved, then the editor is left", async () => {
+      const onAllFiles = await renderAllFiles();
+      const arrangement = MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, grid: [['alpha'], ['alpha-a']] } : t
+      );
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      global.__LINK_SAVE_TABLES__ = arrangement;
+      saveTables.mockClear();
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(saveTables.mock.calls[0][1]).toEqual(arrangement);
+      expect(saveTables.mock.invocationCallOrder[0]).toBeLessThan(
+        onAllFiles.mock.invocationCallOrder[0]
+      );
+    });
+
+    test('an arrangement the Grid Editor opened with is not saved on leaving', async () => {
+      const onAllFiles = await renderAllFiles();
+      global.__LINK_SAVE_TABLES__ = MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, grid: [['alpha'], ['alpha-a']] } : t
+      );
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      saveTables.mockClear();
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).not.toHaveBeenCalled();
+    });
+
+    test('the Grid Editor with no change leaves without saving', async () => {
+      const onAllFiles = await renderAllFiles();
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      saveTables.mockClear();
+
+      await leave();
+
+      await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+      expect(saveTables).not.toHaveBeenCalled();
+    });
+  });
+
+  // Leaving the Review screen returns to the screen it was opened from, with the reviewed
+  // table selected, and the panel can export that one table on its own.
+  describe('returning from and exporting out of the Review screen', () => {
+    // Reports the pass and selection it was given, records its last props, and can report
+    // the contents pass back up the way the real editor does.
+    function PassRecordingPageTableEditor(props) {
+      global.__PTE_PROPS__ = props;
+      return (
+        <div data-testid={'mock-pte'}>
+          <div data-testid={'mock-page'}>{String(props.page)}</div>
+          <div data-testid={'mock-selected'}>
+            {props.selectedTableId ?? 'none'}
+          </div>
+          <button
+            data-testid={'mock-mode-grid'}
+            onClick={() => props.onEditorModeChange('grid')}
+          >
+            {'grid'}
+          </button>
+        </div>
+      );
+    }
+
+    // A second ready table on page 0, so a table on the current page can be reviewed that
+    // is not the one selected by default.
+    const gamma = {
+      ...MODE_METADATA.tables[1],
+      tableId: 'gamma',
+      name: 'Gamma',
+      pdfPage: 0,
+      tableInPage: 2,
+      bounds: { left: 0.6, top: 0.1, width: 0.2, height: 0.2 },
+    };
+
+    const workbook = new Blob(['PK the workbook']);
+    let handedOver = [];
+
+    beforeEach(() => {
+      global.__PTE_MOCK__ = PassRecordingPageTableEditor;
+      global.__PTE_PROPS__ = null;
+      handedOver = [];
+      global.URL.createObjectURL = jest.fn(() => 'blob:workbook');
+      global.URL.revokeObjectURL = jest.fn();
+      jest
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(function record() {
+          handedOver.push(this.download);
+        });
+      tableToExcel.mockResolvedValue(workbook);
+    });
+
+    afterEach(() => {
+      global.__PTE_PROPS__ = null;
+      jest.restoreAllMocks();
+    });
+
+    const reviewButtonOf = (name) =>
+      screen
+        .getByText(name)
+        .closest('[data-testid="table-entry"]')
+        .querySelector('[data-testid="review-table"]');
+
+    const openReviewOf = async (name) => {
+      await userEvent.click(reviewButtonOf(name));
+      await screen.findByTestId('review-panel');
+    };
+
+    const exportFromPanel = async () => {
+      // eslint-disable-next-line
+      await act(async () => {
+        await global.__REVIEW_PANEL_PROPS__.onExport();
+      });
+    };
+
+    test('exiting a review opened from the contents pass remounts the editor on that pass', async () => {
+      await renderModes();
+      expect(global.__PTE_PROPS__.initialEditorMode).toBe('border');
+
+      await userEvent.click(screen.getByTestId('mock-mode-grid'));
+      await openReviewOf('Alpha');
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      await screen.findByTestId('mock-pte');
+      expect(global.__PTE_PROPS__.initialEditorMode).toBe('grid');
+    });
+
+    test('exiting the review of a table on another page moves to that page and selects it', async () => {
+      await renderModes();
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('0');
+
+      await openReviewOf('Beta');
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      await screen.findByTestId('mock-pte');
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1');
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('beta');
+    });
+
+    test('exiting the review of a table on the current page selects it without moving', async () => {
+      getMetadata.mockResolvedValue({
+        ...MODE_METADATA,
+        tables: [...MODE_METADATA.tables, gamma],
+      });
+      await renderModes();
+      await waitFor(() =>
+        expect(screen.getByTestId('mock-selected')).toHaveTextContent('alpha')
+      );
+
+      await openReviewOf('Gamma');
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      await screen.findByTestId('mock-pte');
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('0');
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('gamma');
+    });
+
+    test('a review opened over the grid editor returns to it on exit', async () => {
+      await renderModes();
+
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+      // The left list stays mounted under the overlay, so its Review button is reachable.
+      await openReviewOf('Alpha');
+      expect(screen.queryByTestId('link-dialog')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId('review-panel-exit'));
+
+      expect(await screen.findByTestId('link-dialog')).toBeInTheDocument();
+      expect(screen.queryByTestId('mock-pte')).not.toBeInTheDocument();
+    });
+
+    test('onExport posts the reviewed table alone under its own name and saves the workbook', async () => {
+      await renderModes();
+      await openReviewOf('Alpha');
+
+      await exportFromPanel();
+
+      const filename = `modes${tableExportFilenameSeparator()}Alpha.xlsx`;
+      expect(tableToExcel).toHaveBeenCalledTimes(1);
+      expect(tableToExcel).toHaveBeenCalledWith({
+        pdfId: PDF_ID,
+        rootTableIds: ['alpha'],
+        filename,
+      });
+      expect(handedOver).toEqual([filename]);
+      expect(global.URL.createObjectURL).toHaveBeenCalledWith(workbook);
+      expect(screen.getByTestId('review-panel')).toBeInTheDocument();
+    });
+
+    test('onExport does not save a clean document', async () => {
+      await renderModes();
+      await openReviewOf('Alpha');
+      saveTables.mockClear();
+
+      await exportFromPanel();
+
+      expect(saveTables).not.toHaveBeenCalled();
+      expect(tableToExcel).toHaveBeenCalledTimes(1);
+    });
+
+    test('onExport saves a dirty document once before exporting', async () => {
+      await renderModes();
+      global.__REVIEW_EDIT_TABLES__ = MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, name: 'Corrected Alpha' } : t
+      );
+      await openReviewOf('Alpha');
+      await userEvent.click(screen.getByTestId('review-panel-edit'));
+      saveTables.mockClear();
+
+      await exportFromPanel();
+
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(tableToExcel).toHaveBeenCalledTimes(1);
+    });
+
+    test('onExport abandons the export when the save fails', async () => {
+      await renderModes();
+      global.__REVIEW_EDIT_TABLES__ = MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, name: 'Corrected Alpha' } : t
+      );
+      await openReviewOf('Alpha');
+      await userEvent.click(screen.getByTestId('review-panel-edit'));
+      saveTables.mockRejectedValueOnce(new Error('save exploded'));
+
+      await exportFromPanel();
+
+      expect(toast.error).toHaveBeenCalledWith('save exploded');
+      expect(tableToExcel).not.toHaveBeenCalled();
+      expect(handedOver).toEqual([]);
+    });
+  });
+
+  // The Grid Editor exports its root table alone, committing and saving a changed
+  // arrangement first, and the user stays in the Grid Editor.
+  describe('exporting from the Grid Editor', () => {
+    const workbook = new Blob(['PK the workbook']);
+    let handedOver = [];
+
+    beforeEach(() => {
+      handedOver = [];
+      global.URL.createObjectURL = jest.fn(() => 'blob:workbook');
+      global.URL.revokeObjectURL = jest.fn();
+      jest
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(function record() {
+          handedOver.push(this.download);
+        });
+      tableToExcel.mockResolvedValue(workbook);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    const arrangement = () =>
+      MODE_METADATA.tables.map((t) =>
+        t.tableId === 'alpha' ? { ...t, grid: [['alpha'], ['alpha-a']] } : t
+      );
+
+    const openLink = async () => {
+      await userEvent.click(linkButton());
+      await screen.findByTestId('link-dialog');
+    };
+
+    const exportFromLink = async () => {
+      // eslint-disable-next-line
+      await act(async () => {
+        await global.__LINK_PANEL_PROPS__.onExport();
+      });
+    };
+
+    test('an unchanged arrangement on a clean document exports the root without saving', async () => {
+      await renderModes();
+      await openLink();
+      saveTables.mockClear();
+
+      await exportFromLink();
+
+      const filename = `modes${tableExportFilenameSeparator()}Alpha.xlsx`;
+      expect(tableToExcel).toHaveBeenCalledTimes(1);
+      expect(tableToExcel).toHaveBeenCalledWith({
+        pdfId: PDF_ID,
+        rootTableIds: ['alpha'],
+        filename,
+      });
+      expect(handedOver).toEqual([filename]);
+      expect(global.URL.createObjectURL).toHaveBeenCalledWith(workbook);
+      expect(saveTables).not.toHaveBeenCalled();
+      expect(screen.getByTestId('link-dialog')).toBeInTheDocument();
+    });
+
+    test('a changed arrangement is saved before the root is exported', async () => {
+      await renderModes();
+      await openLink();
+      const changed = arrangement();
+      global.__LINK_SAVE_TABLES__ = changed;
+      saveTables.mockClear();
+
+      await exportFromLink();
+
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(saveTables.mock.calls[0][1]).toEqual(changed);
+      expect(tableToExcel).toHaveBeenCalledTimes(1);
+      expect(tableToExcel.mock.calls[0][0].rootTableIds).toEqual(['alpha']);
+      expect(saveTables.mock.invocationCallOrder[0]).toBeLessThan(
+        tableToExcel.mock.invocationCallOrder[0]
+      );
+      expect(screen.getByTestId('link-dialog')).toBeInTheDocument();
+    });
+
+    test('a second export after a saved arrangement does not save again', async () => {
+      await renderModes();
+      await openLink();
+      global.__LINK_SAVE_TABLES__ = arrangement();
+      saveTables.mockClear();
+
+      await exportFromLink();
+      await exportFromLink();
+
+      expect(saveTables).toHaveBeenCalledTimes(1);
+      expect(tableToExcel).toHaveBeenCalledTimes(2);
+    });
+
+    test('a failed save toasts and abandons the export', async () => {
+      await renderModes();
+      await openLink();
+      global.__LINK_SAVE_TABLES__ = arrangement();
+      saveTables.mockRejectedValueOnce(new Error('save exploded'));
+
+      await exportFromLink();
+
+      expect(toast.error).toHaveBeenCalledWith('save exploded');
+      expect(tableToExcel).not.toHaveBeenCalled();
+      expect(handedOver).toEqual([]);
+    });
+  });
+
   // Which screen's help the editor is on. The internal names and the users' names do not
   // line up, and the mapping is the whole point of these four: the Grid Editor screen is
   // centreMode 'link', NOT the contents pass — whose own internal mode is the one called
@@ -9503,54 +10646,72 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
 
     const reportedScreen = () => screen.getByTestId('probe-screen');
 
-    // The toolbar's two pass tabs are drawn from the pass this component reports, which is
-    // why it reports the pass and not the page editor beneath it: the pass is still the
-    // pass while a full panel stands over that editor.
-    describe('the pass the editor reports to the toolbar', () => {
-      function EditorPassProbe() {
+    // The toolbar's tabs are drawn from the screen this component reports, which is why it
+    // reports it and not the page editor beneath it: this is the component that knows
+    // whether a full panel stands over that editor.
+    describe('the screen the editor reports to the toolbar', () => {
+      function EditorScreenProbe() {
         const editorPass = useEditorPass();
 
         return (
-          <span data-testid={'probe-pass'}>{editorPass.pass || 'none'}</span>
+          <span data-testid={'probe-editor-screen'}>
+            {editorPass.screen || 'none'}
+          </span>
         );
       }
 
-      async function renderWithPass() {
+      async function renderWithEditorPass() {
         render(
           <EditorPassProvider>
-            <EditorPassProbe />
+            <EditorScreenProbe />
             <PDFEditTableStructure pdfId={PDF_ID} />
           </EditorPassProvider>
         );
         await screen.findByTestId('mock-pte');
       }
 
-      const reportedPass = () => screen.getByTestId('probe-pass');
+      const reportedEditorScreen = () =>
+        screen.getByTestId('probe-editor-screen');
 
-      test('border while the centre editor is in border mode', async () => {
-        await renderWithPass();
+      test('the boundary pass while the centre editor is in border mode', async () => {
+        await renderWithEditorPass();
 
-        await waitFor(() => expect(reportedPass()).toHaveTextContent('border'));
+        await waitFor(() =>
+          expect(reportedEditorScreen()).toHaveTextContent(boundaryPassScreenId())
+        );
       });
 
-      test('grid once the centre editor reports grid mode', async () => {
-        await renderWithPass();
+      test('the contents pass once the centre editor reports grid mode', async () => {
+        await renderWithEditorPass();
 
         await userEvent.click(screen.getByTestId('mock-mode-grid'));
 
-        await waitFor(() => expect(reportedPass()).toHaveTextContent('grid'));
+        await waitFor(() =>
+          expect(reportedEditorScreen()).toHaveTextContent(contentsPassScreenId())
+        );
       });
 
-      // The grid editor stands over the centre editor without ending the pass, so the tabs
-      // keep saying which pass is underneath it.
-      test('the pass it was in while the grid editor is open', async () => {
-        await renderWithPass();
+      test('the link-tables screen while the grid editor is open', async () => {
+        await renderWithEditorPass();
 
         await userEvent.click(screen.getByTestId('mock-mode-grid'));
         await userEvent.click(linkButton());
         await screen.findByTestId('link-dialog');
 
-        await waitFor(() => expect(reportedPass()).toHaveTextContent('grid'));
+        await waitFor(() =>
+          expect(reportedEditorScreen()).toHaveTextContent(linkTablesScreenId())
+        );
+      });
+
+      test('the review screen while the review panel is open', async () => {
+        await renderWithEditorPass();
+
+        await userEvent.click(reviewButton());
+        await screen.findByTestId('review-panel');
+
+        await waitFor(() =>
+          expect(reportedEditorScreen()).toHaveTextContent(reviewTableScreenId())
+        );
       });
     });
 
@@ -9695,5 +10856,416 @@ describe('PDFEditTableStructure — the help anchors on its two columns', () => 
       'data-help-id',
       documentOverviewLinkHelpId()
     );
+  });
+});
+
+// The toolbar's tabs stand outside this tree, so the host registers what they do through the
+// editor-pass context: back to the file list, and the switch between the two passes, which
+// on the editor screen is the centre editor's own.
+describe('PDFEditTableStructure — the tab actions the host registers', () => {
+  let actions = null;
+  const editorSwitch = {
+    validateBorders: jest.fn(),
+    validateTables: jest.fn(),
+  };
+
+  // Captures what the host registered, which is what the toolbar's tabs would call.
+  function ActionsProbe() {
+    const editorPass = useEditorPass();
+    actions = editorPass.actions;
+
+    return <span data-testid={'probe-actions'}>{actions ? 'yes' : 'no'}</span>;
+  }
+
+  // Hands the host a pass switch the way the real editor does, and settles nothing on leave.
+  function SwitchRegisteringPageTableEditor(props) {
+    const { onRegisterPassSwitch, onRegisterLeave } = props;
+
+    // eslint-disable-next-line global-require
+    require('react').useEffect(() => {
+      onRegisterPassSwitch(editorSwitch);
+      onRegisterLeave((move) => move(null));
+      return () => {
+        onRegisterPassSwitch(null);
+        onRegisterLeave(null);
+      };
+    }, [onRegisterPassSwitch, onRegisterLeave]);
+
+    return <div data-testid={'mock-pte'} />;
+  }
+
+  beforeEach(() => {
+    actions = null;
+    global.__PTE_MOCK__ = SwitchRegisteringPageTableEditor;
+  });
+
+  afterEach(() => {
+    global.__PTE_MOCK__ = null;
+  });
+
+  async function renderHost(props = {}) {
+    const view = render(
+      <EditorPassProvider>
+        <ActionsProbe />
+        <PDFEditTableStructure pdfId={PDF_ID} {...props} />
+      </EditorPassProvider>
+    );
+    await screen.findByTestId('mock-pte');
+    await waitFor(() => expect(actions).not.toBeNull());
+    return view;
+  }
+
+  test('registers allFiles, validateBorders and validateTables', async () => {
+    await renderHost();
+
+    expect(actions).toEqual({
+      allFiles: expect.any(Function),
+      validateBorders: expect.any(Function),
+      validateTables: expect.any(Function),
+    });
+  });
+
+  test("validateTables on the editor screen calls the editor's own switch", async () => {
+    await renderHost();
+
+    // eslint-disable-next-line
+    await act(async () => {
+      actions.validateTables();
+    });
+
+    expect(editorSwitch.validateTables).toHaveBeenCalledTimes(1);
+    expect(editorSwitch.validateBorders).not.toHaveBeenCalled();
+  });
+
+  test("validateBorders on the editor screen calls the editor's own switch", async () => {
+    await renderHost();
+
+    // eslint-disable-next-line
+    await act(async () => {
+      actions.validateBorders();
+    });
+
+    expect(editorSwitch.validateBorders).toHaveBeenCalledTimes(1);
+    expect(editorSwitch.validateTables).not.toHaveBeenCalled();
+  });
+
+  test('allFiles with nothing dirty leaves for the file list without saving', async () => {
+    const onAllFiles = jest.fn();
+    await renderHost({ onAllFiles });
+
+    // eslint-disable-next-line
+    await act(async () => {
+      actions.allFiles();
+    });
+
+    await waitFor(() => expect(onAllFiles).toHaveBeenCalledTimes(1));
+    expect(saveTables).not.toHaveBeenCalled();
+  });
+
+  // The provider and probe stay; only the host goes.
+  test('takes the actions back when the host goes', async () => {
+    const { rerender } = await renderHost();
+
+    rerender(
+      <EditorPassProvider>
+        <ActionsProbe />
+      </EditorPassProvider>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('probe-actions')).toHaveTextContent('no')
+    );
+    expect(actions).toBeNull();
+  });
+});
+
+describe('PDFEditTableStructure — the Pages column selects a table and follows the page', () => {
+  // Two tables on each of pages 0 and 1 at known bounds; page 2 holds none.
+  const tableAt = (tableId, name, pdfPage, tableInPage, left, top) => ({
+    tableId,
+    name,
+    pdfPage,
+    tableInPage,
+    bounds: { left, top, width: 0.2, height: 0.2 },
+    columnWidths: [{ value: 0.2, confidence: 90 }],
+    rowHeights: [{ value: 0.2, confidence: 90 }],
+  });
+  const PAGES_METADATA = {
+    name: 'pages.pdf',
+    tables: [
+      tableAt('p0-a', 'Page0 First', 0, 0, 0.1, 0.1),
+      tableAt('p0-b', 'Page0 Second', 0, 1, 0.6, 0.6),
+      tableAt('p1-a', 'Page1 First', 1, 0, 0.1, 0.1),
+      tableAt('p1-b', 'Page1 Second', 1, 1, 0.6, 0.6),
+    ],
+    pages: [
+      { page: 0, width: 1, height: 1, tables: [] },
+      { page: 1, width: 1, height: 1, tables: [] },
+      { page: 2, width: 1, height: 1, tables: [] },
+    ],
+  };
+
+  // Reports page and selection, offers Next, the pass switch and a linking session, and
+  // registers `global.__PTE_LEAVE__` as its leaveFor when set.
+  function PagesPageTableEditor(props) {
+    // eslint-disable-next-line global-require
+    const React = require('react');
+    const { onRegisterLeave } = props;
+    React.useEffect(() => {
+      onRegisterLeave((move) =>
+        global.__PTE_LEAVE__ ? global.__PTE_LEAVE__(move) : move(null)
+      );
+      return () => onRegisterLeave(null);
+    }, [onRegisterLeave]);
+    return (
+      <div data-testid={'mock-pte'}>
+        <div data-testid={'mock-page'}>{String(props.page)}</div>
+        <div data-testid={'mock-selected'}>
+          {props.selectedTableId ?? 'none'}
+        </div>
+        <button data-testid={'mock-next'} onClick={props.onNextPage}>
+          {'next'}
+        </button>
+        <button
+          data-testid={'mock-contents'}
+          onClick={() => props.onEditorModeChange('grid')}
+        >
+          {'contents'}
+        </button>
+        <button
+          data-testid={'mock-boundary'}
+          onClick={() => props.onEditorModeChange('border')}
+        >
+          {'boundary'}
+        </button>
+        <button
+          data-testid={'mock-link-from-p0-a'}
+          onClick={() => props.onToggleLinking('p0-a')}
+        >
+          {'link'}
+        </button>
+      </div>
+    );
+  }
+
+  let scrolled = [];
+
+  beforeEach(() => {
+    global.__PTE_MOCK__ = PagesPageTableEditor;
+    global.__PTE_LEAVE__ = null;
+    getMetadata.mockResolvedValue(PAGES_METADATA);
+    getThumbnails.mockResolvedValue({
+      images: [0, 1, 2].map((i) => ({ image: `T${i}`, tables: [] })),
+    });
+    saveTables.mockResolvedValue({});
+    calculateCells.mockResolvedValue({ pdfPage: 0, tables: [] });
+    scrolled = [];
+    Element.prototype.scrollIntoView = jest.fn(function record() {
+      scrolled.push(this);
+    });
+    // eslint-disable-next-line global-require
+    require('config').stagedGridEditorEnabled.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    global.__PTE_MOCK__ = null;
+    global.__PTE_LEAVE__ = null;
+    // eslint-disable-next-line global-require
+    require('config').stagedGridEditorEnabled.mockReturnValue(false);
+  });
+
+  const thumbnail = (index) => screen.getAllByTestId('thumbnail')[index];
+  const thumbnailImg = (index) => thumbnail(index).querySelector('img');
+  const IMG_SIZE = 100;
+
+  // Lays every thumbnail image out as a 100px square at the viewport origin.
+  function layOutThumbnails() {
+    screen.getAllByTestId('thumbnail').forEach((t) => {
+      const img = t.querySelector('img');
+      Object.defineProperty(img, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => ({
+          left: 0,
+          top: 0,
+          width: IMG_SIZE,
+          height: IMG_SIZE,
+          right: IMG_SIZE,
+          bottom: IMG_SIZE,
+          x: 0,
+          y: 0,
+        }),
+      });
+    });
+  }
+
+  // eslint-disable-next-line
+  async function clickAndSettle(el, init) {
+    await act(async () => {
+      fireEvent.click(el, init);
+    });
+  }
+
+  async function renderPages() {
+    render(<PDFEditTableStructure pdfId={PDF_ID} />);
+    await screen.findByTestId('mock-pte');
+    await waitFor(() =>
+      expect(screen.getAllByTestId('thumbnail')).toHaveLength(3)
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('p0-a')
+    );
+    layOutThumbnails();
+    scrolled = [];
+    Element.prototype.scrollIntoView.mockClear();
+  }
+
+  const insideSecond = { clientX: 70, clientY: 70 };
+
+  test('a click on another page image inside its second table shows that page and selects it', async () => {
+    await renderPages();
+
+    await clickAndSettle(thumbnailImg(1), insideSecond);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+    );
+    expect(screen.getByTestId('mock-selected')).toHaveTextContent('p1-b');
+  });
+
+  test('a click on the current page image near another table selects it without a page change', async () => {
+    await renderPages();
+
+    await clickAndSettle(thumbnailImg(0), insideSecond);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-selected')).toHaveTextContent('p0-b')
+    );
+    expect(screen.getByTestId('mock-page')).toHaveTextContent('0');
+    expect(calculateCells).not.toHaveBeenCalled();
+  });
+
+  test("a click on another page's title selects that page's first table", async () => {
+    await renderPages();
+
+    await clickAndSettle(
+      thumbnail(1).querySelector('[data-testid="thumbnail-page-title"]')
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+    );
+    expect(screen.getByTestId('mock-selected')).toHaveTextContent('p1-a');
+  });
+
+  test('a click on the image of a page with no tables changes the page and selects nothing', async () => {
+    await renderPages();
+
+    await clickAndSettle(thumbnailImg(2), insideSecond);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('2')
+    );
+    expect(screen.getByTestId('mock-selected')).toHaveTextContent('none');
+  });
+
+  test('during a linking session a table hit toggles membership and changes neither page nor selection', async () => {
+    await renderPages();
+    screen.getAllByTestId('thumbnail').forEach((t) => {
+      loadImage(t.querySelector('img'), { w: IMG_SIZE, h: IMG_SIZE });
+    });
+    await clickAndSettle(screen.getByTestId('mock-link-from-p0-a'));
+    const hit = await waitFor(() => {
+      const el = thumbnail(1).querySelector(
+        '[data-testid="thumbnail-table-hit"][data-tableid="p1-b"]'
+      );
+      expect(el).not.toBeNull();
+      return el;
+    });
+    const selectedBefore = screen.getByTestId('mock-selected').textContent;
+
+    await clickAndSettle(hit, insideSecond);
+
+    expect(
+      screen.getAllByTestId('table-entry-name').map((n) => n.textContent)
+    ).not.toContain('Page1 Second');
+    expect(screen.getByTestId('mock-page')).toHaveTextContent('0');
+    expect(screen.getByTestId('mock-selected')).toHaveTextContent(
+      selectedBefore
+    );
+  });
+
+  test("the thumbnail's chosen table is selected once a held move runs", async () => {
+    let held = null;
+    global.__PTE_LEAVE__ = (move) => {
+      held = move;
+    };
+    await renderPages();
+
+    await clickAndSettle(thumbnailImg(1), insideSecond);
+    expect(held).not.toBeNull();
+    expect(screen.getByTestId('mock-page')).toHaveTextContent('0');
+    // eslint-disable-next-line
+    await act(async () => {
+      held(null);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+    );
+    expect(screen.getByTestId('mock-selected')).toHaveTextContent('p1-b');
+  });
+
+  test("Next scrolls the new page's thumbnail into view", async () => {
+    await renderPages();
+
+    await clickAndSettle(screen.getByTestId('mock-next'));
+
+    await waitFor(() => expect(scrolled).toContain(thumbnail(1)));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith(
+      selectionScrollIntoViewOptions()
+    );
+  });
+
+  test("a Document Overview click on another page's table scrolls that page's thumbnail", async () => {
+    await renderPages();
+
+    const entry = screen
+      .getByText('Page1 Second')
+      .closest('[data-testid="table-entry"]');
+    await clickAndSettle(
+      entry.querySelector('[data-testid="table-entry-size"]')
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+    );
+    expect(scrolled).toContain(thumbnail(1));
+  });
+
+  test('a thumbnail click does not scroll that thumbnail', async () => {
+    await renderPages();
+
+    await clickAndSettle(thumbnailImg(1), insideSecond);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+    );
+    expect(scrolled).not.toContain(thumbnail(1));
+  });
+
+  test("returning to the boundary pass scrolls the selected page's thumbnail", async () => {
+    await renderPages();
+    await clickAndSettle(screen.getByTestId('mock-next'));
+    await waitFor(() =>
+      expect(screen.getByTestId('mock-page')).toHaveTextContent('1')
+    );
+
+    await clickAndSettle(screen.getByTestId('mock-contents'));
+    expect(screen.queryAllByTestId('thumbnail')).toHaveLength(0);
+    scrolled = [];
+
+    await clickAndSettle(screen.getByTestId('mock-boundary'));
+
+    await waitFor(() => expect(scrolled).toContain(thumbnail(1)));
   });
 });

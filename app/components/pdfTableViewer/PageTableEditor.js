@@ -9,6 +9,7 @@ import LayersPanel from 'components/pdfTableViewer/LayersPanel';
 import EditorScaleSelector from 'components/pdfTableViewer/EditorScaleSelector';
 import DimDocumentToggle from 'components/pdfTableViewer/DimDocumentToggle';
 import GridToolRail from 'components/pdfTableViewer/GridToolRail';
+import DeleteAllTablesDialog from 'components/pdfTableViewer/DeleteAllTablesDialog';
 import {
   metadataTablesToOverlay,
   normaliseTableBounds,
@@ -20,7 +21,9 @@ import {
   tableSetChanged,
   buildCalcHint,
   mergeFindGridLines,
-  overlapArea,
+  mergeRolesByTableId,
+  MERGE_ROLE_JOINED,
+  softDeleteTables,
   changedColouredAreaRects,
   zeroConfidenceInRects,
 } from 'components/pdfTableViewer/tableSupportUtils';
@@ -35,9 +38,13 @@ import {
   rowBounds,
 } from 'components/pdfTableViewer/gridToolUtils';
 import { hasSavedGrid } from 'components/pdfTableViewer/gridUtilities';
-import { useEditorPass } from 'components/EditorPassProvider';
+import {
+  isLastInLinkGroup,
+  splitTableAtCuts,
+} from 'components/pdfTableViewer/tableCutUtils';
 import { getImage, findGridLines } from 'services/images';
 import {
+  boundaryPassEditorMode,
   editorPageTitleHelpId,
   resizeDebounceMs,
   stagedGridEditorEnabled,
@@ -71,7 +78,7 @@ function boundsDiffer(a, b) {
 // layer they belong to is left). `metadata.tables` remains the host's single source of truth:
 // nothing held here is persisted, and it is either reported up or dropped, never kept. It calls
 // the backend only for getImage and findGridLines
-// (directly, for the created-table grid detection and the Colours/Borders confirmation steps),
+// (directly, for the Colours/Borders confirmation steps),
 // plus findTables indirectly inside PageImageWithOverlay's legacy Calculate/Recalculate. It
 // reads no cell text: that is the host's page-exit recalculation. It never persists, renders no
 // Save button, and does not render the empty state
@@ -103,6 +110,8 @@ export default function PageTableEditor({
   // Reports which pass the editor is in, so the host can hide the Pages list in the contents
   // pass. The pass itself stays this component's own state.
   onEditorModeChange = () => {},
+  // The pass the editor mounts on; later changes are ignored.
+  initialEditorMode = 'border',
   // Saves the document, resolving to whether the save reached the server. "Validate Tables"
   // persists the boundary pass through it before the contents pass begins.
   //
@@ -115,13 +124,11 @@ export default function PageTableEditor({
   // does. Without it those routes reach the page-change effect below with a border move still
   // held, and it discards it.
   onRegisterLeave = () => {},
+  // Registers the pass switch with the host, so the toolbar's pass tabs the host answers for
+  // make the same switch the Layers panel's Validate button makes.
+  onRegisterPassSwitch = () => {},
 }) {
   const staged = stagedGridEditorEnabled();
-
-  // The toolbar's pass tabs stand outside this tree and switch passes through the handlers
-  // below. Absent outside a provider, which a test that renders this component alone is.
-  const editorPass = useEditorPass();
-  const setPassActions = editorPass ? editorPass.setPassActions : null;
 
   // The getImage response tagged with the page it was fetched for ({ ...data, page }),
   // or null until the first image loads. `data` carries image (base64 PNG), pixelWidth,
@@ -146,10 +153,10 @@ export default function PageTableEditor({
   const [debouncedScale, setDebouncedScale] = useState(defaultScalePercent());
   // "Dim Document" toggle (defaults on).
   const [dimDocument, setDimDocument] = useState(true);
-  // Which pass the editor is in. It starts on the boundary pass and, once "Validate
-  // Tables" has moved it on, stays on the contents pass: it survives moving between tables
-  // and between pages, and returns to 'border' only when the editor is remounted.
-  const [editorMode, setEditorMode] = useState('border');
+  // Which pass the editor is in. It starts in `initialEditorMode` (the boundary pass unless
+  // the host asks otherwise) and keeps whichever pass the user moves it to: it survives
+  // moving between tables and between pages, and is reseeded only when the editor is remounted.
+  const [editorMode, setEditorMode] = useState(initialEditorMode);
   // Which layers are drawn. `border` is honoured in both passes; the other four belong to
   // gridMode. Editor state, never persisted and never reset by navigation — what a user
   // chose to look at outlives the table they chose it on.
@@ -170,14 +177,16 @@ export default function PageTableEditor({
     foreground: null,
     background: null,
   });
-  // The just-created, still-unconfirmed table's id (transient, not persisted), or null.
-  const [createdTableId, setCreatedTableId] = useState(null);
   // The selected internal grid line reported up by StagedPageGridEditor, or null. Drives the
   // enable/disable state of the Rows/Columns Options buttons.
   const [selectedLine, setSelectedLine] = useState(null);
   // The selected section-title row's `tableRow` reported up by StagedPageGridEditor, or null.
   // Drives the Special Cells "Delete Section Title Row" button and the "Column name" combo.
   const [selectedSectionRow, setSelectedSectionRow] = useState(null);
+  // The cut in progress, `{ tableId, page, lines }`, or null.
+  const [cut, setCut] = useState(null);
+  // Whether the Delete all tables dialog is open.
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
 
   // ---- Colours-layer view state (transient, not persisted) ----------------------------
   // The selected coloured area's index on the displayed page, or null.
@@ -313,8 +322,29 @@ export default function PageTableEditor({
   );
 
   const pageColouredAreas = metadata.pages?.[displayPage]?.colouredAreas;
-  const isCreatedUnconfirmed =
-    createdTableId != null && selectedTable?.tableId === createdTableId;
+
+  // A cut lives only while its table stays selected on its page in the boundary pass.
+  const cutting =
+    cut != null &&
+    editorMode === 'border' &&
+    cut.page === displayPage &&
+    cut.tableId === selectedTable?.tableId;
+
+  useEffect(() => {
+    if (cut != null && !cutting) setCut(null);
+  }, [cut, cutting]);
+
+  const mergeRoles = useMemo(
+    () => mergeRolesByTableId(normalisedTables),
+    [normalisedTables]
+  );
+  // A table in a linked group may be cut only when it is the group's last member.
+  const selectedRole = selectedTable ? mergeRoles[selectedTable.tableId] : null;
+  const canCut =
+    selectedTable != null &&
+    (selectedRole == null ||
+      (selectedRole === MERGE_ROLE_JOINED &&
+        isLastInLinkGroup(normalisedTables, selectedTable.tableId)));
 
   // The displayed page's coloured areas (never null): what is held provisionally for THIS page,
   // else the document's. Memoised so its reference is stable across renders (it feeds the
@@ -667,8 +697,6 @@ export default function PageTableEditor({
       // A table created in this session has no `before` to compare against, but it is the
       // table that most needs detecting: it carries a border and no grid at all. It is
       // recorded like a moved border, so leaving the table, the page or the pass detects it.
-      // The Calculate button remains the way to detect it WITHOUT leaving, and clears the
-      // record when it succeeds so the two never run the same detection twice.
       if (!before || boundsDiffer(before.bounds, t.bounds)) {
         changedBoundsRef.current.add(t.tableId);
       }
@@ -690,6 +718,45 @@ export default function PageTableEditor({
       return;
     }
     commitTables(nextTables);
+  };
+
+  // ---- Cut and Delete all tables -------------------------------------------------------
+
+  const handleCutStart = () => {
+    if (!canCut) return;
+    setCut({ tableId: selectedTable.tableId, page: displayPage, lines: [] });
+  };
+
+  const handleCutCancel = () => setCut(null);
+
+  // Split the cut table at its lines; the pieces are re-detected on leaving, like a moved border.
+  const handleCutEnd = () => {
+    if (!cut || !pageImage) return;
+    const next = splitTableAtCuts(
+      normalisedTables,
+      cut.tableId,
+      cut.lines,
+      1 / pageImage.pixelHeight
+    );
+    setCut(null);
+    if (next !== normalisedTables) handleEditTables(next);
+  };
+
+  const handleCutLinesChange = useCallback((lines) => {
+    setCut((c) => (c ? { ...c, lines } : c));
+  }, []);
+
+  const handleDeleteAllTables = () => {
+    setCut(null);
+    setDeleteAllOpen(true);
+  };
+
+  // Soft-delete every table in the PDF (page null) or on `page`.
+  const deleteAllOn = (deletePage) => {
+    setDeleteAllOpen(false);
+    const next = softDeleteTables(normalisedTables, deletePage);
+    if (next !== normalisedTables) handleEditTables(next);
+    onSelectTable(null);
   };
 
   // ---- Coloured-area submission --------------------------------------------------------
@@ -754,73 +821,6 @@ export default function PageTableEditor({
 
   // ---- Staged Layers-panel wiring -----------------------------------------------------
 
-  // Detect the grid inside a just-created border table. ONE blocking call: find-grid-lines,
-  // hinted with the drawn border, to DETECT bounds/columnWidths/rowHeights inside it. A
-  // freshly drawn border needs this
-  // because buildManualTable gives it a single full-width column, a single full-height row and
-  // one cell — it has no interior grid at all until this call supplies one.
-  //
-  // It deliberately does NOT read the cells' text. That read belongs to the page-exit
-  // recalculation (recalcPageTables in PDFEditTableStructure), which covers every table in the
-  // host's change set — this one included, because the onChange below puts it there. Reading
-  // here would be both duplicated and premature: it would run at the Border layer, before the
-  // user has reached Rows, Columns or Special Areas, so any grid edit they subsequently make
-  // would invalidate whatever was read. The gap this leaves — a page saved without ever being
-  // navigated away from is never re-read at all — is a known issue recorded under "Cell text is
-  // re-read on page exit only" in services/mylossrun_service/README.md, and is not this
-  // function's to paper over.
-  //
-  // Detecting nothing for this table means there is nothing to commit: the informational toast
-  // stands in for the result. Errors surface through toast.error. The transient created flag is
-  // cleared in every case.
-  const detectCreatedTableGrid = useCallback(
-    async (t) => {
-      setActionBusy(true);
-      try {
-        // buildCalcHint takes (table, rows, cols): rows BEFORE columns. It emits neither
-        // `cells` nor `title`, and its row/column counts are always null. The page's coloured
-        // areas travel on the request, not per hint, so its fourth argument is left off.
-        const gridResponse = await findGridLines(
-          metadata.pdfId,
-          displayPage,
-          currentColouredAreas,
-          [buildCalcHint(t, null, null)]
-        );
-        const returned = gridResponse?.tables ?? [];
-        const merged = mergeFindGridLines(
-          normalisedTables,
-          displayPage,
-          returned
-        );
-        // findTableById, not a top-level scan: a table joined into another table's
-        // group sits in its root's `next` map and a scan cannot see it.
-        const detected = findTableById(merged, t.tableId);
-        // Nothing was detected FOR THIS TABLE when no returned table overlaps its border (or
-        // when the merge dropped it as a duplicate of a bigger-overlap match). Its own entry
-        // then still has no grid, so there is nothing to commit.
-        if (!detected || !returned.some((r) => overlapArea(t.bounds, r.bounds) > 0)) {
-          toast('No table found');
-          return;
-        }
-        commitTables(merged);
-        // Detected here, so leaving owes no detection for it.
-        changedBoundsRef.current.delete(t.tableId);
-      } catch (err) {
-        toast.error(err.message);
-      } finally {
-        setActionBusy(false);
-        setCreatedTableId(null);
-      }
-    },
-    [
-      metadata.pdfId,
-      displayPage,
-      currentColouredAreas,
-      normalisedTables,
-      commitTables,
-    ]
-  );
-
   // Leaving the boundary pass having moved a border or created a table is a
   // DELIBERATE blocking step: re-detect the grid lines of those tables, wait for the response,
   // merge it, and ONLY THEN run `after` — so nothing is worked on before the re-detected
@@ -835,8 +835,9 @@ export default function PageTableEditor({
   // HARD-deletes the other live tables that returned table also overlaps as spurious
   // duplicates, and APPENDS a returned table overlapping nothing. A hinted response covers only
   // the changed tables, so if a re-detected table's bounds grow over an UNCHANGED neighbour
-  // that neighbour is hard-deleted. Reusing the single merge path is nonetheless the required
-  // behaviour (see the test that documents this consequence).
+  // that neighbour is hard-deleted. Tables that were themselves hinted are never hard-deleted,
+  // so the risk stays with unchanged neighbours. Reusing the single merge path is nonetheless
+  // the required behaviour (see the test that documents this consequence).
   const runBorderGridLines = useCallback(
     async (after, hintTables) => {
       setActionBusy(true);
@@ -855,7 +856,12 @@ export default function PageTableEditor({
         // travels with what the detector returned, as ONE write, and only now — a failed call
         // reports nothing and leaves it held for the next attempt.
         const flushed = flushPending(
-          mergeFindGridLines(normalisedTables, displayPage, response?.tables ?? [])
+          mergeFindGridLines(
+            normalisedTables,
+            displayPage,
+            response?.tables ?? [],
+            new Set(hintTables.map((h) => h.tableId))
+          )
         );
         // The detected grid now reflects every moved border, so nothing is outstanding. Inside
         // the try deliberately: a failed call must leave the set intact so the next attempt to
@@ -927,14 +933,6 @@ export default function PageTableEditor({
     onRegisterLeave(leaveFor);
     return () => onRegisterLeave(null);
   }, [onRegisterLeave, leaveFor]);
-
-  // Cancel a just-created table: remove it from the list and clear the selection/flag.
-  const cancelCreated = useCallback(() => {
-    if (!createdTableId) return;
-    commitTables(normalisedTables.filter((t) => t.tableId !== createdTableId));
-    onSelectTable(null);
-    setCreatedTableId(null);
-  }, [createdTableId, normalisedTables, commitTables, onSelectTable]);
 
   // Step to `table`, dropping the selections that belonged to the table being left. The
   // armed tool, the layer flags and the mode all outlive the step: they are how the user
@@ -1052,22 +1050,24 @@ export default function PageTableEditor({
   }, []);
 
   // End the boundary pass: settle what it owes, save the document, and only then move on to
-  // the contents pass at the page's first non-deleted table. A failed save abandons the
-  // switch — the toast the host raised is the user's feedback, the document stays dirty, and
-  // the user stays in borderMode to retry.
+  // the contents pass, keeping the selected table when it is a non-deleted table on this
+  // page and otherwise selecting the page's first non-deleted table. A failed save abandons
+  // the switch — the toast the host raised is the user's feedback, the document stays dirty,
+  // and the user stays in borderMode to retry.
   const handleValidateTables = useCallback(() => {
+    setCut(null);
     leaveFor(async (flushed) => {
       const saved = await onSave(flushed);
       if (!saved) return;
       setEditorMode('grid');
       setTool(null);
       setSpecialTool(null);
-      const first = orderedPageTables(
-        samePageTables.filter((t) => !t.deleted)
-      )[0];
+      const live = samePageTables.filter((t) => !t.deleted);
+      if (live.some((t) => t.tableId === selectedTableId)) return;
+      const first = orderedPageTables(live)[0];
       if (first) onSelectTable(first.tableId);
     });
-  }, [leaveFor, onSave, samePageTables, onSelectTable]);
+  }, [leaveFor, onSave, samePageTables, onSelectTable, selectedTableId]);
 
   // Ends the contents pass and goes back to the boundary pass, the reverse of
   // handleValidateTables and settling the same debts on the way: the rebuild the pass owes
@@ -1075,10 +1075,9 @@ export default function PageTableEditor({
   // and leaves the user where they were, its own toast being the feedback.
   //
   // The armed tool and the selections that belong to the contents pass go with it; they
-  // mean nothing in the boundary pass. The SELECTED TABLE does not. handleValidateTables
-  // picks the page's first table because the contents pass is about one table and arrives
-  // with none chosen; the boundary pass is about the page, so the table the user was just
-  // working on is still a sensible thing to have selected.
+  // mean nothing in the boundary pass. The SELECTED TABLE does not: the table the user was
+  // just working on stays selected, as it does going the other way through
+  // handleValidateTables.
   const handleValidateBorders = useCallback(() => {
     leaveFor(async (flushed) => {
       const saved = await onSave(flushed);
@@ -1094,11 +1093,9 @@ export default function PageTableEditor({
   }, [leaveFor, onSave]);
 
   // The toolbar's two pass tabs make the same switch the Layers panel's Validate button
-  // makes, so they call these very handlers rather than a second copy of them. Registered
-  // once, through a ref: both are rebuilt whenever the page's tables change, and handing
-  // the context a new pair each time would re-render the whole application for callbacks
-  // nothing reads until a tab is clicked. The registration goes when this component does,
-  // which is what tells the toolbar the switch is out of reach while a full panel is up.
+  // makes, so the host calls these very handlers rather than a second copy of them.
+  // Registered once, through a ref: both are rebuilt whenever the page's tables change.
+  // The registration goes when this component does.
   const passSwitchRef = useRef({});
   passSwitchRef.current = {
     validateBorders: handleValidateBorders,
@@ -1106,17 +1103,13 @@ export default function PageTableEditor({
   };
 
   useEffect(() => {
-    if (!setPassActions) {
-      return undefined;
-    }
-
-    setPassActions({
+    onRegisterPassSwitch({
       validateBorders: () => passSwitchRef.current.validateBorders(),
       validateTables: () => passSwitchRef.current.validateTables(),
     });
 
-    return () => setPassActions(null);
-  }, [setPassActions]);
+    return () => onRegisterPassSwitch(null);
+  }, [onRegisterPassSwitch]);
 
   // Loading overlay shown while the page image loads or a Calculate/Recalculate poll runs.
   const loadingOverlay = !error && (imageLoading || actionBusy) && (
@@ -1237,13 +1230,14 @@ export default function PageTableEditor({
                   dim={dimDocument}
                   onEditTables={handleEditTables}
                   onSelectTable={onSelectTable}
-                  onCreatedTable={setCreatedTableId}
                   linkingRootId={linkingRootId}
                   onToggleLinking={onToggleLinking}
                   onRequestCreate={registerCreate}
                   onRequestDelete={registerDelete}
                   onSelectedLineChange={setSelectedLine}
                   onSelectedSectionRowChange={setSelectedSectionRow}
+                  cutLines={cutting ? cut.lines : null}
+                  onCutLinesChange={handleCutLinesChange}
                   colouredAreas={currentColouredAreas}
                   selectedColouredIndex={selectedColouredIndex}
                   onSelectColouredArea={setSelectedColouredIndex}
@@ -1288,15 +1282,16 @@ export default function PageTableEditor({
             onNext={handleNext}
             onValidateTables={handleValidateTables}
             onValidateBorders={handleValidateBorders}
-            isCreatedUnconfirmed={isCreatedUnconfirmed}
+            cutting={cutting}
+            canCut={canCut}
+            onCutStart={handleCutStart}
+            onCutEnd={handleCutEnd}
+            onCutCancel={handleCutCancel}
+            onDeleteAllTables={handleDeleteAllTables}
             onDeleteTable={() =>
               deleteActionRef.current?.(selectedTable?.tableId)
             }
             onCreateTable={() => createActionRef.current?.()}
-            onConfirmCreated={() =>
-              selectedTable && detectCreatedTableGrid(selectedTable)
-            }
-            onCancelCreated={cancelCreated}
             onDeleteHeader={() => {
               if (!selectedTable) return;
               commitTables(
@@ -1338,6 +1333,12 @@ export default function PageTableEditor({
             }}
           />
         </Box>
+        <DeleteAllTablesDialog
+          open={deleteAllOpen}
+          onCancel={() => setDeleteAllOpen(false)}
+          onDeleteAll={() => deleteAllOn(null)}
+          onDeletePage={() => deleteAllOn(displayPage)}
+        />
         {loadingOverlay}
       </Box>
     );

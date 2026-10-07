@@ -51,8 +51,10 @@ export default function ReviewCellEditor({ value, onChange, onTab, onEsc }) {
         backgroundColor: 'background.paper',
         // The text is read in the grid's own font while it is being corrected, so what
         // is typed looks like what it replaces. Left resizeable because a cell can hold
-        // far more text than one row shows.
+        // far more text than one row shows. The input root inherits too, so the field
+        // matches the grid's text size rather than the theme's body size.
         '& textarea': { resize: 'vertical', font: 'inherit' },
+        '& .MuiInputBase-root': { font: 'inherit' },
         '& .MuiOutlinedInput-root': { padding: '2px 6px' },
       }}
     />

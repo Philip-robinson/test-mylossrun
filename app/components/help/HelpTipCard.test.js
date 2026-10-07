@@ -1,6 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { helpChipLabel, helpExitLabel, helpHideLabel } from 'app/lib/helpContent';
+import {
+  helpChipLabel,
+  helpExitLabel,
+  helpHideLabel,
+  helpNextLabel,
+} from 'app/lib/helpContent';
 import HelpTipCard from 'components/help/HelpTipCard';
 
 // The card's colours and its position are inline styles the tests never read: the side
@@ -16,6 +21,7 @@ function renderCard(overrides = {}) {
       position={{ top: 120, left: 240 }}
       onExit={() => {}}
       onHide={() => {}}
+      onNext={() => {}}
       {...overrides}
     />,
   );
@@ -77,11 +83,25 @@ describe('HelpTipCard', () => {
     expect(onExit).not.toHaveBeenCalled();
   });
 
-  it('offers those two buttons and no others, hide first', () => {
+  it('Next calls onNext and neither of the others', async () => {
+    const onNext = jest.fn();
+    const onHide = jest.fn();
+    const onExit = jest.fn();
+    renderCard({ onNext, onHide, onExit });
+
+    await userEvent.click(screen.getByRole('button', { name: helpNextLabel() }));
+
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onHide).not.toHaveBeenCalled();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
+  it('offers those three buttons and no others, show full screen first', () => {
     renderCard();
 
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
       helpHideLabel(),
+      helpNextLabel(),
       helpExitLabel(),
     ]);
   });

@@ -66,6 +66,26 @@ export function linkTableCellWidth() {
   return 150;
 }
 
+// Peak-to-trough height of the grid editor's wavy bottom border (1.5px up and down).
+export function linkCellWaveHeightPx() {
+  return 3;
+}
+
+// Width of one full cycle of the grid editor's wavy bottom border.
+export function linkCellWavePitchPx() {
+  return 20;
+}
+
+// Colour of a grid editor table cell's border, straight or wavy.
+export function linkCellBorderColour() {
+  return '#ccc';
+}
+
+// Width of a grid editor table cell's border, straight or wavy.
+export function linkCellBorderWidthPx() {
+  return 1;
+}
+
 // Cell-confidence thresholds, as percentages (0–100): at/above high = green,
 // below low = red, in between = orange.
 export function highConfidence() {
@@ -139,6 +159,41 @@ export function excelContentType() {
 // Extension the exported workbook is offered to the user under.
 export function excelFileSuffix() {
   return '.xlsx';
+}
+
+// Back-end path the /api/original-pdf proxy forwards to.
+export function originalPdfPath() {
+  return '/mylossrun/original-pdf';
+}
+
+// MIME type of the original PDF the /api/original-pdf proxy returns.
+export function pdfContentType() {
+  return 'application/pdf';
+}
+
+// Document statuses whose original PDF may be downloaded from the document list.
+export function originalDownloadableStatuses() {
+  return ['LOADED', 'READY_FOR_REVIEW', 'VALIDATING', 'EXTRACTION_IN_PROGRESS', 'COMPLETED'];
+}
+
+// Document statuses that may be exported from the document list.
+export function exportableStatuses() {
+  return ['READY_FOR_REVIEW', 'VALIDATING', 'EXTRACTION_IN_PROGRESS', 'COMPLETED'];
+}
+
+// Text between the document stem and the table name in a single-table export's filename.
+export function tableExportFilenameSeparator() {
+  return ' - ';
+}
+
+// Path separators replaced in a table name used in a single-table export's filename.
+export function tableExportFilenamePathSeparatorPattern() {
+  return /[/\\]/g;
+}
+
+// Text that replaces each path separator in a table name used in a single-table export's filename.
+export function tableExportFilenamePathSeparatorReplacement() {
+  return '-';
 }
 
 // Editor-selection flag: when true, PageTableEditor renders the new staged
@@ -250,6 +305,22 @@ export function layerColoursBackgroundColour() {
   return 'var(--colours-background-colour)';
 }
 
+// The font size of the Document Overview entry buttons; the value lives in globals.css.
+export function documentOverviewButtonFontSize() {
+  return 'var(--overview-button-font-size)';
+}
+
+// The options every selection scroll passes to scrollIntoView.
+export function selectionScrollIntoViewOptions() {
+  return { block: 'nearest', inline: 'nearest' };
+}
+
+// Screen px above a selected table that its centre-view scroll also brings into view, so the
+// table's name label stays visible.
+export function selectedTableLabelClearancePx() {
+  return 20;
+}
+
 // The colour a grid line is drawn in when its layer's eye is off.
 export function layerGrey() {
   return 'var(--layer-grey)';
@@ -303,7 +374,7 @@ export function gridToolbarShadow() {
   return '0 0 6px 1px rgba(0,0,0,0.18)';
 }
 
-// The share of a grid square's width and of its height that the Merged tool's drawn
+// The share of a grid square's width and of its height that the Merge Cells tool's drawn
 // rectangle must cover before that square joins the block.
 export function mergeCoverageFraction() {
   return 0.6;
@@ -373,6 +444,26 @@ export function sectionTitleMarkerColour() {
 // SVG stroke-dasharray for the dotted section-title-row markers.
 export function sectionTitleMarkerDash() {
   return '2 2';
+}
+
+// Colour of the Cut End / Cut Cancel text and border and the cut lines' stroke.
+export function cutColour() {
+  return 'var(--in-progress-strong)';
+}
+
+// The cut colour's key, carried as a data-colour attribute.
+export function cutColourKey() {
+  return 'in-progress-strong';
+}
+
+// SVG stroke-dasharray for the cut lines.
+export function cutLineDash() {
+  return '6 4';
+}
+
+// Stroke width (screen px) of the cut lines.
+export function cutLineWidthPx() {
+  return 2;
 }
 
 // 50%-transparent green highlight line drawn just inside and just outside the
@@ -621,6 +712,41 @@ export function reviewGutterBorderColour() {
   return 'var(--secondary-text)';
 }
 
+// Font sizes (percent of 1rem) the review grid's zoom steps through.
+export function reviewFontScalePercentOptions() {
+  return [70, 85, 100, 115, 130];
+}
+
+// Review grid font size (percent of 1rem) used until the user picks another.
+export function reviewDefaultFontScalePercent() {
+  return 85;
+}
+
+// localStorage key remembering the review grid's chosen font size.
+export function reviewFontScaleStorageKey() {
+  return 'mylossrun.review.fontScalePercent';
+}
+
+// Gap (px) between the review screen's header row and what follows it.
+export function reviewHeaderRowGapPx() {
+  return 10;
+}
+
+// Line-break runs that split a review grid cell's text into separate lines.
+export function cellLineBreakPattern() {
+  return /[\r\n]+/;
+}
+
+// Name of the review screen's in-flight operation while it is closing.
+export function reviewClosingOperation() {
+  return 'closing';
+}
+
+// Name of the review screen's in-flight operation while it is exporting.
+export function reviewExportingOperation() {
+  return 'exporting';
+}
+
 // The Go to… list's entry for the table title on the review screen, and the word the
 // selected-value readout uses for it. The title is not at a grid coordinate, so it needs a
 // name of its own rather than a spreadsheet reference.
@@ -634,6 +760,31 @@ export function reviewTitleLabel() {
 // spreadsheet reference. One word, matching reviewTitleLabel() beside it.
 export function reviewSectionTitleLabel() {
   return 'Section';
+}
+
+// Label of the review screen's button that returns to the screen the review was opened from.
+export function reviewCloseLabel() {
+  return 'Close';
+}
+
+// Label of the review screen's button that exports the reviewed table.
+export function reviewExportLabel() {
+  return 'Export this table';
+}
+
+// Label of the review screen's export button while the export is in flight.
+export function reviewExportingLabel() {
+  return 'Exporting…';
+}
+
+// Label of the grid editor's button that exports the root table.
+export function linkExportLabel() {
+  return 'Export this table';
+}
+
+// Label of the grid editor's export button while the export is in flight.
+export function linkExportingLabel() {
+  return 'Exporting…';
 }
 
 // ---------------------------------------------------------------------------
@@ -786,6 +937,11 @@ export function documentListStatusHelpId() {
   return 'document-list-status';
 }
 
+// The actions button at the end of each document list row.
+export function documentListActionsHelpId() {
+  return 'document-list-actions';
+}
+
 // The boundary pass's ids. The two Options buttons and the pass-switch / page buttons
 // live in the Layers panel, the dim and scale controls in the editor's own toolbar, the
 // two labels on the selected table's corners, and the rest in the Document Overview
@@ -800,6 +956,26 @@ export function documentListStatusHelpId() {
 // from documentOverviewSaveHelpId down are described by the contents pass too.
 export function boundaryDeleteTableHelpId() {
   return 'boundary-delete-table';
+}
+
+// The Cut Start button.
+export function boundaryCutStartHelpId() {
+  return 'boundary-cut-start';
+}
+
+// The Cut End button.
+export function boundaryCutEndHelpId() {
+  return 'boundary-cut-end';
+}
+
+// The Cut Cancel button.
+export function boundaryCutCancelHelpId() {
+  return 'boundary-cut-cancel';
+}
+
+// The Delete all tables button.
+export function boundaryDeleteAllTablesHelpId() {
+  return 'boundary-delete-all-tables';
 }
 
 export function boundaryCreateTableHelpId() {
@@ -845,6 +1021,36 @@ export function toolbarValidateBordersHelpId() {
 
 export function toolbarValidateTablesHelpId() {
   return 'toolbar-validate-tables';
+}
+
+// The toolbar's screen tabs that appear only on the screen they name.
+export function toolbarReviewHelpId() {
+  return 'toolbar-review';
+}
+
+export function toolbarGridEditorHelpId() {
+  return 'toolbar-grid-editor';
+}
+
+// The toolbar tabs' labels.
+export function toolbarAllFilesLabel() {
+  return '← All Files';
+}
+
+export function toolbarValidateBordersLabel() {
+  return 'Validate Borders';
+}
+
+export function toolbarValidateTablesLabel() {
+  return 'Validate Tables';
+}
+
+export function toolbarReviewLabel() {
+  return 'Review';
+}
+
+export function toolbarGridEditorLabel() {
+  return 'Grid Editor';
 }
 
 export function validateTablesHelpId() {
@@ -893,6 +1099,10 @@ export function documentOverviewExportHelpId() {
   return 'document-overview-export';
 }
 
+export function documentOverviewExportTableHelpId() {
+  return 'document-overview-export-table';
+}
+
 // The contents pass's ids: the Layers column, the tool rail and its three buttons, and the
 // nine entries of the Special tool's sub-menu — and the page in the centre, which is not
 // the contents pass's alone. Both passes describe editorPageTableHelpId, in different
@@ -906,8 +1116,11 @@ export function layersPanelHelpId() {
   return 'layers-panel';
 }
 
-// One per contents layer row in that panel. Borders carries none: it is listed by both
-// passes and the passes' own tips already describe it.
+// One per layer row in that panel.
+export function layersBordersHelpId() {
+  return 'layers-borders';
+}
+
 export function layersRowsHelpId() {
   return 'layers-rows';
 }
@@ -985,6 +1198,11 @@ export function linkCancelHelpId() {
   return 'link-cancel';
 }
 
+// Grid editor's Export button help id.
+export function linkExportHelpId() {
+  return 'link-export';
+}
+
 export function linkSaveHelpId() {
   return 'link-save';
 }
@@ -1013,8 +1231,20 @@ export function reviewTabsHelpId() {
   return 'review-tabs';
 }
 
-export function reviewSaveHelpId() {
-  return 'review-save';
+export function reviewCloseHelpId() {
+  return 'review-close';
+}
+
+export function reviewExportHelpId() {
+  return 'review-export';
+}
+
+export function reviewTableNameHelpId() {
+  return 'review-table-name';
+}
+
+export function reviewFontScaleHelpId() {
+  return 'review-font-scale';
 }
 
 // The cell-edit dialog's ids: the crop of the cell as the document has it, the three
@@ -1087,6 +1317,15 @@ export function reviewTableScreenId() {
   return 'reviewTable';
 }
 
+// The page editor's mode in each of the two passes.
+export function boundaryPassEditorMode() {
+  return 'border';
+}
+
+export function contentsPassEditorMode() {
+  return 'grid';
+}
+
 export function unknownExtractionMechanism() {
   return 'UNKNOWN';
 }
@@ -1101,9 +1340,60 @@ export function toolbarIconButtonSizePx() {
   return 20;
 }
 
+// Size (screen px) of the spinner the document row menu button shows while an action runs.
+export function documentRowMenuSpinnerSizePx() {
+  return 20;
+}
+
 // The label on the sign-out menu item.
 export function signOutLabel() {
   return 'Sign Out';
+}
+
+// Document row menu labels, shared with the help copy.
+export function downloadOriginalLabel() {
+  return 'Download Original';
+}
+
+export function exportDocumentLabel() {
+  return 'Export';
+}
+
+// Border-pass cut and delete-all button and dialog labels.
+export function cutStartLabel() {
+  return 'Start Cut Table';
+}
+
+export function cutEndLabel() {
+  return 'End Cut';
+}
+
+export function cutCancelLabel() {
+  return 'Cancel Cut';
+}
+
+export function deleteAllTablesLabel() {
+  return 'Delete all tables';
+}
+
+export function deleteAllTablesTitle() {
+  return 'Are you sure?';
+}
+
+export function deleteAllTablesBody() {
+  return 'Delete every table in this PDF, or only the tables on this page?';
+}
+
+export function deleteAllCancelLabel() {
+  return 'No: Cancel';
+}
+
+export function deleteAllYesAllLabel() {
+  return 'Yes: All tables';
+}
+
+export function deleteAllYesPageLabel() {
+  return 'Yes: Just this pages tables';
 }
 
 export function appVersion() {
@@ -1135,6 +1425,10 @@ const default_export = {
   deletedGridLineColour,
   hitLineWidthPx,
   linkTableCellWidth,
+  linkCellWaveHeightPx,
+  linkCellWavePitchPx,
+  linkCellBorderColour,
+  linkCellBorderWidthPx,
   highConfidence,
   lowConfidence,
   mediumConfidence,
@@ -1147,6 +1441,13 @@ const default_export = {
   toExcelPath,
   excelContentType,
   excelFileSuffix,
+  originalPdfPath,
+  pdfContentType,
+  originalDownloadableStatuses,
+  exportableStatuses,
+  tableExportFilenameSeparator,
+  tableExportFilenamePathSeparatorPattern,
+  tableExportFilenamePathSeparatorReplacement,
   stagedGridEditorEnabled,
   tableSeparationEnabled,
   tableSeparationGapPx,
@@ -1169,6 +1470,9 @@ const default_export = {
   layerColumnsBackgroundColour,
   layerSpecialCellsBackgroundColour,
   layerColoursBackgroundColour,
+  documentOverviewButtonFontSize,
+  selectionScrollIntoViewOptions,
+  selectedTableLabelClearancePx,
   layerGrey,
   linkedEmphasisColour,
   linkedGroupOutlineWidthPx,
@@ -1192,6 +1496,10 @@ const default_export = {
   selectedColouredAreaHighlight,
   sectionTitleMarkerColour,
   sectionTitleMarkerDash,
+  cutColour,
+  cutColourKey,
+  cutLineDash,
+  cutLineWidthPx,
   selectedSectionTitleHighlight,
   confirmedTableStage,
   confirmedTickBadgeColour,
@@ -1235,8 +1543,20 @@ const default_export = {
   reviewGutterHeightPx,
   reviewGutterBackgroundColour,
   reviewGutterBorderColour,
+  reviewFontScalePercentOptions,
+  reviewDefaultFontScalePercent,
+  reviewFontScaleStorageKey,
+  reviewHeaderRowGapPx,
+  cellLineBreakPattern,
+  reviewClosingOperation,
+  reviewExportingOperation,
   reviewTitleLabel,
   reviewSectionTitleLabel,
+  reviewCloseLabel,
+  reviewExportLabel,
+  reviewExportingLabel,
+  linkExportLabel,
+  linkExportingLabel,
   helpScrimColour,
   helpHolePaddingPx,
   helpHoleRadiusPx,
@@ -1263,11 +1583,18 @@ const default_export = {
   contentsPassScreenId,
   linkTablesScreenId,
   reviewTableScreenId,
+  boundaryPassEditorMode,
+  contentsPassEditorMode,
   dropBoxHelpId,
   documentListCountsHelpId,
   documentListTableHelpId,
   documentListStatusHelpId,
+  documentListActionsHelpId,
   boundaryDeleteTableHelpId,
+  boundaryCutStartHelpId,
+  boundaryCutEndHelpId,
+  boundaryCutCancelHelpId,
+  boundaryDeleteAllTablesHelpId,
   boundaryCreateTableHelpId,
   editorPageTitleHelpId,
   editorDimDocumentHelpId,
@@ -1278,6 +1605,13 @@ const default_export = {
   toolbarAllFilesHelpId,
   toolbarValidateBordersHelpId,
   toolbarValidateTablesHelpId,
+  toolbarReviewHelpId,
+  toolbarGridEditorHelpId,
+  toolbarAllFilesLabel,
+  toolbarValidateBordersLabel,
+  toolbarValidateTablesLabel,
+  toolbarReviewLabel,
+  toolbarGridEditorLabel,
   validateTablesHelpId,
   validateBordersHelpId,
   layersPreviousHelpId,
@@ -1289,8 +1623,10 @@ const default_export = {
   documentOverviewLinkHelpId,
   documentOverviewReviewHelpId,
   documentOverviewExportHelpId,
+  documentOverviewExportTableHelpId,
   editorPageTableHelpId,
   layersPanelHelpId,
+  layersBordersHelpId,
   layersRowsHelpId,
   layersColumnsHelpId,
   layersSpecialHelpId,
@@ -1309,6 +1645,7 @@ const default_export = {
   linkLinkedTablesHelpId,
   linkUnlinkHelpId,
   linkCancelHelpId,
+  linkExportHelpId,
   linkSaveHelpId,
   reviewTitleHelpId,
   reviewSectionTitleHelpId,
@@ -1316,7 +1653,10 @@ const default_export = {
   reviewPoorCellsHelpId,
   reviewGridHelpId,
   reviewTabsHelpId,
-  reviewSaveHelpId,
+  reviewCloseHelpId,
+  reviewExportHelpId,
+  reviewTableNameHelpId,
+  reviewFontScaleHelpId,
   cellEditImageHelpId,
   cellEditCancelHelpId,
   cellEditConfirmHelpId,
@@ -1330,7 +1670,19 @@ const default_export = {
   unknownExtractionMechanism,
   emphasiseLowQualityCells,
   toolbarIconButtonSizePx,
+  documentRowMenuSpinnerSizePx,
   signOutLabel,
+  downloadOriginalLabel,
+  exportDocumentLabel,
+  cutStartLabel,
+  cutEndLabel,
+  cutCancelLabel,
+  deleteAllTablesLabel,
+  deleteAllTablesTitle,
+  deleteAllTablesBody,
+  deleteAllCancelLabel,
+  deleteAllYesAllLabel,
+  deleteAllYesPageLabel,
   appVersion,
   accessCodeStorageKey,
   userEmailStorageKey,

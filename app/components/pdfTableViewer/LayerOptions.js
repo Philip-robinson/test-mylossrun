@@ -10,23 +10,36 @@
 
 import { Box, Button, Stack } from '@mui/material';
 import ColourSelectors from 'components/pdfTableViewer/ColourSelectors';
+import OptionsButtonRow from 'components/pdfTableViewer/OptionsButtonRow';
 import {
   boundaryCreateTableHelpId,
+  boundaryCutCancelHelpId,
+  boundaryCutEndHelpId,
+  boundaryCutStartHelpId,
+  boundaryDeleteAllTablesHelpId,
   boundaryDeleteTableHelpId,
   colourSpecialToolKeys,
+  cutCancelLabel,
+  cutColour,
+  cutColourKey,
+  cutEndLabel,
+  cutStartLabel,
+  deleteAllTablesLabel,
 } from 'config';
 
 // One Options button. Kept tiny and local — every button in this block shares
 // the same look and only differs by testid / label / handler / disabled state.
-function OptionButton({ testId, helpId, label, onClick, disabled }) {
+function OptionButton({ testId, helpId, label, onClick, disabled, sx, dataColour }) {
   return (
     <Button
       data-testid={testId}
       data-help-id={helpId}
+      data-colour={dataColour}
       size={'small'}
       variant={'outlined'}
       onClick={onClick}
       disabled={disabled}
+      sx={sx}
     >
       {label}
     </Button>
@@ -37,11 +50,14 @@ export default function LayerOptions({
   editorMode = 'border',
   tool = null,
   specialTool = null,
-  isCreatedUnconfirmed = false,
+  cutting = false,
+  canCut = false,
+  onCutStart,
+  onCutEnd,
+  onCutCancel,
+  onDeleteAllTables,
   onDeleteTable,
   onCreateTable,
-  onConfirmCreated,
-  onCancelCreated,
   onDeleteHeader,
   hasPendingSelection = false,
   hasSavedAreaSelected = false,
@@ -56,6 +72,7 @@ export default function LayerOptions({
   let content = [];
 
   if (editorMode === 'border') {
+    const cutSx = { color: cutColour(), borderColor: cutColour() };
     content = [
       <OptionButton
         key={'delete-table'}
@@ -64,30 +81,51 @@ export default function LayerOptions({
         label={'Delete this table'}
         onClick={onDeleteTable}
       />,
+      cutting ? (
+        <OptionsButtonRow key={'cut-row'}>
+          <OptionButton
+            testId={'opt-cut-end'}
+            helpId={boundaryCutEndHelpId()}
+            label={cutEndLabel()}
+            onClick={onCutEnd}
+            sx={cutSx}
+            dataColour={cutColourKey()}
+          />
+          <OptionButton
+            testId={'opt-cut-cancel'}
+            helpId={boundaryCutCancelHelpId()}
+            label={cutCancelLabel()}
+            onClick={onCutCancel}
+            sx={cutSx}
+            dataColour={cutColourKey()}
+          />
+        </OptionsButtonRow>
+      ) : (
+        <OptionButton
+          key={'cut-start'}
+          testId={'opt-cut-start'}
+          helpId={boundaryCutStartHelpId()}
+          label={cutStartLabel()}
+          onClick={onCutStart}
+          disabled={!canCut}
+        />
+      ),
+      <OptionButton
+        key={'delete-all-tables'}
+        testId={'opt-delete-all-tables'}
+        helpId={boundaryDeleteAllTablesHelpId()}
+        label={deleteAllTablesLabel()}
+        onClick={onDeleteAllTables}
+      />,
       <OptionButton
         key={'create-table'}
         testId={'opt-create-table'}
         helpId={boundaryCreateTableHelpId()}
         label={'Create table'}
         onClick={onCreateTable}
+        disabled={cutting}
       />,
     ];
-    if (isCreatedUnconfirmed) {
-      content.push(
-        <OptionButton
-          key={'confirm-created'}
-          testId={'opt-confirm-created'}
-          label={'Calculate'}
-          onClick={onConfirmCreated}
-        />,
-        <OptionButton
-          key={'cancel-created'}
-          testId={'opt-cancel-created'}
-          label={'Cancel'}
-          onClick={onCancelCreated}
-        />
-      );
-    }
   } else if (tool === 'special' && specialTool === 'header') {
     content = [
       <OptionButton

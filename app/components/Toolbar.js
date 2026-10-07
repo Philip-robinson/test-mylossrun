@@ -4,25 +4,37 @@
 // help and the account button that signs out.
 //
 // The tabs are the editor's, so they appear only in the editor view: back to the file
-// list, and one for each of the editor's two passes. The pass you are on is the current
-// tab and the other is the way to the other pass, which is the same switch the Layers
-// panel's own Validate button makes — it is that panel's handler the tab calls, reached
-// through the editor-pass context, because ending a pass saves the document and settles
-// what the pass owes.
+// list, and one for each of the editor's two passes, then Review or Grid Editor only while
+// that screen is up. The tab for the screen that is up is the current tab and the Validate
+// tabs are the ways to the passes. Each tab calls the action the
+// editor host registered through the editor-pass context, because leaving a screen saves
+// the document and settles what it owes; ← All Files falls back to `onAllFiles` where no
+// host is mounted.
 
 import HelpButton from 'components/help/HelpButton';
 import SignOutButton from 'components/SignOutButton';
 import ToolbarTab from 'components/ToolbarTab';
 import { useEditorPass } from 'components/EditorPassProvider';
 import {
+  boundaryPassScreenId,
+  contentsPassScreenId,
+  linkTablesScreenId,
+  reviewTableScreenId,
   toolbarAllFilesHelpId,
+  toolbarAllFilesLabel,
+  toolbarGridEditorHelpId,
+  toolbarGridEditorLabel,
+  toolbarReviewHelpId,
+  toolbarReviewLabel,
   toolbarValidateBordersHelpId,
+  toolbarValidateBordersLabel,
   toolbarValidateTablesHelpId,
+  toolbarValidateTablesLabel,
 } from 'config';
 
 export default function Toolbar({ activeView = 'loader', onAllFiles }) {
   const editorPass = useEditorPass();
-  const pass = editorPass ? editorPass.pass : null;
+  const editorScreen = editorPass ? editorPass.screen : null;
   const actions = editorPass ? editorPass.actions : null;
 
   return (
@@ -33,25 +45,41 @@ export default function Toolbar({ activeView = 'loader', onAllFiles }) {
         {activeView === 'editor' && (
           <>
             <ToolbarTab
-              label={'← All Files'}
+              label={toolbarAllFilesLabel()}
               testId={'toolbar-all-files'}
               helpId={toolbarAllFilesHelpId()}
-              onClick={onAllFiles}
+              onClick={actions && actions.allFiles ? actions.allFiles : onAllFiles}
             />
             <ToolbarTab
-              label={'Validate borders'}
+              label={toolbarValidateBordersLabel()}
               testId={'toolbar-validate-borders'}
               helpId={toolbarValidateBordersHelpId()}
-              current={pass === 'border'}
+              current={editorScreen === boundaryPassScreenId()}
               onClick={actions ? actions.validateBorders : undefined}
             />
             <ToolbarTab
-              label={'Validate tables'}
+              label={toolbarValidateTablesLabel()}
               testId={'toolbar-validate-tables'}
               helpId={toolbarValidateTablesHelpId()}
-              current={pass === 'grid'}
+              current={editorScreen === contentsPassScreenId()}
               onClick={actions ? actions.validateTables : undefined}
             />
+            {editorScreen === reviewTableScreenId() && (
+              <ToolbarTab
+                label={toolbarReviewLabel()}
+                testId={'toolbar-review'}
+                helpId={toolbarReviewHelpId()}
+                current
+              />
+            )}
+            {editorScreen === linkTablesScreenId() && (
+              <ToolbarTab
+                label={toolbarGridEditorLabel()}
+                testId={'toolbar-grid-editor'}
+                helpId={toolbarGridEditorHelpId()}
+                current
+              />
+            )}
           </>
         )}
       </div>

@@ -1,14 +1,24 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import LayerOptions from 'components/pdfTableViewer/LayerOptions';
-import { boundaryCreateTableHelpId, boundaryDeleteTableHelpId } from 'config';
+import {
+  boundaryCreateTableHelpId,
+  boundaryCutCancelHelpId,
+  boundaryCutEndHelpId,
+  boundaryCutStartHelpId,
+  boundaryDeleteAllTablesHelpId,
+  boundaryDeleteTableHelpId,
+  cutColourKey,
+} from 'config';
 
 // Every testid the block can ever render, so a test can assert that only the expected
 // ones are present.
 const ALL_TESTIDS = [
   'opt-delete-table',
+  'opt-cut-start',
+  'opt-cut-end',
+  'opt-cut-cancel',
+  'opt-delete-all-tables',
   'opt-create-table',
-  'opt-confirm-created',
-  'opt-cancel-created',
   'opt-delete-header',
   'colour-selectors',
   'opt-colour-submit',
@@ -21,7 +31,12 @@ describe('LayerOptions', () => {
   describe('borderMode', () => {
     it('offers the table-boundary actions', () => {
       render(<LayerOptions editorMode={'border'} />);
-      expect(shown()).toEqual(['opt-delete-table', 'opt-create-table']);
+      expect(shown()).toEqual([
+        'opt-delete-table',
+        'opt-cut-start',
+        'opt-delete-all-tables',
+        'opt-create-table',
+      ]);
     });
 
     it('renders no expected-count fields', () => {
@@ -30,28 +45,14 @@ describe('LayerOptions', () => {
       expect(screen.queryByTestId('opt-expected-rows')).toBeNull();
     });
 
-    it('adds Calculate and Cancel while a created table is unconfirmed', () => {
-      render(<LayerOptions editorMode={'border'} isCreatedUnconfirmed />);
-      expect(shown()).toEqual([
-        'opt-delete-table',
-        'opt-create-table',
-        'opt-confirm-created',
-        'opt-cancel-created',
-      ]);
-    });
-
     it('forwards each button to its callback', () => {
       const cbs = {
         onDeleteTable: jest.fn(),
         onCreateTable: jest.fn(),
-        onConfirmCreated: jest.fn(),
-        onCancelCreated: jest.fn(),
       };
-      render(<LayerOptions editorMode={'border'} isCreatedUnconfirmed {...cbs} />);
+      render(<LayerOptions editorMode={'border'} {...cbs} />);
       fireEvent.click(screen.getByTestId('opt-delete-table'));
       fireEvent.click(screen.getByTestId('opt-create-table'));
-      fireEvent.click(screen.getByTestId('opt-confirm-created'));
-      fireEvent.click(screen.getByTestId('opt-cancel-created'));
       Object.values(cbs).forEach((cb) => expect(cb).toHaveBeenCalledTimes(1));
     });
   });
@@ -172,5 +173,133 @@ describe('LayerOptions', () => {
       'data-help-id',
       boundaryCreateTableHelpId()
     );
+  });
+
+  describe('cut and delete-all', () => {
+    const NEW_TESTIDS = [
+      'opt-cut-start',
+      'opt-cut-end',
+      'opt-cut-cancel',
+      'opt-delete-all-tables',
+    ];
+
+    const domOrder = () =>
+      Array.from(
+        screen.getByTestId('layer-options').querySelectorAll('button[data-testid]')
+      ).map((b) => b.getAttribute('data-testid'));
+
+    it('lays the border-mode buttons out in order when not cutting', () => {
+      render(<LayerOptions editorMode={'border'} />);
+      expect(domOrder()).toEqual([
+        'opt-delete-table',
+        'opt-cut-start',
+        'opt-delete-all-tables',
+        'opt-create-table',
+      ]);
+    });
+
+    it('lays the border-mode buttons out in order while cutting', () => {
+      render(<LayerOptions editorMode={'border'} cutting />);
+      expect(domOrder()).toEqual([
+        'opt-delete-table',
+        'opt-cut-end',
+        'opt-cut-cancel',
+        'opt-delete-all-tables',
+        'opt-create-table',
+      ]);
+    });
+
+    it('swaps Cut Start for Cut End and Cut Cancel in the cut colour while cutting', () => {
+      render(<LayerOptions editorMode={'border'} cutting />);
+      expect(screen.queryByTestId('opt-cut-start')).toBeNull();
+      ['opt-cut-end', 'opt-cut-cancel'].forEach((id) => {
+        expect(screen.getByTestId(id)).toHaveAttribute('data-colour', cutColourKey());
+      });
+    });
+
+    it('enables Cut Start only when a cut is possible', () => {
+      const { unmount } = render(<LayerOptions editorMode={'border'} />);
+      expect(screen.getByTestId('opt-cut-start')).toBeDisabled();
+      unmount();
+      render(<LayerOptions editorMode={'border'} canCut />);
+      expect(screen.getByTestId('opt-cut-start')).toBeEnabled();
+    });
+
+    it('disables Create table while cutting', () => {
+      render(<LayerOptions editorMode={'border'} cutting />);
+      expect(screen.getByTestId('opt-create-table')).toBeDisabled();
+    });
+
+    it('renders none of the new buttons in grid mode', () => {
+      const states = [
+        { tool: null },
+        { tool: 'rows' },
+        { tool: 'columns' },
+        { tool: 'special', specialTool: 'header' },
+        { tool: 'special', specialTool: 'colouredRows' },
+        { tool: 'special', specialTool: 'colouredRows', hasPendingSelection: true },
+        { tool: 'special', specialTool: 'colouredArea', hasSavedAreaSelected: true },
+        { tool: 'special', specialTool: 'colouredTable' },
+      ];
+      states.forEach((props) => {
+        [false, true].forEach((cutting) => {
+          const { unmount } = render(
+            <LayerOptions editorMode={'grid'} cutting={cutting} canCut {...props} />
+          );
+          NEW_TESTIDS.forEach((id) => expect(screen.queryByTestId(id)).toBeNull());
+          unmount();
+        });
+      });
+    });
+
+    it('gives Cut Start and Delete all tables their help ids and callbacks', () => {
+      const onCutStart = jest.fn();
+      const onDeleteAllTables = jest.fn();
+      render(
+        <LayerOptions
+          editorMode={'border'}
+          canCut
+          onCutStart={onCutStart}
+          onDeleteAllTables={onDeleteAllTables}
+        />
+      );
+      expect(screen.getByTestId('opt-cut-start')).toHaveAttribute(
+        'data-help-id',
+        boundaryCutStartHelpId()
+      );
+      expect(screen.getByTestId('opt-delete-all-tables')).toHaveAttribute(
+        'data-help-id',
+        boundaryDeleteAllTablesHelpId()
+      );
+      fireEvent.click(screen.getByTestId('opt-cut-start'));
+      fireEvent.click(screen.getByTestId('opt-delete-all-tables'));
+      expect(onCutStart).toHaveBeenCalledTimes(1);
+      expect(onDeleteAllTables).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives Cut End and Cut Cancel their help ids and callbacks', () => {
+      const onCutEnd = jest.fn();
+      const onCutCancel = jest.fn();
+      render(
+        <LayerOptions
+          editorMode={'border'}
+          cutting
+          onCutEnd={onCutEnd}
+          onCutCancel={onCutCancel}
+        />
+      );
+      expect(screen.getByTestId('opt-cut-end')).toHaveAttribute(
+        'data-help-id',
+        boundaryCutEndHelpId()
+      );
+      expect(screen.getByTestId('opt-cut-cancel')).toHaveAttribute(
+        'data-help-id',
+        boundaryCutCancelHelpId()
+      );
+      fireEvent.click(screen.getByTestId('opt-cut-end'));
+      fireEvent.click(screen.getByTestId('opt-cut-cancel'));
+      expect(onCutEnd).toHaveBeenCalledTimes(1);
+      expect(onCutCancel).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -1,9 +1,6 @@
 import React from 'react';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import PageTableEditor from 'components/pdfTableViewer/PageTableEditor';
-import EditorPassProvider, {
-  useEditorPass,
-} from 'components/EditorPassProvider';
 import { makeDefaultCell } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   getImage,
@@ -599,36 +596,105 @@ describe('PageTableEditor — the two passes', () => {
     });
   });
 
+  describe('initialEditorMode', () => {
+    test("mounts on the contents pass and reports 'grid' when given 'grid'", async () => {
+      const onEditorModeChange = jest.fn();
+      await renderStaged({ initialEditorMode: 'grid', onEditorModeChange });
+      expect(mockStagedProps.mock.calls[0][0].editorMode).toBe('grid');
+      expect(lastStagedProps().editorMode).toBe('grid');
+      expect(onEditorModeChange).toHaveBeenCalledWith('grid');
+      expect(onEditorModeChange).not.toHaveBeenCalledWith('border');
+    });
+
+    test("mounts on the boundary pass and reports 'border' without the prop", async () => {
+      const onEditorModeChange = jest.fn();
+      await renderStaged({ onEditorModeChange });
+      expect(lastStagedProps().editorMode).toBe('border');
+      expect(onEditorModeChange).toHaveBeenCalledWith('border');
+      expect(onEditorModeChange).not.toHaveBeenCalledWith('grid');
+    });
+  });
+
   describe('Validate Tables', () => {
-    test('saves, then moves to gridMode at the page first table', async () => {
+    const validateTables = async () => {
+      // eslint-disable-next-line
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-validate-tables'));
+      });
+    };
+
+    test('saves, then moves to gridMode keeping the selected table', async () => {
       const onSave = jest.fn().mockResolvedValue(true);
       const onSelectTable = jest.fn();
       await renderStaged({ onSave, onSelectTable, selectedTableId: 'B' });
 
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('layers-validate-tables'));
-      });
+      await validateTables();
 
       expect(onSave).toHaveBeenCalledTimes(1);
-      expect(onSelectTable).toHaveBeenCalledWith('A');
       await waitFor(() =>
         expect(lastStagedProps().editorMode).toBe('grid')
       );
+      expect(onSelectTable).not.toHaveBeenCalledWith('A');
+      expect(lastStagedProps().selectedTableId).toBe('B');
       expect(screen.getByTestId('grid-toolbar')).toBeInTheDocument();
       expect(screen.queryByTestId('layers-validate-tables')).toBeNull();
     });
 
-    test('a failed save abandons the switch and stays in borderMode', async () => {
-      const onSave = jest.fn().mockResolvedValue(false);
-      await renderStaged({ onSave });
+    // Leaving a table for the toolbar must not clear the selection the Validate Tables tab
+    // keeps; the legacy layout, which does clear it on leave, is not checked here.
+    test('hovering over and leaving the page never clears the selection', async () => {
+      const onHoverTable = jest.fn();
+      await renderStaged({ selectedTableId: 'B', onHoverTable });
+      const middle = screen.getByTestId('middle-image');
 
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('layers-validate-tables'));
-      });
+      for (const el of [middle, ...middle.querySelectorAll('*')]) {
+        fireEvent.mouseMove(el, { clientX: 20, clientY: 20 });
+        fireEvent.mouseLeave(el);
+      }
+
+      expect(onHoverTable).not.toHaveBeenCalledWith(null);
+    });
+
+    test.each([
+      ['no table is selected', null, [TABLE_A, TABLE_B]],
+      ['the selection is not on the page', 'Z', [TABLE_A, TABLE_B]],
+      [
+        'the selection is a deleted table',
+        'B',
+        [TABLE_A, { ...TABLE_B, deleted: true }],
+      ],
+    ])(
+      'selects the page first table when %s',
+      async (_label, selectedTableId, tables) => {
+        const onSave = jest.fn().mockResolvedValue(true);
+        const onSelectTable = jest.fn();
+        await renderStaged({
+          onSave,
+          onSelectTable,
+          selectedTableId,
+          metadata: metadataWith(tables),
+        });
+        onSelectTable.mockClear();
+
+        await validateTables();
+
+        await waitFor(() => expect(lastStagedProps().editorMode).toBe('grid'));
+        expect(onSelectTable).toHaveBeenLastCalledWith('A');
+      }
+    );
+
+    test('a failed save abandons the switch and keeps the selection', async () => {
+      const onSave = jest.fn().mockResolvedValue(false);
+      const onSelectTable = jest.fn();
+      await renderStaged({ onSave, onSelectTable, selectedTableId: 'B' });
+      onSelectTable.mockClear();
+
+      await validateTables();
 
       expect(onSave).toHaveBeenCalledTimes(1);
       expect(lastStagedProps().editorMode).toBe('border');
       expect(screen.getByTestId('layers-validate-tables')).toBeInTheDocument();
+      expect(onSelectTable).not.toHaveBeenCalled();
     });
   });
 
@@ -678,8 +744,7 @@ describe('PageTableEditor — the two passes', () => {
       expect(screen.getByTestId('layers-validate-borders')).toBeInTheDocument();
     });
 
-    // The boundary pass is about the page, so the table the user was working on stays
-    // selected — unlike Validate Tables, which arrives with none chosen and picks one.
+    // The table the user was working on stays selected, as it does through Validate Tables.
     test('leaves the selected table alone', async () => {
       const onSelectTable = jest.fn();
       await enterGridMode({ onSelectTable, selectedTableId: 'B' });
@@ -1316,6 +1381,390 @@ describe('PageTableEditor — the two passes', () => {
     });
   });
 
+  // A table drawn with Create table is accepted at once: there is no step confirming or
+  // cancelling it, and its grid is detected when it is left like any other changed border.
+  describe('a created table is accepted at once', () => {
+    const created = () => ({ ...TABLE_A, tableId: 'NEW', name: 'New' });
+
+    const renderHosted = async () => {
+      stagedGridEditorEnabled.mockReturnValue(true);
+      function Host() {
+        const [tables, setTables] = React.useState([TABLE_A, TABLE_B]);
+        const [selectedTableId, setSelectedTableId] = React.useState('A');
+        return (
+          <PageTableEditor
+            metadata={metadataWith(tables)}
+            page={0}
+            onChange={setTables}
+            selectedTableId={selectedTableId}
+            onSelectTable={setSelectedTableId}
+            onSave={jest.fn().mockResolvedValue(true)}
+          />
+        );
+      }
+      render(<Host />);
+      await screen.findByTestId('staged-editor');
+    };
+
+    // What the staged editor does once a Create table rectangle is drawn: report the list
+    // with the new table and select it.
+    const drawCreated = async () => {
+      await act(async () => {
+        const p = lastStagedProps();
+        p.onEditTables([TABLE_A, TABLE_B, created()]);
+        p.onSelectTable('NEW');
+      });
+      await waitFor(() => expect(lastStagedProps().selectedTableId).toBe('NEW'));
+    };
+
+    test('offers no Calculate or Cancel, and Cut Start is enabled for it', async () => {
+      findGridLines.mockResolvedValue({ tables: [] });
+      await renderHosted();
+      await drawCreated();
+
+      expect(screen.queryByTestId('opt-confirm-created')).toBeNull();
+      expect(screen.queryByTestId('opt-cancel-created')).toBeNull();
+      expect(screen.getByTestId('opt-cut-start')).toBeEnabled();
+    });
+
+    test('leaving it with Next detects its grid', async () => {
+      findGridLines.mockResolvedValue({ tables: [] });
+      await renderHosted();
+      await drawCreated();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('layers-next'));
+      });
+
+      expect(findGridLines).toHaveBeenCalledTimes(1);
+      expect(findGridLines.mock.calls[0][3].map((h) => h.name)).toContain('New');
+    });
+  });
+
+  describe('Cut and Delete all tables', () => {
+    const clickTestId = async (testId) => {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId(testId));
+      });
+    };
+
+    const drawCutLines = (lines) => {
+      act(() => {
+        lastStagedProps().onCutLinesChange(lines);
+      });
+    };
+
+    const lastWritten = (onChange) =>
+      onChange.mock.calls[onChange.mock.calls.length - 1][0];
+
+    beforeEach(() => {
+      findGridLines.mockResolvedValue({ tables: [] });
+    });
+
+    test('Cut Start offers Cut End and Cut Cancel, and Cut Cancel reports nothing', async () => {
+      const onChange = jest.fn();
+      await renderStaged({ onChange });
+
+      await clickTestId('opt-cut-start');
+      expect(screen.getByTestId('opt-cut-end')).toBeInTheDocument();
+      expect(screen.getByTestId('opt-cut-cancel')).toBeInTheDocument();
+      expect(lastStagedProps().cutLines).toEqual([]);
+
+      drawCutLines([0.02]);
+      await clickTestId('opt-cut-cancel');
+
+      expect(screen.getByTestId('opt-cut-start')).toBeInTheDocument();
+      expect(screen.queryByTestId('opt-cut-end')).toBeNull();
+      expect(lastStagedProps().cutLines).toBeNull();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    test('Cut End splits the table and leaving re-detects both pieces', async () => {
+      const onChange = jest.fn();
+      const onSelectTable = jest.fn();
+      const view = await renderStaged({ onChange, onSelectTable });
+
+      await clickTestId('opt-cut-start');
+      drawCutLines([0.02]);
+      expect(lastStagedProps().cutLines).toEqual([0.02]);
+      await clickTestId('opt-cut-end');
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const written = lastWritten(onChange);
+      const a = written.find((t) => t.tableId === 'A');
+      expect(a.bounds.height).toBeCloseTo(0.02, 6);
+      const pieces = written.filter((t) => !['A', 'B'].includes(t.tableId));
+      expect(pieces).toHaveLength(1);
+      expect(pieces[0].bounds.top).toBeCloseTo(0.02, 6);
+      expect(screen.getByTestId('opt-cut-start')).toBeInTheDocument();
+      expect(lastStagedProps().cutLines).toBeNull();
+
+      // The host feeds the reported list back, as PDFEditTableStructure does.
+      view.rerender(
+        <PageTableEditor
+          metadata={metadataWith(written)}
+          page={0}
+          onChange={onChange}
+          selectedTableId={'A'}
+          onSelectTable={onSelectTable}
+        />
+      );
+      await clickTestId('layers-next');
+
+      expect(findGridLines).toHaveBeenCalledTimes(1);
+      const hints = findGridLines.mock.calls[0][3];
+      expect(hints).toHaveLength(2);
+      expect(hints.map((h) => h.name).sort()).toEqual(
+        [a.name, pieces[0].name].sort()
+      );
+    });
+
+    test('selecting another table cancels the cut', async () => {
+      const onSelectTable = jest.fn();
+      const view = await renderStaged({ onSelectTable });
+      await clickTestId('opt-cut-start');
+      drawCutLines([0.02]);
+
+      view.rerender(
+        <PageTableEditor
+          metadata={twoTables()}
+          page={0}
+          onChange={jest.fn()}
+          selectedTableId={'B'}
+          onSelectTable={onSelectTable}
+        />
+      );
+
+      await waitFor(() =>
+        expect(screen.getByTestId('opt-cut-start')).toBeInTheDocument()
+      );
+      expect(lastStagedProps().cutLines).toBeNull();
+    });
+
+    test('changing page cancels the cut', async () => {
+      const metadata = metadataWith([
+        TABLE_A,
+        TABLE_B,
+        { ...TABLE_A, tableId: 'C', name: 'Gamma', pdfPage: 1, tableInPage: 0 },
+      ]);
+      const view = await renderStaged({ metadata });
+      await clickTestId('opt-cut-start');
+      drawCutLines([0.02]);
+
+      view.rerender(
+        <PageTableEditor
+          metadata={metadata}
+          page={1}
+          onChange={jest.fn()}
+          selectedTableId={'A'}
+          onSelectTable={jest.fn()}
+        />
+      );
+
+      await waitFor(() => expect(lastStagedProps().page).toBe(1));
+      expect(screen.getByTestId('opt-cut-start')).toBeInTheDocument();
+      expect(lastStagedProps().cutLines).toBeNull();
+    });
+
+    test('Validate Tables cancels the cut even when the save fails', async () => {
+      const onSave = jest.fn().mockResolvedValue(false);
+      await renderStaged({ onSave });
+      await clickTestId('opt-cut-start');
+      drawCutLines([0.02]);
+
+      await clickTestId('layers-validate-tables');
+
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(lastStagedProps().editorMode).toBe('border');
+      expect(screen.getByTestId('opt-cut-start')).toBeInTheDocument();
+      expect(lastStagedProps().cutLines).toBeNull();
+    });
+
+    test('Cut Start is disabled on the root of a linked group', async () => {
+      const MEMBER = { ...TABLE_B, tableId: 'MEMBER', name: 'Member' };
+      const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
+      await renderStaged({
+        metadata: metadataWith([ROOT]),
+        selectedTableId: 'ROOT',
+      });
+
+      expect(screen.getByTestId('opt-cut-start')).toBeDisabled();
+    });
+
+    describe('in a linked group', () => {
+      const MEMBER = { ...TABLE_B, tableId: 'MEMBER', name: 'Member' };
+      const LATER = {
+        ...TABLE_B,
+        tableId: 'LATER',
+        name: 'Later',
+        tableInPage: 2,
+        bounds: { left: 0.05, top: 0.05, width: 0.04, height: 0.04 },
+      };
+
+      test('Cut Start is enabled on the last table of the group', async () => {
+        const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER, LATER } };
+        await renderStaged({
+          metadata: metadataWith([ROOT]),
+          selectedTableId: 'LATER',
+        });
+
+        expect(screen.getByTestId('opt-cut-start')).not.toBeDisabled();
+      });
+
+      test('Cut Start is disabled on a member that is not last in the group', async () => {
+        const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER, LATER } };
+        await renderStaged({
+          metadata: metadataWith([ROOT]),
+          selectedTableId: 'MEMBER',
+        });
+
+        expect(screen.getByTestId('opt-cut-start')).toBeDisabled();
+      });
+
+      test('Cut End on the last member keeps it in the group and lists the piece at the top level', async () => {
+        const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
+        const onChange = jest.fn();
+        await renderStaged({
+          metadata: metadataWith([ROOT]),
+          selectedTableId: 'MEMBER',
+          onChange,
+        });
+
+        await clickTestId('opt-cut-start');
+        drawCutLines([0.02]);
+        await clickTestId('opt-cut-end');
+
+        expect(onChange).toHaveBeenCalledTimes(1);
+        const written = lastWritten(onChange);
+        expect(written).toHaveLength(2);
+        expect(written[0].tableId).toBe('ROOT');
+        expect(Object.keys(written[0].next)).toEqual(['MEMBER']);
+        expect(written[0].next.MEMBER.bounds.height).toBeCloseTo(0.02, 6);
+        expect(written[1].next).toBeNull();
+        expect(written[1].bounds.top).toBeCloseTo(0.02, 6);
+      });
+
+      test('leaving after cutting the last member re-detects both pieces', async () => {
+        const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
+        const onChange = jest.fn();
+        const onSelectTable = jest.fn();
+        const view = await renderStaged({
+          metadata: metadataWith([ROOT]),
+          selectedTableId: 'MEMBER',
+          onChange,
+          onSelectTable,
+        });
+        await clickTestId('opt-cut-start');
+        drawCutLines([0.02]);
+        await clickTestId('opt-cut-end');
+        const written = lastWritten(onChange);
+
+        view.rerender(
+          <PageTableEditor
+            metadata={metadataWith(written)}
+            page={0}
+            onChange={onChange}
+            selectedTableId={'MEMBER'}
+            onSelectTable={onSelectTable}
+          />
+        );
+        await clickTestId('layers-next');
+
+        expect(findGridLines).toHaveBeenCalledTimes(1);
+        const hints = findGridLines.mock.calls[0][3];
+        expect(hints.map((h) => h.name).sort()).toEqual(
+          [written[0].next.MEMBER.name, written[1].name].sort()
+        );
+      });
+    });
+
+    test('Delete all tables while cutting cancels the cut and opens the dialog', async () => {
+      await renderStaged();
+      await clickTestId('opt-cut-start');
+      drawCutLines([0.02]);
+
+      await clickTestId('opt-delete-all-tables');
+
+      expect(screen.getByTestId('delete-all-dialog')).toBeInTheDocument();
+      expect(screen.getByTestId('opt-cut-start')).toBeInTheDocument();
+      expect(lastStagedProps().cutLines).toBeNull();
+    });
+
+    describe('the Delete all tables dialog', () => {
+      const MEMBER = { ...TABLE_B, tableId: 'MEMBER', name: 'Member' };
+      const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
+      const OTHER_PAGE = {
+        ...TABLE_A,
+        tableId: 'C',
+        name: 'Gamma',
+        pdfPage: 1,
+        tableInPage: 0,
+      };
+
+      const openDialog = async (props = {}) => {
+        await renderStaged({
+          metadata: metadataWith([ROOT, OTHER_PAGE]),
+          selectedTableId: 'ROOT',
+          ...props,
+        });
+        await clickTestId('opt-delete-all-tables');
+        expect(screen.getByTestId('delete-all-dialog')).toBeInTheDocument();
+      };
+
+      test('No-Cancel closes it and reports nothing', async () => {
+        const onChange = jest.fn();
+        await openDialog({ onChange });
+
+        await clickTestId('delete-all-cancel');
+
+        await waitFor(() =>
+          expect(screen.queryByTestId('delete-all-dialog')).toBeNull()
+        );
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      test('Yes-All deletes every table, a joined one included', async () => {
+        const onChange = jest.fn();
+        const onSelectTable = jest.fn();
+        await openDialog({ onChange, onSelectTable });
+
+        await clickTestId('delete-all-yes-all');
+
+        expect(onChange).toHaveBeenCalledTimes(1);
+        const written = lastWritten(onChange);
+        // The deleted root's member is unlinked to the top level before it is deleted.
+        expect(written.map((t) => t.tableId)).toEqual(['ROOT', 'MEMBER', 'C']);
+        expect(written.map((t) => t.deleted)).toEqual([true, true, true]);
+        expect(written[0].next).toBeNull();
+        expect(onSelectTable).toHaveBeenLastCalledWith(null);
+        await waitFor(() =>
+          expect(screen.queryByTestId('delete-all-dialog')).toBeNull()
+        );
+      });
+
+      test('Yes just this page deletes only this page tables', async () => {
+        const onChange = jest.fn();
+        const onSelectTable = jest.fn();
+        await openDialog({ onChange, onSelectTable });
+
+        await clickTestId('delete-all-yes-page');
+
+        expect(onChange).toHaveBeenCalledTimes(1);
+        const written = lastWritten(onChange);
+        // The deleted root's member is unlinked to the top level before it is deleted.
+        const byId = (id) => written.find((t) => t.tableId === id);
+        expect(byId('ROOT').deleted).toBe(true);
+        expect(byId('ROOT').next).toBeNull();
+        expect(byId('MEMBER').deleted).toBe(true);
+        expect(byId('C').deleted).toBeUndefined();
+        expect(onSelectTable).toHaveBeenLastCalledWith(null);
+        await waitFor(() =>
+          expect(screen.queryByTestId('delete-all-dialog')).toBeNull()
+        );
+      });
+    });
+  });
+
   describe('confirmationStage', () => {
     test('no write made through the editor changes it', async () => {
       const onChange = jest.fn();
@@ -1406,35 +1855,26 @@ describe('PageTableEditor — the page the contents pass describes', () => {
 });
 
 // The toolbar's pass tabs make the same switch as the Layers panel's Validate button, so
-// the editor hands the toolbar its own handlers rather than letting a second copy of them
-// be written. Registered through the editor-pass context, since the toolbar is not in this
-// tree at all.
+// the editor hands its host its own handlers rather than letting a second copy of them be
+// written. The host is what registers the toolbar's actions.
 describe('PageTableEditor — the switch it hands the toolbar', () => {
   let registered = null;
-
-  // Captures what the editor registered, which is what the toolbar's tabs would call.
-  function PassProbe() {
-    const editorPass = useEditorPass();
-    registered = editorPass.actions;
-
-    return <span data-testid={'probe-actions'}>{registered ? 'yes' : 'no'}</span>;
-  }
 
   const renderWithPass = async (props = {}) => {
     stagedGridEditorEnabled.mockReturnValue(true);
     const view = render(
-      <EditorPassProvider>
-        <PassProbe />
-        <PageTableEditor
-          metadata={metadataWith([TABLE_A, TABLE_B])}
-          page={0}
-          onChange={jest.fn()}
-          selectedTableId={'A'}
-          onSelectTable={jest.fn()}
-          onSave={jest.fn().mockResolvedValue(true)}
-          {...props}
-        />
-      </EditorPassProvider>
+      <PageTableEditor
+        metadata={metadataWith([TABLE_A, TABLE_B])}
+        page={0}
+        onChange={jest.fn()}
+        selectedTableId={'A'}
+        onSelectTable={jest.fn()}
+        onSave={jest.fn().mockResolvedValue(true)}
+        onRegisterPassSwitch={(fn) => {
+          registered = fn;
+        }}
+        {...props}
+      />
     );
     await screen.findByTestId('staged-editor');
     return view;
@@ -1505,76 +1945,41 @@ describe('PageTableEditor — the switch it hands the toolbar', () => {
 
     unmount();
 
-    expect(screen.queryByTestId('probe-actions')).toBeNull();
+    expect(registered).toBeNull();
   });
 });
 
-// Re-detecting one table's grid looks the result up in the merged list. A table joined into
-// another table's group is not on the top-level list, so a top-level scan cannot find it and
-// the correct merge was thrown away with "No table found".
-describe('re-detecting the grid of a joined member', () => {
-  const MEMBER = {
-    ...TABLE_B,
-    tableId: 'MEMBER',
-    name: 'Member',
-    tableInPage: 1,
-  };
-  const ROOT = { ...TABLE_A, tableId: 'ROOT', name: 'Root', next: { MEMBER } };
-
-  const stagedProps = () =>
-    mockStagedProps.mock.calls[mockStagedProps.mock.calls.length - 1][0];
-
-  const renderHosted = async (onChange) => {
+describe('PageTableEditor — the pass it mounts in', () => {
+  const renderInMode = async (props = {}) => {
     stagedGridEditorEnabled.mockReturnValue(true);
-    function Host() {
-      const [tables, setTables] = React.useState([ROOT]);
-      return (
-        <PageTableEditor
-          metadata={metadataWith(tables)}
-          page={0}
-          onChange={(next) => {
-            setTables(next);
-            onChange(next);
-          }}
-          selectedTableId={'MEMBER'}
-          onSelectTable={jest.fn()}
-          onSave={jest.fn().mockResolvedValue(true)}
-        />
-      );
-    }
-    const view = render(<Host />);
+    const onEditorModeChange = jest.fn();
+    render(
+      <PageTableEditor
+        metadata={metadataWith([TABLE_A, TABLE_B])}
+        page={0}
+        onChange={jest.fn()}
+        selectedTableId={'A'}
+        onSelectTable={jest.fn()}
+        onEditorModeChange={onEditorModeChange}
+        {...props}
+      />
+    );
     await screen.findByTestId('staged-editor');
-    return view;
+    return onEditorModeChange;
   };
 
-  test('applies the detected grid to the member instead of reporting nothing found', async () => {
-    // A grid covering the member's border, as the detector would return it.
-    findGridLines.mockResolvedValue({
-      tables: [
-        {
-          tableInPage: 99,
-          bounds: { left: 0.05, top: 0, width: 0.08, height: 0.04 },
-          columnWidths: [{ value: 0.08, confidence: 80 }],
-          rowHeights: [{ value: 0.04, confidence: 80 }],
-        },
-      ],
-    });
-    const onChange = jest.fn();
-    await renderHosted(onChange);
+  test('initialEditorMode grid mounts in the contents pass', async () => {
+    const onEditorModeChange = await renderInMode({ initialEditorMode: 'grid' });
 
-    // Mark the member as the just-created table, so the confirm control is offered for it.
-    await act(async () => {
-      stagedProps().onCreatedTable('MEMBER');
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('opt-confirm-created'));
-    });
+    expect(onEditorModeChange.mock.calls[0][0]).toBe('grid');
+    expect(screen.getByTestId('grid-toolbar')).toBeInTheDocument();
+  });
 
-    expect(toast).not.toHaveBeenCalledWith('No table found');
-    expect(onChange).toHaveBeenCalled();
-    const written = onChange.mock.calls[onChange.mock.calls.length - 1][0];
-    expect(written.map((t) => t.tableId)).toEqual(['ROOT']);
-    expect(written[0].next.MEMBER.bounds.width).toBeCloseTo(0.08, 6);
+  test('mounts in the boundary pass by default', async () => {
+    const onEditorModeChange = await renderInMode();
+
+    expect(onEditorModeChange.mock.calls[0][0]).toBe('border');
+    expect(screen.queryByTestId('grid-toolbar')).toBeNull();
   });
 });
 

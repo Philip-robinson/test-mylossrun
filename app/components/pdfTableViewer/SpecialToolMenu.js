@@ -34,7 +34,7 @@ const SPECIAL_TOOL_DEFS = [
   { key: 'title', label: 'Title', helpId: specialToolTitleHelpId },
   { key: 'hideRow', label: 'Hide Row', helpId: specialToolHideRowHelpId },
   { key: 'sectionTitle', label: 'Section', helpId: specialToolSectionHelpId },
-  { key: 'merged', label: 'Merged', helpId: specialToolMergedHelpId },
+  { key: 'merged', label: 'Merge Cells', helpId: specialToolMergedHelpId },
   {
     key: 'joinedEndRow',
     label: 'Joined end row',

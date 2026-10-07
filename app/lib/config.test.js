@@ -146,3 +146,35 @@ describe('split row wave config', () => {
     }
   });
 });
+
+describe('grid editor wavy border config', () => {
+  it('linkCellWaveHeightPx(), linkCellWavePitchPx() and linkCellBorderWidthPx() are positive, on both import paths', () => {
+    for (const source of [configModule, config]) {
+      expect(source.linkCellWaveHeightPx()).toBeGreaterThan(0);
+      expect(source.linkCellWavePitchPx()).toBeGreaterThan(0);
+      expect(source.linkCellBorderWidthPx()).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('review font scale config', () => {
+  it('reviewDefaultFontScalePercent() is one of the offered options, on both import paths', () => {
+    for (const source of [configModule, config]) {
+      expect(source.reviewFontScalePercentOptions()).toContain(
+        source.reviewDefaultFontScalePercent()
+      );
+    }
+  });
+});
+
+describe('cut line config', () => {
+  it('cutLineWidthPx() is positive and cutLineDash() is two positive numbers, on both import paths', () => {
+    for (const source of [configModule, config]) {
+      expect(source.cutLineWidthPx()).toBeGreaterThan(0);
+      const pair = source.cutLineDash().split(' ');
+      expect(pair.length).toBe(2);
+      expect(Number(pair[0])).toBeGreaterThan(0);
+      expect(Number(pair[1])).toBeGreaterThan(0);
+    }
+  });
+});

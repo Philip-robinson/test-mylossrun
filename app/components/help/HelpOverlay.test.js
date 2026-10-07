@@ -4,10 +4,16 @@ import userEvent from '@testing-library/user-event';
 import {
   documentListCountsHelpId,
   documentListScreenId,
+  documentListTableHelpId,
   dropBoxHelpId,
   helpButtonHelpId,
 } from 'config';
-import { helpHideLabel, helpIntroBody, helpScreens } from 'app/lib/helpContent';
+import {
+  helpHideLabel,
+  helpIntroBody,
+  helpNextLabel,
+  helpScreens,
+} from 'app/lib/helpContent';
 import { HelpContext } from 'components/help/HelpProvider';
 import HelpOverlay from 'components/help/HelpOverlay';
 
@@ -18,6 +24,10 @@ import HelpOverlay from 'components/help/HelpOverlay';
 const TARGET_RECT = { top: 40, left: 80, width: 200, height: 60 };
 
 const documentListHelp = () => helpScreens()[documentListScreenId()];
+
+const firstText = (body) => body.find((segment) => typeof segment === 'string');
+
+const breakCount = (body) => body.filter((segment) => segment.break).length;
 
 const tipTitle = (helpId) =>
   documentListHelp().tips.find((tip) => tip.helpId === helpId).title;
@@ -56,6 +66,16 @@ const card = () => screen.getByTestId('help-tip-card');
 
 const hole = () => screen.queryByTestId('help-hole');
 
+// A measureTarget seam that measures the help button and the given ids, and nothing else.
+const measuringOnly = (helpIds) => {
+  const measurable = new Set([helpButtonHelpId(), ...helpIds]);
+
+  return (helpId) => (measurable.has(helpId) ? TARGET_RECT : null);
+};
+
+const clickNext = () =>
+  userEvent.click(screen.getByRole('button', { name: helpNextLabel() }));
+
 const clickScrim = (point = { clientX: 120, clientY: 200 }) =>
   fireEvent.click(scrim(), point);
 
@@ -72,11 +92,12 @@ describe('HelpOverlay', () => {
 
       const text = card().textContent;
 
-      expect(text).toContain(documentListHelp().summary[0]);
-      expect(text).toContain(helpIntroBody()[0]);
-      expect(text.indexOf(documentListHelp().summary[0])).toBeLessThan(
-        text.indexOf(helpIntroBody()[0]),
-      );
+      const summary = firstText(documentListHelp().summary);
+      const intro = firstText(helpIntroBody());
+
+      expect(text).toContain(summary);
+      expect(text).toContain(intro);
+      expect(text.indexOf(summary)).toBeLessThan(text.indexOf(intro));
     });
 
     // The summary is about the screen and the introduction is about the ?, so they are
@@ -84,7 +105,9 @@ describe('HelpOverlay', () => {
     it("separates the screen's summary from the introduction", () => {
       render(<Harness />);
 
-      expect(card().querySelectorAll('[data-help-break]')).toHaveLength(1);
+      expect(card().querySelectorAll('[data-help-break]')).toHaveLength(
+        1 + breakCount(documentListHelp().summary) + breakCount(helpIntroBody()),
+      );
     });
 
     it('points at the help button', () => {
@@ -224,6 +247,54 @@ describe('HelpOverlay', () => {
       fireEvent.keyDown(window, { key: 'Escape' });
 
       expect(exitHelp).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Next', () => {
+    it('shows the first available tip of the screen from the entry card', async () => {
+      render(<Harness />);
+
+      await clickNext();
+
+      expect(hole()).toHaveAttribute('data-help-id', dropBoxHelpId());
+      expect(card().textContent).toContain(tipTitle(dropBoxHelpId()));
+    });
+
+    it('skips a tip whose target cannot be measured', async () => {
+      render(
+        <Harness
+          measureTarget={measuringOnly([
+            documentListCountsHelpId(),
+            documentListTableHelpId(),
+          ])}
+        />,
+      );
+
+      await clickNext();
+
+      expect(hole()).toHaveAttribute('data-help-id', documentListCountsHelpId());
+      expect(card().textContent).toContain(tipTitle(documentListCountsHelpId()));
+    });
+
+    it('returns to the entry card from the last available tip', async () => {
+      render(<Harness measureTarget={measuringOnly([dropBoxHelpId()])} />);
+
+      await clickNext();
+      expect(hole()).toHaveAttribute('data-help-id', dropBoxHelpId());
+
+      await clickNext();
+
+      expect(hole()).toHaveAttribute('data-help-id', helpButtonHelpId());
+      expect(card().textContent).toContain(documentListHelp().name);
+    });
+
+    it('leaves the entry card showing when no tip can be measured', async () => {
+      render(<Harness measureTarget={measuringOnly([])} />);
+
+      await clickNext();
+
+      expect(hole()).toHaveAttribute('data-help-id', helpButtonHelpId());
+      expect(card().textContent).toContain(documentListHelp().name);
     });
   });
 

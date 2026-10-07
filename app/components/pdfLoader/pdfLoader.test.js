@@ -12,6 +12,8 @@ import { documentListScreenId } from 'config';
 import { getPdfDisplayList } from 'services/pdfDisplayList';
 import { awaitEntryChange } from 'services/awaitEntryChange';
 import { resetPdfListCache } from 'components/pdfLoader/pdfListCache';
+import { downloadOriginalPdf, exportDocumentWorkbook } from 'services/documentActions';
+import toast from 'react-hot-toast';
 
 let capturedDocumentListProps;
 let capturedOnUploaded;
@@ -39,6 +41,11 @@ jest.mock('services/pdfDisplayList', () => ({
 
 jest.mock('services/awaitEntryChange', () => ({
   awaitEntryChange: jest.fn(),
+}));
+
+jest.mock('services/documentActions', () => ({
+  downloadOriginalPdf: jest.fn(),
+  exportDocumentWorkbook: jest.fn(),
 }));
 
 jest.mock('react-hot-toast', () => {
@@ -224,5 +231,46 @@ describe('PDFLoader', () => {
     );
     // Let the mount poll settle so its state update runs inside act().
     await waitFor(() => expect(capturedDocumentListProps.hasLoaded).toBe(true));
+  });
+
+  describe('row actions', () => {
+    const pdf = { pdfId: 'a', name: 'a.pdf', status: 'COMPLETED' };
+
+    async function renderLoaded() {
+      render(<PDFLoader onSelectPdf={() => {}} />);
+      await waitFor(() => expect(capturedDocumentListProps.hasLoaded).toBe(true));
+    }
+
+    test('passes onDownloadOriginal and onExport to DocumentList', async () => {
+      await renderLoaded();
+
+      expect(typeof capturedDocumentListProps.onDownloadOriginal).toBe('function');
+      expect(typeof capturedDocumentListProps.onExport).toBe('function');
+    });
+
+    test.each([
+      ['onDownloadOriginal', downloadOriginalPdf],
+      ['onExport', exportDocumentWorkbook],
+    ])('%s calls its service with the pdf and raises no toast on success', async (prop, service) => {
+      service.mockResolvedValue(undefined);
+      await renderLoaded();
+
+      await expect(capturedDocumentListProps[prop](pdf)).resolves.toBeUndefined();
+
+      expect(service).toHaveBeenCalledWith(pdf);
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ['onDownloadOriginal', downloadOriginalPdf],
+      ['onExport', exportDocumentWorkbook],
+    ])('%s toasts the error and resolves when its service fails', async (prop, service) => {
+      service.mockRejectedValue(new Error('boom'));
+      await renderLoaded();
+
+      await expect(capturedDocumentListProps[prop](pdf)).resolves.toBeUndefined();
+
+      expect(toast.error).toHaveBeenCalledWith('boom');
+    });
   });
 });

@@ -53,6 +53,7 @@ import {
   firstKnownHelpId,
   holeRect,
   isMeasurable,
+  nextHelpId,
   tipPlacement,
 } from 'components/help/helpTargetUtils';
 import HelpHole from 'components/help/HelpHole';
@@ -162,6 +163,18 @@ export default function HelpOverlay({
     }
   };
 
+  // The screen's next tip, in authored order, whose target can be measured now; after
+  // the last such tip it is the entry card again.
+  const onNext = () => {
+    const isAvailable = (helpId) =>
+      isMeasurable(seams.current.measureTarget(helpId), currentViewport());
+    const nextId = nextHelpId(screenTipIds(screenId), targetHelpId, isAvailable);
+
+    if (setTargetHelpId) {
+      setTargetHelpId(nextId);
+    }
+  };
+
   return (
     <div
       data-testid={'help-scrim'}
@@ -184,6 +197,7 @@ export default function HelpOverlay({
           position={placement}
           onExit={exitHelp}
           onHide={() => setCardHidden(true)}
+          onNext={onNext}
         />
       )}
     </div>
@@ -227,10 +241,14 @@ function shownHelp(screenId, targetHelpId) {
 // that opened help. The ? has no authored tip anywhere, so resolving to it is what
 // takes the user back to the entry card.
 function describedIds(screenId) {
-  const screen = screenId ? helpScreens()[screenId] : null;
-  const tipIds = screen ? (screen.tips || []).map((tip) => tip.helpId) : [];
+  return [helpButtonHelpId(), ...screenTipIds(screenId)];
+}
 
-  return [helpButtonHelpId(), ...tipIds];
+// The screen's tip ids in authored order.
+function screenTipIds(screenId) {
+  const screen = screenId ? helpScreens()[screenId] : null;
+
+  return screen ? (screen.tips || []).map((tip) => tip.helpId) : [];
 }
 
 // The card's size for placement: its measured height once there is one, and the

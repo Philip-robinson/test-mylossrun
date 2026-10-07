@@ -26,7 +26,8 @@ import {
   reviewFlaggedCountHelpId,
   reviewGridHelpId,
   reviewPoorCellsHelpId,
-  reviewSaveHelpId,
+  reviewCloseHelpId,
+  reviewExportHelpId,
   reviewSectionTitleHelpId,
   reviewTitleHelpId,
   lowConfidence,
@@ -48,6 +49,12 @@ import {
   reviewTitleLabel,
   reviewSectionTitleLabel,
   reviewWideCellMinCharacters,
+  reviewCloseLabel,
+  reviewExportingLabel,
+  reviewDefaultFontScalePercent,
+  reviewFontScaleStorageKey,
+  reviewFontScaleHelpId,
+  reviewTableNameHelpId,
 } from 'config';
 
 jest.mock('services/images', () => ({
@@ -70,7 +77,21 @@ jest.mock('config', () => ({
   reviewTitleHelpId: jest.requireActual('config').reviewTitleHelpId,
   reviewSectionTitleHelpId: jest.requireActual('config').reviewSectionTitleHelpId,
   reviewGridHelpId: jest.requireActual('config').reviewGridHelpId,
-  reviewSaveHelpId: jest.requireActual('config').reviewSaveHelpId,
+  reviewCloseHelpId: jest.requireActual('config').reviewCloseHelpId,
+  reviewExportHelpId: jest.requireActual('config').reviewExportHelpId,
+  // Operation names are compared, never displayed, so the real ones pass through.
+  reviewClosingOperation: jest.requireActual('config').reviewClosingOperation,
+  reviewExportingOperation: jest.requireActual('config').reviewExportingOperation,
+  // Read by ReviewCellText, a real collaborator here.
+  cellLineBreakPattern: jest.requireActual('config').cellLineBreakPattern,
+  // The header row's zoom: real values, so the offered steps and the stored key are the
+  // ones the app uses.
+  reviewFontScalePercentOptions: jest.requireActual('config').reviewFontScalePercentOptions,
+  reviewDefaultFontScalePercent: jest.requireActual('config').reviewDefaultFontScalePercent,
+  reviewFontScaleStorageKey: jest.requireActual('config').reviewFontScaleStorageKey,
+  reviewFontScaleHelpId: jest.requireActual('config').reviewFontScaleHelpId,
+  reviewTableNameHelpId: jest.requireActual('config').reviewTableNameHelpId,
+  reviewHeaderRowGapPx: jest.fn(() => 10),
   // Read by ReviewTableTabs, a real collaborator here.
   reviewTabsHelpId: jest.requireActual('config').reviewTabsHelpId,
   // Read by CellEditDialog, whose parts this screen's tips describe.
@@ -111,6 +132,9 @@ jest.mock('config', () => ({
   // rather than spell it out, and a sentinel is what proves it.
   reviewTitleLabel: jest.fn(() => 'Table title'),
   reviewSectionTitleLabel: jest.fn(() => 'Section heading'),
+  reviewCloseLabel: jest.fn(() => 'Leave review'),
+  reviewExportLabel: jest.fn(() => 'Export this table'),
+  reviewExportingLabel: jest.fn(() => 'Exporting this table…'),
   // Distinct from the real 100 so nothing can pass by coincidence, but still ABOVE the
   // sentinel high threshold — a corrected cell must stop counting towards the
   // below-high tally, and a sentinel below it would hide that.
@@ -314,6 +338,7 @@ const renderPanel = (props = {}) =>
       onEditTables={jest.fn()}
       onExit={jest.fn()}
       onSave={jest.fn().mockResolvedValue(true)}
+      onExport={jest.fn().mockResolvedValue(undefined)}
       {...props}
     />
   );
@@ -367,6 +392,75 @@ beforeEach(() => {
 });
 
 describe('ReviewTablePanel', () => {
+  describe('the header row', () => {
+    const namedTables = (name) =>
+      metadataTables().map((t) => (t.tableId === 'root' ? { ...t, name } : t));
+
+    beforeEach(() => {
+      window.localStorage.clear();
+      extractTable.mockReturnValue(new Promise(() => {}));
+    });
+
+    it('offers the zoom at the default percent when nothing is stored', () => {
+      renderPanel();
+
+      expect(screen.getByTestId('scale-value')).toHaveTextContent(
+        `${reviewDefaultFontScalePercent()}%`
+      );
+    });
+
+    it('remembers a changed zoom in local storage', async () => {
+      renderPanel();
+
+      await userEvent.click(screen.getByTestId('scale-zoom-in'));
+
+      expect(screen.getByTestId('scale-value')).toHaveTextContent('100%');
+      expect(window.localStorage.getItem(reviewFontScaleStorageKey())).toBe('100');
+    });
+
+    it('starts on the stored zoom', () => {
+      window.localStorage.setItem(reviewFontScaleStorageKey(), '130');
+
+      renderPanel();
+
+      expect(screen.getByTestId('scale-value')).toHaveTextContent('130%');
+      expect(screen.getByTestId('scale-zoom-in')).toBeDisabled();
+    });
+
+    it('names the table name and the zoom for help', () => {
+      renderPanel({ tables: namedTables('Claims schedule') });
+
+      expect(screen.getByTestId('review-table-name')).toHaveAttribute(
+        'data-help-id',
+        reviewTableNameHelpId()
+      );
+      expect(
+        screen.getByTestId('scale-zoom-in').closest(`[data-help-id="${reviewFontScaleHelpId()}"]`)
+      ).toBeInTheDocument();
+    });
+
+    it('shows the reviewed table name above the panel, before the extraction settles', () => {
+      extractTable.mockReturnValue(new Promise(() => {}));
+
+      renderPanel({ tables: namedTables('Claims schedule') });
+
+      const heading = screen.getByTestId('review-table-name');
+      expect(heading).toHaveTextContent('Claims schedule');
+      expect(
+        heading.compareDocumentPosition(screen.getByRole('progressbar')) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    it('shows no name line when the table has no name', () => {
+      extractTable.mockReturnValue(new Promise(() => {}));
+
+      renderPanel({ tables: namedTables('  ') });
+
+      expect(screen.queryByTestId('review-table-name')).not.toBeInTheDocument();
+    });
+  });
+
   it('shows a spinner and Extracting… while the extraction is in flight', () => {
     extractTable.mockReturnValue(new Promise(() => {}));
 
@@ -570,8 +664,7 @@ describe('ReviewTablePanel', () => {
     expect(screen.queryByText('Extracting…')).not.toBeInTheDocument();
   });
 
-  // The button saves and then leaves, so it is labelled for the part that can fail.
-  it('labels the leave button Save', async () => {
+  it('labels the leave button Close', async () => {
     extractTable.mockResolvedValue({ tables: [simpleTable] });
 
     renderPanel();
@@ -579,10 +672,12 @@ describe('ReviewTablePanel', () => {
     await waitFor(() =>
       expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
     );
-    expect(screen.getByTestId('review-exit')).toHaveTextContent('Save');
+    expect(screen.getByTestId('review-exit')).toHaveTextContent(
+      reviewCloseLabel()
+    );
   });
 
-  it('calls onExit when Save is clicked, once the save it runs first has landed', async () => {
+  it('calls onExit when Close is clicked, once the save it runs first has landed', async () => {
     extractTable.mockResolvedValue({ tables: [simpleTable] });
     const onExit = jest.fn();
 
@@ -1377,8 +1472,6 @@ describe('ReviewTablePanel', () => {
     });
   });
 
-  // Export is the end of the road: the document is saved, turned into a spreadsheet, and
-  // the user is handed the file and sent back to the list.
   describe('leaving the panel', () => {
     it('saves before it leaves', async () => {
       extractTable.mockResolvedValue({ tables: [simpleTable] });
@@ -1434,12 +1527,152 @@ describe('ReviewTablePanel', () => {
       expect(onSave).toHaveBeenCalledTimes(1);
     });
 
-    it('offers no Export button — the export lives on the Document Overview', async () => {
+    it('disables both buttons while a close-save is pending', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      let finishSave;
+      const onSave = jest.fn(
+        () => new Promise((resolve) => {
+          finishSave = resolve;
+        })
+      );
+      renderPanel({ onSave });
+      await screen.findAllByTestId('review-cell');
+
+      await userEvent.click(screen.getByTestId('review-exit'));
+      await screen.findByTestId('review-exiting');
+
+      expect(screen.getByTestId('review-exit')).toBeDisabled();
+      expect(screen.getByTestId('review-export')).toBeDisabled();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        finishSave(false);
+      });
+    });
+  });
+
+  describe('exporting the table', () => {
+    // An export whose promise the test settles by hand.
+    const pendingExport = () => {
+      const handle = {};
+      handle.onExport = jest.fn(
+        () => new Promise((resolve, reject) => {
+          handle.resolve = resolve;
+          handle.reject = reject;
+        })
+      );
+      return handle;
+    };
+
+    it('puts Export before Close in the footer', async () => {
       extractTable.mockResolvedValue({ tables: [simpleTable] });
       renderPanel();
       await screen.findAllByTestId('review-cell');
 
-      expect(screen.queryByTestId('review-export')).toBeNull();
+      const exportButton = screen.getByTestId('review-export');
+      const closeButton = screen.getByTestId('review-exit');
+      expect(exportButton.parentElement).toBe(closeButton.parentElement);
+      expect(
+        exportButton.compareDocumentPosition(closeButton) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    });
+
+    it('calls onExport once and shows the export lock until it resolves', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const exporting = pendingExport();
+      renderPanel({ onExport: exporting.onExport });
+      await screen.findAllByTestId('review-cell');
+
+      await userEvent.click(screen.getByTestId('review-export'));
+
+      expect(exporting.onExport).toHaveBeenCalledTimes(1);
+      expect(await screen.findByTestId('review-exporting')).toHaveTextContent(
+        reviewExportingLabel()
+      );
+
+      // eslint-disable-next-line
+      await act(async () => {
+        exporting.resolve();
+      });
+
+      expect(screen.queryByTestId('review-exporting')).toBeNull();
+    });
+
+    it('removes the export lock when the export rejects', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const exporting = pendingExport();
+      renderPanel({ onExport: exporting.onExport });
+      await screen.findAllByTestId('review-cell');
+
+      await userEvent.click(screen.getByTestId('review-export'));
+      await screen.findByTestId('review-exporting');
+
+      // eslint-disable-next-line
+      await act(async () => {
+        exporting.reject(new Error('export exploded'));
+      });
+
+      expect(screen.queryByTestId('review-exporting')).toBeNull();
+      expect(screen.getByTestId('review-export')).toBeEnabled();
+    });
+
+    it('starts no second export while one is pending', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const exporting = pendingExport();
+      renderPanel({ onExport: exporting.onExport });
+      await screen.findAllByTestId('review-cell');
+
+      const exportButton = screen.getByTestId('review-export');
+      fireEvent.click(exportButton);
+      fireEvent.click(exportButton);
+      await screen.findByTestId('review-exporting');
+
+      expect(exporting.onExport).toHaveBeenCalledTimes(1);
+
+      // eslint-disable-next-line
+      await act(async () => {
+        exporting.resolve();
+      });
+    });
+
+    it('disables both buttons while an export is pending', async () => {
+      extractTable.mockResolvedValue({ tables: [simpleTable] });
+      const exporting = pendingExport();
+      renderPanel({ onExport: exporting.onExport });
+      await screen.findAllByTestId('review-cell');
+
+      await userEvent.click(screen.getByTestId('review-export'));
+      await screen.findByTestId('review-exporting');
+
+      expect(screen.getByTestId('review-export')).toBeDisabled();
+      expect(screen.getByTestId('review-exit')).toBeDisabled();
+
+      // eslint-disable-next-line
+      await act(async () => {
+        exporting.resolve();
+      });
+    });
+  });
+
+  describe('cell line breaks', () => {
+    it('renders a line break inside a cell as <br>', async () => {
+      extractTable.mockResolvedValue({
+        tables: [
+          {
+            name: 'root',
+            title: null,
+            headerCount: 0,
+            cells: [[cell('root', 0, 0, 'a\r\nb', 99)]],
+          },
+        ],
+      });
+      renderPanel();
+      await screen.findAllByTestId('review-cell');
+
+      expect(
+        screen.getByTestId('review-cell-body').querySelector('br')
+      ).not.toBeNull();
     });
   });
 
@@ -2565,7 +2798,7 @@ describe('ReviewTablePanel — the help anchors', () => {
     ],
   };
 
-  it('names the count, the go-to controls, the grid and Save', async () => {
+  it('names the count, the go-to controls, the grid, Export and Close', async () => {
     await shown(simpleTable);
 
     expect(screen.getByTestId('review-confidence-count')).toHaveAttribute(
@@ -2583,7 +2816,11 @@ describe('ReviewTablePanel — the help anchors', () => {
     );
     expect(screen.getByTestId('review-exit')).toHaveAttribute(
       'data-help-id',
-      reviewSaveHelpId()
+      reviewCloseHelpId()
+    );
+    expect(screen.getByTestId('review-export')).toHaveAttribute(
+      'data-help-id',
+      reviewExportHelpId()
     );
   });
 

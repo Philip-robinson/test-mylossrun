@@ -16,11 +16,15 @@ export const looksNumeric = (text) =>
   typeof text === 'string' && NUMERIC_PATTERN.test(text.trim());
 
 // True when `text` is long enough that the column should be held open to its full
-// width rather than allowed to shrink to fit its neighbours. Whitespace is trimmed
-// first so trailing padding cannot tip a short value over the threshold; absent or
-// non-string text is never wide.
-export const isWideText = (text, minCharacters) =>
-  typeof text === 'string' && text.trim().length > minCharacters;
+// width rather than allowed to shrink to fit its neighbours. Given `lineBreakPattern`,
+// the longest line is measured, since each line renders on its own. Whitespace is
+// trimmed first so trailing padding cannot tip a short value over the threshold;
+// absent or non-string text is never wide.
+export const isWideText = (text, minCharacters, lineBreakPattern) =>
+  typeof text === 'string' &&
+  (lineBreakPattern ? text.split(lineBreakPattern) : [text]).some(
+    (line) => line.trim().length > minCharacters
+  );
 
 // A column's spreadsheet name: A-Z, then AA-AZ, BA-… and so on. This is BIJECTIVE
 // base-26, not ordinary base-26 — there is no zero digit, so AA follows Z directly
@@ -189,3 +193,8 @@ export const reviewRowNumbers = (rowCount, headerCount, splitRows) => {
     return index + 1 - skipped;
   });
 };
+
+// A cell's text split into lines on `pattern`. Leading and trailing break runs yield an
+// empty first or last line; a non-string value is returned alone, unchanged.
+export const cellTextLines = (text, pattern) =>
+  typeof text === 'string' ? text.split(pattern) : [text];

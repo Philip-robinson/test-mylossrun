@@ -5,6 +5,7 @@ import {
   adjacentPoorCell,
   belowHighConfidenceCells,
   cellCoordinate,
+  cellTextLines,
   columnLabel,
   confidenceLabel,
   flaggedForReviewLabel,
@@ -82,6 +83,13 @@ describe('reviewUtils', () => {
     it('measures the trimmed text, so padding cannot make it wide', () => {
       expect(isWideText('  ab  ', 3)).toBe(false);
       expect(isWideText('  abcd  ', 3)).toBe(true);
+    });
+
+    it('measures the longest line when given a line-break pattern', () => {
+      const pattern = /[\r\n]+/;
+      expect(isWideText('abc\nab\r\nabc', 3, pattern)).toBe(false);
+      expect(isWideText('ab\nabcd', 3, pattern)).toBe(true);
+      expect(isWideText('  ab  \n  abc  ', 3, pattern)).toBe(false);
     });
 
     it('rejects empty and absent text', () => {
@@ -490,5 +498,38 @@ describe('reviewRowNumbers', () => {
   it('treats a missing list as empty', () => {
     expect(reviewRowNumbers(3, 1, undefined)).toEqual([1, 2, 3]);
     expect(reviewRowNumbers(3, 1, null)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('cellTextLines', () => {
+  const pattern = /[\r\n]+/;
+
+  it('returns one line when there is no break', () => {
+    expect(cellTextLines('abc', pattern)).toEqual(['abc']);
+  });
+
+  it('splits on a lone \\n, a lone \\r and \\r\\n', () => {
+    expect(cellTextLines('a\nb', pattern)).toEqual(['a', 'b']);
+    expect(cellTextLines('a\rb', pattern)).toEqual(['a', 'b']);
+    expect(cellTextLines('a\r\nb', pattern)).toEqual(['a', 'b']);
+  });
+
+  it('treats a mixed run of breaks as one break', () => {
+    expect(cellTextLines('a\r\n\n\rb', pattern)).toEqual(['a', 'b']);
+  });
+
+  it('keeps an empty first or last line for a leading or trailing run', () => {
+    expect(cellTextLines('\na', pattern)).toEqual(['', 'a']);
+    expect(cellTextLines('a\r\n', pattern)).toEqual(['a', '']);
+  });
+
+  it('returns a single empty line for an empty string', () => {
+    expect(cellTextLines('', pattern)).toEqual(['']);
+  });
+
+  it('returns a non-string value unchanged in a one-element array', () => {
+    expect(cellTextLines(null, pattern)).toEqual([null]);
+    expect(cellTextLines(undefined, pattern)).toEqual([undefined]);
+    expect(cellTextLines(42, pattern)).toEqual([42]);
   });
 });

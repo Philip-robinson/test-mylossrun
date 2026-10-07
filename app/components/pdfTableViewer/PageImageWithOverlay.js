@@ -54,6 +54,7 @@ import {
   confidenceColour,
   clampToUnitPage,
   cumulative,
+  deleteTablesUnlinking,
   distanceOutsideTable,
   identityMap,
   makeDefaultCell,
@@ -72,6 +73,7 @@ import {
   splitEntry,
   splitMap,
   splitMapBelow,
+  pointFractionInRect,
 } from 'components/pdfTableViewer/tableSupportUtils';
 
 // data-testid marker on the transparent wide-stroke hit lines that sit on top of
@@ -249,6 +251,9 @@ export function PageImageWithOverlay({
   // it can be picked to join the group. Absent, the thumbnails behave exactly as before —
   // the overlay takes no pointer events and the click reaches the page behind it.
   onThumbnailTableClick = null,
+  // Supplied only on a thumbnail outside a linking session: a click anywhere on the image
+  // reports where it landed, as pointFractionInRect of the image's rendered rect.
+  onThumbnailPointClick = null,
   withGrid,
   onHoverTable,
   metadataTables,
@@ -1481,6 +1486,17 @@ export function PageImageWithOverlay({
       sx={{ position: 'relative', display: 'inline-block', lineHeight: 0 }}
       onMouseMove={onHoverTable ? handleMouseMove : undefined}
       onMouseLeave={onHoverTable ? handleMouseLeave : undefined}
+      onClick={
+        onThumbnailPointClick
+          ? (e) => {
+              e.stopPropagation();
+              const rect = imgRef.current.getBoundingClientRect();
+              onThumbnailPointClick(
+                pointFractionInRect(e.clientX, e.clientY, rect)
+              );
+            }
+          : undefined
+      }
     >
       <img
         ref={imgRef}
@@ -2080,10 +2096,12 @@ export function PageImageWithOverlay({
           <Button onClick={() => setConfirmDelete(null)}>{'Cancel'}</Button>
           <Button
             onClick={() => {
-              const t = (metadataTables ?? []).find(
+              const list = metadataTables ?? [];
+              const next = deleteTablesUnlinking(
+                list,
                 (x) => x.tableId === confirmDelete.tableId
               );
-              if (t) commitTableEdit(confirmDelete.tableId, { ...t, deleted: true });
+              if (next !== list) onEditTables(next);
               setConfirmDelete(null);
             }}
           >

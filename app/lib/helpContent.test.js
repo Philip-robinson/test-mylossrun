@@ -1,5 +1,11 @@
 import {
   accountButtonHelpId,
+  boundaryCreateTableHelpId,
+  boundaryCutCancelHelpId,
+  boundaryCutEndHelpId,
+  boundaryCutStartHelpId,
+  boundaryDeleteAllTablesHelpId,
+  boundaryDeleteTableHelpId,
   boundaryPassScreenId,
   cellEditCancelHelpId,
   cellEditConfidenceHelpId,
@@ -7,8 +13,10 @@ import {
   cellEditImageHelpId,
   cellEditNextHelpId,
   contentsPassScreenId,
+  documentListActionsHelpId,
   documentOverviewEntryHelpId,
   documentOverviewExportHelpId,
+  documentOverviewExportTableHelpId,
   documentOverviewHelpId,
   documentOverviewLinkHelpId,
   documentOverviewReviewHelpId,
@@ -19,18 +27,30 @@ import {
   editorScaleHelpId,
   helpButtonHelpId,
   includeDeletedHelpId,
+  layersBordersHelpId,
+  layersColoursHelpId,
+  layersColumnsHelpId,
+  layersPanelHelpId,
+  layersRowsHelpId,
+  layersSpecialHelpId,
   documentListScreenId,
   layersNextHelpId,
   layersPreviousHelpId,
+  pagesColumnHelpId,
   reviewTableScreenId,
+  reviewTableNameHelpId,
+  reviewFontScaleHelpId,
   specialToolJoinedEndRowHelpId,
   specialToolMergedHelpId,
   tableLinkLabelHelpId,
   tableNameLabelHelpId,
+  toolbarAllFilesHelpId,
   toolbarValidateBordersHelpId,
   toolbarValidateTablesHelpId,
   validateBordersHelpId,
   validateTablesHelpId,
+  downloadOriginalLabel,
+  exportDocumentLabel,
 } from 'config';
 
 import {
@@ -73,6 +93,10 @@ const isSegmentList = (items) =>
 const isSegmentArray = (body) => Array.isArray(body) && body.length > 0 && body.every(isSegment);
 
 const screenEntries = () => Object.entries(helpScreens());
+
+// Tips in help-id order, for comparing what two screens say regardless of the order each
+// steps through them.
+const byHelpId = (tips) => [...tips].sort((a, b) => a.helpId.localeCompare(b.helpId));
 
 const allTips = () =>
   screenEntries().flatMap(([screenId, screen]) => screen.tips.map((tip) => [screenId, tip]));
@@ -137,6 +161,7 @@ describe('the Document Overview column', () => {
     documentOverviewEntryHelpId(),
     documentOverviewLinkHelpId(),
     documentOverviewReviewHelpId(),
+    documentOverviewExportTableHelpId(),
     documentOverviewExportHelpId(),
   ];
 
@@ -145,15 +170,15 @@ describe('the Document Overview column', () => {
       overviewIds.includes(tip.helpId),
     );
 
-  it('is described by the boundary pass, top to bottom', () => {
-    expect(columnTips(boundaryPassScreenId()).map((tip) => tip.helpId)).toEqual(
-      overviewIds,
+  it('is described by the boundary pass', () => {
+    expect(columnTips(boundaryPassScreenId()).map((tip) => tip.helpId).sort()).toEqual(
+      [...overviewIds].sort(),
     );
   });
 
   it('is described by the contents pass in the same words', () => {
-    expect(columnTips(contentsPassScreenId())).toEqual(
-      columnTips(boundaryPassScreenId()),
+    expect(byHelpId(columnTips(contentsPassScreenId()))).toEqual(
+      byHelpId(columnTips(boundaryPassScreenId())),
     );
   });
 });
@@ -173,8 +198,8 @@ describe('the Previous and Next buttons', () => {
   });
 
   it('are described by the contents pass in the same words', () => {
-    expect(stepTips(contentsPassScreenId())).toEqual(
-      stepTips(boundaryPassScreenId()),
+    expect(byHelpId(stepTips(contentsPassScreenId()))).toEqual(
+      byHelpId(stepTips(boundaryPassScreenId())),
     );
   });
 });
@@ -194,14 +219,14 @@ describe("the editor's own toolbar", () => {
     );
 
   it('is described by the boundary pass', () => {
-    expect(toolbarTips(boundaryPassScreenId()).map((tip) => tip.helpId)).toEqual(
-      toolbarIds,
+    expect(toolbarTips(boundaryPassScreenId()).map((tip) => tip.helpId).sort()).toEqual(
+      [...toolbarIds].sort(),
     );
   });
 
   it('is described by the contents pass in the same words', () => {
-    expect(toolbarTips(contentsPassScreenId())).toEqual(
-      toolbarTips(boundaryPassScreenId()),
+    expect(byHelpId(toolbarTips(contentsPassScreenId()))).toEqual(
+      byHelpId(toolbarTips(boundaryPassScreenId())),
     );
   });
 });
@@ -291,6 +316,16 @@ describe('the cell-edit dialog', () => {
   });
 });
 
+// The review screen's header row: the table name on the left and the font zoom on the right,
+// described first and in that order, since they are the first things on the screen.
+describe("the review screen's header row", () => {
+  it('is described first by the review screen, name then zoom', () => {
+    expect(
+      helpScreens()[reviewTableScreenId()].tips.slice(0, 2).map((tip) => tip.helpId),
+    ).toEqual([reviewTableNameHelpId(), reviewFontScaleHelpId()]);
+  });
+});
+
 // The name label sits above the selected table's top-left corner in both passes and says
 // the same thing in each, so both screens describe it from the one list.
 describe("the table's name label", () => {
@@ -312,20 +347,136 @@ describe("the table's name label", () => {
   });
 });
 
+// Each Document Overview entry's Export button is described on both passes.
+describe('the Table Export button tip', () => {
+  const exportTableTip = (screenId) =>
+    helpScreens()[screenId].tips.find(
+      (tip) => tip.helpId === documentOverviewExportTableHelpId(),
+    );
+
+  it('is titled Table Export button on both passes', () => {
+    expect(exportTableTip(boundaryPassScreenId())?.title).toBe('Table Export button');
+    expect(exportTableTip(contentsPassScreenId())?.title).toBe('Table Export button');
+  });
+});
+
 // The selected table's boundary is one element carrying one help id, and each pass
 // describes it as what that pass is about: its boundary on the borders pass, the grid it
 // holds on the contents pass. Two screens, one id, deliberately different words.
+// Help's Next steps through a screen's tips in the order they are listed, so the boundary
+// pass lists them in the order the operator chose.
+describe('the boundary pass tip order', () => {
+  it('lists its tips in the order Next steps through them', () => {
+    expect(helpScreens()[boundaryPassScreenId()].tips.map((tip) => tip.helpId)).toEqual([
+      toolbarAllFilesHelpId(),
+      toolbarValidateBordersHelpId(),
+      toolbarValidateTablesHelpId(),
+      editorDimDocumentHelpId(),
+      editorScaleHelpId(),
+      documentOverviewSaveHelpId(),
+      documentOverviewHelpId(),
+      includeDeletedHelpId(),
+      documentOverviewEntryHelpId(),
+      documentOverviewReviewHelpId(),
+      documentOverviewExportTableHelpId(),
+      tableNameLabelHelpId(),
+      documentOverviewLinkHelpId(),
+      tableLinkLabelHelpId(),
+      documentOverviewExportHelpId(),
+      editorPageTableHelpId(),
+      layersBordersHelpId(),
+      boundaryDeleteTableHelpId(),
+      boundaryCutStartHelpId(),
+      boundaryCutEndHelpId(),
+      boundaryCutCancelHelpId(),
+      boundaryDeleteAllTablesHelpId(),
+      boundaryCreateTableHelpId(),
+      layersPreviousHelpId(),
+      layersNextHelpId(),
+      validateTablesHelpId(),
+      pagesColumnHelpId(),
+      editorPageTitleHelpId(),
+      accountButtonHelpId(),
+    ]);
+  });
+});
+
+// The contents pass lists its tips in the order the operator chose, ids named by role
+// where the screen's own tips are not shared.
+describe('the contents pass tip order', () => {
+  const contentsTips = () => helpScreens()[contentsPassScreenId()].tips;
+  const idOf = (title) => contentsTips().find((tip) => tip.title === title)?.helpId;
+
+  it('lists its tips in the order Next steps through them', () => {
+    expect(contentsTips().map((tip) => tip.helpId)).toEqual([
+      toolbarAllFilesHelpId(),
+      toolbarValidateBordersHelpId(),
+      toolbarValidateTablesHelpId(),
+      editorPageTitleHelpId(),
+      editorDimDocumentHelpId(),
+      editorScaleHelpId(),
+      documentOverviewSaveHelpId(),
+      includeDeletedHelpId(),
+      documentOverviewHelpId(),
+      documentOverviewEntryHelpId(),
+      documentOverviewLinkHelpId(),
+      documentOverviewReviewHelpId(),
+      documentOverviewExportTableHelpId(),
+      documentOverviewExportHelpId(),
+      accountButtonHelpId(),
+      idOf('Edit mode buttons'),
+      idOf('Edit Rows button'),
+      idOf('Edit Columns button'),
+      idOf('Edit Special areas button'),
+      idOf('Header button'),
+      idOf('Title button'),
+      idOf('Section button'),
+      idOf('Merge Cells button'),
+      idOf('Joined end row button'),
+      idOf('Rows colouring button'),
+      idOf('Tables colouring button'),
+      idOf('Columns colouring button'),
+      idOf('Cell colouring button'),
+      idOf('Area colouring button'),
+      idOf('Hide Row button'),
+      tableNameLabelHelpId(),
+      idOf('Table status'),
+      editorPageTableHelpId(),
+      layersPanelHelpId(),
+      layersBordersHelpId(),
+      layersRowsHelpId(),
+      layersColumnsHelpId(),
+      layersSpecialHelpId(),
+      layersColoursHelpId(),
+      layersNextHelpId(),
+      layersPreviousHelpId(),
+      validateBordersHelpId(),
+    ]);
+  });
+
+  it('describes Show Borders in the same words as the boundary pass', () => {
+    const showBorders = (screenId) =>
+      helpScreens()[screenId].tips.find((tip) => tip.helpId === layersBordersHelpId());
+
+    expect(showBorders(contentsPassScreenId())).toEqual(showBorders(boundaryPassScreenId()));
+  });
+
+  it('describes All files in the same words as the boundary pass', () => {
+    const allFiles = (screenId) =>
+      helpScreens()[screenId].tips.find((tip) => tip.helpId === toolbarAllFilesHelpId());
+
+    expect(allFiles(contentsPassScreenId())).toEqual(allFiles(boundaryPassScreenId()));
+  });
+});
+
 describe("the selected table's boundary", () => {
   const boundaryTip = (screenId) =>
     helpScreens()[screenId].tips.find(
       (tip) => tip.helpId === editorPageTableHelpId(),
     );
 
-  it('is the first thing the boundary pass describes', () => {
-    const tips = helpScreens()[boundaryPassScreenId()].tips;
-
-    expect(tips[0].helpId).toEqual(editorPageTableHelpId());
-    expect(tips[0].title).toEqual('Selected Table Boundary');
+  it('is the boundary pass\'s Selected Table Boundary', () => {
+    expect(boundaryTip(boundaryPassScreenId()).title).toEqual('Selected Table Boundary');
   });
 
   it('is described by the contents pass in words of its own', () => {
@@ -384,9 +535,9 @@ describe('the account button', () => {
   });
 });
 
-// The Merged button sits on the Special sub-menu, which the contents pass alone has, so
+// The Merge Cells button sits on the Special sub-menu, which the contents pass alone has, so
 // that is the one screen which describes it.
-describe('the Merged button', () => {
+describe('the Merge Cells button', () => {
   const mergedTip = (screenId) =>
     helpScreens()[screenId].tips.find(
       (tip) => tip.helpId === specialToolMergedHelpId(),
@@ -394,7 +545,7 @@ describe('the Merged button', () => {
 
   it('is described by the contents pass', () => {
     expect(mergedTip(contentsPassScreenId())).toBeDefined();
-    expect(mergedTip(contentsPassScreenId()).title).toEqual('Merged button');
+    expect(mergedTip(contentsPassScreenId()).title).toEqual('Merge Cells button');
   });
 });
 
@@ -408,5 +559,32 @@ describe('the Joined end row button', () => {
   it('is described by the contents pass', () => {
     expect(joinedTip(contentsPassScreenId())).toBeDefined();
     expect(joinedTip(contentsPassScreenId()).title).toEqual('Joined end row button');
+  });
+});
+
+describe('the document row actions button', () => {
+  // Strings, bold words and list items, flattened to one text, so a test can ask what a
+  // tip says without caring how it is laid out.
+  const segmentText = (segment) => {
+    if (typeof segment === 'string') return segment;
+    if (Array.isArray(segment)) return segment.map(segmentText).join('');
+    if (segment.bold) return segment.bold;
+    if (segment.list) return segment.list.map(segmentText).join(' ');
+    return '';
+  };
+
+  const actionsTip = () =>
+    helpScreens()[documentListScreenId()].tips.find(
+      (tip) => tip.helpId === documentListActionsHelpId()
+    );
+
+  it('is described by the document list', () => {
+    expect(actionsTip()).toBeDefined();
+  });
+
+  it('names both menu items in the words the menu uses', () => {
+    const text = segmentText(actionsTip().body);
+    expect(text).toContain(downloadOriginalLabel());
+    expect(text).toContain(exportDocumentLabel());
   });
 });

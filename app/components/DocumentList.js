@@ -22,6 +22,7 @@ import {
   documentListTableHelpId,
   nameTruncateLength,
 } from 'config';
+import DocumentRowMenu from 'components/DocumentRowMenu';
 
 const INACTIVE_STATUSES = ['ALLOCATED', 'INITIALISED', 'LOADED', 'ERROR'];
 
@@ -165,7 +166,13 @@ function formatUploaded(created) {
 
 // Presentational: the pdf list, loading flag, and polling are owned by the parent
 // (pdfLoader), which also drives the fast per-row watch after an upload.
-export default function DocumentList({ pdfs = [], hasLoaded = false, onSelectPdf }) {
+export default function DocumentList({
+  pdfs = [],
+  hasLoaded = false,
+  onSelectPdf,
+  onDownloadOriginal,
+  onExport,
+}) {
   const handleRowClick = useCallback(
     (pdf) => {
       onSelectPdf(pdf.pdfId);
@@ -231,6 +238,7 @@ export default function DocumentList({ pdfs = [], hasLoaded = false, onSelectPdf
                 <TableCell>{"Size"}</TableCell>
                 <TableCell>{"Status"}</TableCell>
                 <TableCell>{"Pages"}</TableCell>
+                <TableCell align={'right'} padding={'checkbox'} />
               </TableRow>
             </TableHead>
             {hasLoaded && pdfs.length > 0 && (
@@ -273,6 +281,13 @@ export default function DocumentList({ pdfs = [], hasLoaded = false, onSelectPdf
                       )}
                     </TableCell>
                     <TableCell>{pdf.pageCount ?? '-'}</TableCell>
+                    <TableCell align={'right'} padding={'checkbox'}>
+                      <DocumentRowMenu
+                        pdf={pdf}
+                        onDownloadOriginal={onDownloadOriginal}
+                        onExport={onExport}
+                      />
+                    </TableCell>
                   </TableRow>
                 );
                 })}

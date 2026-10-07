@@ -1,7 +1,6 @@
 'use client';
 
 import { Box } from '@mui/material';
-import { LINK_LABEL_JOINED } from 'components/pdfTableViewer/tableSupportUtils';
 import { tableLinkLabelHelpId } from 'config';
 
 // Presentational: a table's part in a linked group, lifted just above its top-RIGHT corner
@@ -9,8 +8,8 @@ import { tableLinkLabelHelpId } from 'config';
 // lengths naming that corner; the label is translated back by its own width so it ends
 // inside the table's right edge rather than starting at it.
 //
-// A joined table's label is inert: no table may be a member of two groups, so a member can
-// never become the root of one. So is every label while `interactive` is false, which is how
+// A joined table's label reports its table like any other; the caller turns that into a
+// click on the group's root. Every label is inert while `interactive` is false, which is how
 // the contents pass switches linking off — forming a group is boundary-pass work, done from
 // the Pages list, which that pass does not show.
 //
@@ -29,7 +28,7 @@ export default function TableLinkLabel({
   onClick,
   interactive = true,
 }) {
-  const inert = !interactive || state === LINK_LABEL_JOINED;
+  const inert = !interactive;
   return (
     <Box
       data-testid={'link-label'}

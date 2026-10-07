@@ -7,6 +7,8 @@ import {
   layerGrey,
   layerRowsColour,
   sectionTitlePlaceholderColumnName,
+  selectedTableLabelClearancePx,
+  selectionScrollIntoViewOptions,
 } from 'config';
 
 // Messages use react-hot-toast; the <Toaster/> lives in the app layout, not this
@@ -119,7 +121,6 @@ function baseProps(overrides = {}) {
     layerVisibility: { rows: true, columns: true, special: true, colours: true },
     dim: false,
     onEditTables: jest.fn(),
-    onCreatedTable: jest.fn(),
     pdfId: 'pdf-1',
     ...overrides,
   };
@@ -227,6 +228,55 @@ describe('StagedPageGridEditor', () => {
         triggerDelete('t1');
       });
       expect(editedAlpha(onEditTables).deleted).toBe(true);
+    });
+
+    it("removes a deleted linked member from its root's next and grid", async () => {
+      const onEditTables = jest.fn();
+      let triggerDelete;
+      const root = { ...alpha(), next: { t2: beta() }, grid: [['t1'], ['t2']] };
+      await renderLoaded(
+        baseProps({
+          metadataTables: [root],
+          selectedTableId: 't2',
+          onEditTables,
+          onRequestDelete: (fn) => {
+            triggerDelete = fn;
+          },
+        })
+      );
+      act(() => {
+        triggerDelete('t2');
+      });
+      const list = lastList(onEditTables);
+      expect(list.map((t) => t.tableId)).toEqual(['t1', 't2']);
+      expect(list[0].next).toBeNull();
+      expect(list[0].grid).toBeNull();
+      expect(list[0].deleted).toBeUndefined();
+      expect(list[1].deleted).toBe(true);
+    });
+
+    it('unlinks the members of a deleted root', async () => {
+      const onEditTables = jest.fn();
+      let triggerDelete;
+      const root = { ...alpha(), next: { t2: beta() }, grid: [['t1'], ['t2']] };
+      await renderLoaded(
+        baseProps({
+          metadataTables: [root],
+          selectedTableId: 't1',
+          onEditTables,
+          onRequestDelete: (fn) => {
+            triggerDelete = fn;
+          },
+        })
+      );
+      act(() => {
+        triggerDelete('t1');
+      });
+      const list = lastList(onEditTables);
+      expect(list.map((t) => t.tableId)).toEqual(['t1', 't2']);
+      expect(list[0].next).toBeNull();
+      expect(list[0].deleted).toBe(true);
+      expect(list[1].deleted).toBeUndefined();
     });
   });
 
@@ -540,12 +590,40 @@ describe('StagedPageGridEditor', () => {
       expect(labels(container, 'link-label')).toHaveLength(2);
     });
 
-    it('takes no click on a Linked to label', async () => {
+    it('opens a session on the root from a Linked to label', async () => {
       const onToggleLinking = jest.fn();
       const { container } = await renderLoaded(
         baseProps({
           metadataTables: linked(),
           selectedTableId: 't1',
+          onToggleLinking,
+        })
+      );
+      fireEvent.click(labels(container, 'link-label')[1]);
+      expect(onToggleLinking).toHaveBeenCalledWith('t1');
+    });
+
+    it('ends the session open on the root from a Linked to label', async () => {
+      const onToggleLinking = jest.fn();
+      const { container } = await renderLoaded(
+        baseProps({
+          metadataTables: linked(),
+          selectedTableId: 't1',
+          linkingRootId: 't1',
+          onToggleLinking,
+        })
+      );
+      fireEvent.click(labels(container, 'link-label')[1]);
+      expect(onToggleLinking).toHaveBeenCalledWith(null);
+    });
+
+    it('takes no click on a Linked to label in the contents pass', async () => {
+      const onToggleLinking = jest.fn();
+      const { container } = await renderLoaded(
+        baseProps({
+          metadataTables: linked(),
+          selectedTableId: 't1',
+          editorMode: 'grid',
           onToggleLinking,
         })
       );
@@ -599,13 +677,11 @@ describe('StagedPageGridEditor', () => {
 
     it('a rubber-band drag in empty space adds a 1x1 MANUAL table', async () => {
       const onEditTables = jest.fn();
-      const onCreatedTable = jest.fn();
       let triggerCreate;
       const { container } = await renderLoaded(
         baseProps({
           selectedTableId: 't1',
           onEditTables,
-          onCreatedTable,
           onRequestCreate: (fn) => {
             triggerCreate = fn;
           },
@@ -620,7 +696,7 @@ describe('StagedPageGridEditor', () => {
       fireEvent.mouseUp(window, { clientX: 700, clientY: 700 });
 
       const created = lastList(onEditTables).find(
-        (t) => t.tableId === onCreatedTable.mock.calls[0][0]
+        (t) => !['t1', 't2'].includes(t.tableId)
       );
       expect(created.extractionMechanism).toBe('MANUAL');
       expect(created.confirmationStage).toBeNull();
@@ -632,13 +708,11 @@ describe('StagedPageGridEditor', () => {
     // flagged for review for ever with nothing on the review screen to correct it.
     it('trims a rubber-band drag that runs off the page rather than refusing it', async () => {
       const onEditTables = jest.fn();
-      const onCreatedTable = jest.fn();
       let triggerCreate;
       const { container } = await renderLoaded(
         baseProps({
           selectedTableId: 't1',
           onEditTables,
-          onCreatedTable,
           onRequestCreate: (fn) => {
             triggerCreate = fn;
           },
@@ -654,7 +728,7 @@ describe('StagedPageGridEditor', () => {
       fireEvent.mouseUp(window, { clientX: 1200, clientY: 1200 });
 
       const created = lastList(onEditTables).find(
-        (t) => t.tableId === onCreatedTable.mock.calls[0][0]
+        (t) => !['t1', 't2'].includes(t.tableId)
       );
       expect(created.bounds.left).toBeCloseTo(0.6, 6);
       expect(created.bounds.top).toBeCloseTo(0.6, 6);
@@ -668,13 +742,11 @@ describe('StagedPageGridEditor', () => {
 
     it('still refuses a rubber-band drag lying wholly off the page', async () => {
       const onEditTables = jest.fn();
-      const onCreatedTable = jest.fn();
       let triggerCreate;
       const { container } = await renderLoaded(
         baseProps({
           selectedTableId: 't1',
           onEditTables,
-          onCreatedTable,
           onRequestCreate: (fn) => {
             triggerCreate = fn;
           },
@@ -690,19 +762,16 @@ describe('StagedPageGridEditor', () => {
       fireEvent.mouseUp(window, { clientX: 1300, clientY: 700 });
 
       expect(onEditTables).not.toHaveBeenCalled();
-      expect(onCreatedTable).not.toHaveBeenCalled();
       expect(toast).toHaveBeenCalledTimes(1);
     });
 
     it('reports a rejected rubber-band drag rather than failing silently', async () => {
       const onEditTables = jest.fn();
-      const onCreatedTable = jest.fn();
       let triggerCreate;
       const { container } = await renderLoaded(
         baseProps({
           selectedTableId: 't1',
           onEditTables,
-          onCreatedTable,
           onRequestCreate: (fn) => {
             triggerCreate = fn;
           },
@@ -719,7 +788,6 @@ describe('StagedPageGridEditor', () => {
       fireEvent.mouseUp(window, { clientX: 60, clientY: 60 });
 
       expect(onEditTables).not.toHaveBeenCalled();
-      expect(onCreatedTable).not.toHaveBeenCalled();
       expect(toast).toHaveBeenCalledTimes(1);
     });
   });
@@ -810,7 +878,7 @@ describe('StagedPageGridEditor', () => {
       expect(screen.queryByTestId('coloured-area-0')).toBeNull();
     });
 
-    // The Title tool sets the title rectangle and the Merged tool sets a cell's spans, so
+    // The Title tool sets the title rectangle and the Merge Cells tool sets a cell's spans, so
     // both are drawn with the other special areas.
     it('draws a title rectangle and a merged-cell block with the special areas', async () => {
       const withTitleAndMerge = {
@@ -1127,7 +1195,7 @@ describe('StagedPageGridEditor', () => {
   // Alpha's two 0.05 columns and two 0.05 rows put its bands at screen 0..50 and 50..100,
   // so a drag from (2, 2) to (98, 98) covers 96% of every band and a drag ending at x 70
   // covers only 40% of column 1 — either side of mergeCoverageFraction().
-  describe('the Merged tool', () => {
+  describe('the Merge Cells tool', () => {
     const texted = () => ({
       ...alpha(),
       cells: gridCells(2, 2).map((c) => ({
@@ -1592,6 +1660,138 @@ describe('StagedPageGridEditor', () => {
       expect(list[0].next.t2.rowHeights).toHaveLength(2);
     });
   });
+
+  describe('cutting', () => {
+    // Alpha spans page fractions 0–0.1, so a screen px is fraction × 1000 and the
+    // clamp keeps a cut 0.001 inside its top and bottom.
+    const cutProps = (overrides = {}) =>
+      baseProps({ selectedTableId: 't1', cutLines: [], ...overrides });
+
+    const drag = (target, from, to) => {
+      fireEvent.mouseDown(target, { clientX: from[0], clientY: from[1] });
+      fireEvent.mouseMove(window, { clientX: to[0], clientY: to[1] });
+      fireEvent.mouseUp(window, { clientX: to[0], clientY: to[1] });
+    };
+
+    it('a press inside the table, moved and released, adds a cut line there', async () => {
+      const onCutLinesChange = jest.fn();
+      const { container } = await renderLoaded(cutProps({ onCutLinesChange }));
+      drag(container.querySelector('svg'), [50, 30], [50, 70]);
+      expect(onCutLinesChange).toHaveBeenCalledTimes(1);
+      const lines = onCutLinesChange.mock.calls[0][0];
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBeCloseTo(0.07, 6);
+    });
+
+    it('clamps a new cut line inside the table', async () => {
+      const onCutLinesChange = jest.fn();
+      const { container } = await renderLoaded(cutProps({ onCutLinesChange }));
+      drag(container.querySelector('svg'), [50, 30], [50, 150]);
+      const lines = onCutLinesChange.mock.calls[0][0];
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBeCloseTo(0.099, 6);
+    });
+
+    it('a press outside every table adds nothing', async () => {
+      const onCutLinesChange = jest.fn();
+      const { container } = await renderLoaded(cutProps({ onCutLinesChange }));
+      drag(container.querySelector('svg'), [600, 600], [650, 650]);
+      expect(onCutLinesChange).not.toHaveBeenCalled();
+    });
+
+    it('draws a preview line that follows the pointer during the drag', async () => {
+      const { container } = await renderLoaded(
+        cutProps({ onCutLinesChange: jest.fn() })
+      );
+      fireEvent.mouseDown(container.querySelector('svg'), { clientX: 50, clientY: 30 });
+      expect(screen.getByTestId('cut-line-preview')).toBeInTheDocument();
+      fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
+      expect(
+        Number(screen.getByTestId('cut-line-preview').getAttribute('y1'))
+      ).toBeCloseTo(70, 6);
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
+      expect(screen.queryByTestId('cut-line-preview')).toBeNull();
+    });
+
+    it('dragging a cut line moves it', async () => {
+      const onCutLinesChange = jest.fn();
+      await renderLoaded(cutProps({ cutLines: [0.05], onCutLinesChange }));
+      drag(screen.getByTestId('cut-hit-line'), [50, 50], [50, 80]);
+      const lines = onCutLinesChange.mock.calls[0][0];
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBeCloseTo(0.08, 6);
+    });
+
+    it('clamps a moved cut line inside the table', async () => {
+      const onCutLinesChange = jest.fn();
+      await renderLoaded(cutProps({ cutLines: [0.05], onCutLinesChange }));
+      drag(screen.getByTestId('cut-hit-line'), [50, 50], [50, 200]);
+      const lines = onCutLinesChange.mock.calls[0][0];
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBeCloseTo(0.099, 6);
+    });
+
+    it('a press and release on a cut line removes it', async () => {
+      const onCutLinesChange = jest.fn();
+      await renderLoaded(cutProps({ cutLines: [0.05], onCutLinesChange }));
+      fireEvent.mouseDown(screen.getByTestId('cut-hit-line'), { clientX: 51, clientY: 51 });
+      fireEvent.mouseUp(window, { clientX: 51, clientY: 51 });
+      expect(onCutLinesChange).toHaveBeenCalledTimes(1);
+      expect(onCutLinesChange.mock.calls[0][0]).toEqual([]);
+    });
+
+    it('draws the cut lines in place of the border hit lines', async () => {
+      const { container, unmount } = await renderLoaded(
+        cutProps({ cutLines: [0.05], onCutLinesChange: jest.fn() })
+      );
+      expect(screen.queryByTestId('hit-line')).toBeNull();
+      const cutLines = screen.getAllByTestId('cut-line');
+      expect(cutLines).toHaveLength(1);
+      expect(cutLines[0]).toHaveAttribute('data-colour', 'in-progress-strong');
+      const cutBorders = container.querySelectorAll(
+        '[data-testid="table-boundary"]'
+      ).length;
+      unmount();
+
+      const { container: plain } = await renderLoaded(
+        baseProps({ selectedTableId: 't1', cutLines: null })
+      );
+      expect(
+        plain.querySelectorAll('[data-testid="table-boundary"]')
+      ).toHaveLength(cutBorders);
+    });
+
+    it('a create armed before the cut does not fire, during or after it', async () => {
+      const onEditTables = jest.fn();
+      let triggerCreate;
+      const props = baseProps({
+        selectedTableId: 't1',
+        onEditTables,
+        onCutLinesChange: jest.fn(),
+        onRequestCreate: (fn) => {
+          triggerCreate = fn;
+        },
+      });
+      const { container, rerender } = await renderLoaded(props);
+      act(() => {
+        triggerCreate();
+      });
+      rerender(<StagedPageGridEditor {...props} cutLines={[]} />);
+      drag(container.querySelector('svg'), [600, 600], [700, 700]);
+      expect(onEditTables).not.toHaveBeenCalled();
+
+      rerender(<StagedPageGridEditor {...props} cutLines={null} />);
+      drag(container.querySelector('svg'), [600, 600], [700, 700]);
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+
+    it('draws no cut line in grid mode', async () => {
+      await renderLoaded(
+        cutProps({ editorMode: 'grid', cutLines: [0.05], onCutLinesChange: jest.fn() })
+      );
+      expect(screen.queryByTestId('cut-line')).toBeNull();
+    });
+  });
 });
 
 // A table flagged splitBottomRow draws its bottom edge wavy in the Validate tables pass, and
@@ -1695,5 +1895,110 @@ describe('StagedPageGridEditor — the box help points at', () => {
     const { container } = await renderLoaded(baseProps({ metadataTables: [] }));
 
     expect(frames(container)).toHaveLength(0);
+  });
+});
+
+// A table selected from outside the centre view scrolls its box into view once the page
+// image has laid out; one selected by a click in the centre view does not scroll it.
+describe('StagedPageGridEditor — scrolling to the selected table', () => {
+  let scrolled;
+  let scrollIntoView;
+
+  beforeEach(() => {
+    scrolled = [];
+    scrollIntoView = jest.fn(function record() {
+      scrolled.push(this);
+    });
+    Element.prototype.scrollIntoView = scrollIntoView;
+  });
+
+  afterEach(() => {
+    delete Element.prototype.scrollIntoView;
+  });
+
+  const anchor = (container) =>
+    container.querySelector('[data-testid="selected-table-anchor"]');
+  const anchorScrolls = () =>
+    scrolled.filter(
+      (el) => el.getAttribute('data-testid') === 'selected-table-anchor'
+    );
+
+  it('scrolls the selected table\'s anchor into view after the image loads', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ selectedTableId: 't2' })
+    );
+
+    const el = anchor(container);
+    expect(el).toHaveAttribute('data-tableid', 't2');
+    expect(anchorScrolls()).toEqual([el]);
+    expect(scrollIntoView).toHaveBeenCalledWith(selectionScrollIntoViewOptions());
+  });
+
+  it('scrolls the new anchor when the selected table changes on the same page', async () => {
+    const props = baseProps({ selectedTableId: 't1' });
+    const { container, rerender } = await renderLoaded(props);
+    scrolled.length = 0;
+
+    rerender(<StagedPageGridEditor {...props} selectedTableId={'t2'} />);
+
+    const el = anchor(container);
+    expect(el).toHaveAttribute('data-tableid', 't2');
+    expect(anchorScrolls()).toEqual([el]);
+  });
+
+  it('renders and scrolls the anchor with the Borders layer off', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ selectedTableId: 't2', layerVisibility: { border: false } })
+    );
+
+    const el = anchor(container);
+    expect(el).toHaveAttribute('data-tableid', 't2');
+    expect(anchorScrolls()).toEqual([el]);
+  });
+
+  it('extends the anchor above the table to take in its name label', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ selectedTableId: 't2' })
+    );
+
+    // Beta's top is at 300 and its height 100; the mocked scale is 1 screen px per unit.
+    const el = anchor(container);
+    expect(Number(el.getAttribute('y'))).toBe(300 - selectedTableLabelClearancePx());
+    expect(Number(el.getAttribute('height'))).toBe(
+      100 + selectedTableLabelClearancePx()
+    );
+  });
+
+  it('stops the anchor at the page top for a table at the top of the page', async () => {
+    const { container } = await renderLoaded(
+      baseProps({ selectedTableId: 't1' })
+    );
+
+    const el = anchor(container);
+    expect(Number(el.getAttribute('y'))).toBe(0);
+    expect(Number(el.getAttribute('height'))).toBe(100);
+  });
+
+  it('does not scroll before the image has loaded', () => {
+    render(<StagedPageGridEditor {...baseProps({ selectedTableId: 't2' })} />);
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('does not scroll to a table selected by a click in the centre view', async () => {
+    const onSelectTable = jest.fn();
+    const props = baseProps({ selectedTableId: 't1', onSelectTable });
+    const { container, rerender } = await renderLoaded(props);
+    scrolled.length = 0;
+
+    fireEvent.click(container.querySelector('svg'), {
+      clientX: 350,
+      clientY: 350,
+    });
+    expect(onSelectTable).toHaveBeenCalledWith('t2');
+    rerender(<StagedPageGridEditor {...props} selectedTableId={'t2'} />);
+
+    expect(anchor(container)).toHaveAttribute('data-tableid', 't2');
+    expect(anchorScrolls()).toHaveLength(0);
   });
 });

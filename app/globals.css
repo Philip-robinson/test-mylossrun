@@ -59,6 +59,9 @@
      var(--…) rather than repeating the values at the point of use. */
   --cancel: red;
   --confirm: #2a8b5d;
+  /* The font size of the Document Overview entry buttons (Review and Export).
+     Referenced from config.js. */
+  --overview-button-font-size: 11px;
 }
 
 body {

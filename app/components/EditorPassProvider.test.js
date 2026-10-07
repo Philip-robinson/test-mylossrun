@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import EditorPassProvider, {
   useEditorPass,
 } from 'components/EditorPassProvider';
+import { contentsPassScreenId } from 'config';
 
 // Reads the context out into the DOM and offers the two registrations, which is what the
 // editor and the toolbar do between them.
@@ -15,15 +16,15 @@ function Probe() {
 
   return (
     <div>
-      <span data-testid={'probe'}>{editorPass.pass || 'no pass'}</span>
+      <span data-testid={'probe'}>{editorPass.screen || 'no screen'}</span>
       <span data-testid={'probe-actions'}>
         {editorPass.actions ? 'registered' : 'none'}
       </span>
       <button
-        data-testid={'report-grid'}
-        onClick={() => editorPass.setPass('grid')}
+        data-testid={'report-contents'}
+        onClick={() => editorPass.setScreen(contentsPassScreenId())}
       >
-        {'grid'}
+        {'contents'}
       </button>
       <button
         data-testid={'register'}
@@ -45,27 +46,27 @@ const probe = () => screen.getByTestId('probe');
 const actions = () => screen.getByTestId('probe-actions');
 
 describe('EditorPassProvider', () => {
-  it('starts with no pass and no switch', () => {
+  it('starts with no screen and no switch', () => {
     render(
       <EditorPassProvider>
         <Probe />
       </EditorPassProvider>,
     );
 
-    expect(probe()).toHaveTextContent('no pass');
+    expect(probe()).toHaveTextContent('no screen');
     expect(actions()).toHaveTextContent('none');
   });
 
-  it('reports the pass it is told', async () => {
+  it('reports the screen it is told', async () => {
     render(
       <EditorPassProvider>
         <Probe />
       </EditorPassProvider>,
     );
 
-    await userEvent.click(screen.getByTestId('report-grid'));
+    await userEvent.click(screen.getByTestId('report-contents'));
 
-    expect(probe()).toHaveTextContent('grid');
+    expect(probe()).toHaveTextContent(contentsPassScreenId());
   });
 
   it('holds the switch until it is taken back', async () => {
@@ -83,7 +84,7 @@ describe('EditorPassProvider', () => {
   });
 
   // Null outside a provider is an answer rather than an error: a toolbar with no editor
-  // beneath it simply has no pass to show.
+  // beneath it simply has no screen to show.
   it('answers nothing outside a provider', () => {
     render(<Probe />);
 

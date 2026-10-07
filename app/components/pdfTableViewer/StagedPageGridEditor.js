@@ -5,6 +5,10 @@ import { Box } from '@mui/material';
 import toast from 'react-hot-toast';
 import {
   colourSpecialToolKeys,
+  cutColour,
+  cutColourKey,
+  cutLineDash,
+  cutLineWidthPx,
   documentDimOpacity,
   hitLineWidthPx,
   layerBorderColour,
@@ -25,6 +29,8 @@ import {
   selectedColumnHighlight,
   selectedRowHighlight,
   selectedSectionTitleHighlight,
+  selectedTableLabelClearancePx,
+  selectionScrollIntoViewOptions,
   tableSeparationEnabled,
   tableSeparationGapPx,
   tableSeparationTouchTolerancePx,
@@ -44,10 +50,12 @@ import {
   clampBoundaryTarget,
   cleanupAxis,
   cumulative,
+  deleteTablesUnlinking,
   findTableById,
   identityMap,
   makeDefaultCell,
   linkLabelText,
+  linkLabelToggleTarget,
   linkedTablesWithParents,
   mergeCells,
   mergedCells,
@@ -82,6 +90,13 @@ import {
   warpY,
 } from 'components/pdfTableViewer/tableSeparationUtils';
 import { tableOutlinePath } from 'components/pdfTableViewer/wavyLineUtils';
+import {
+  addCutLine,
+  clampCutPosition,
+  moveCutLine,
+  removeCutLine,
+  tableInPageAt,
+} from 'components/pdfTableViewer/tableCutUtils';
 
 // A mouse gesture that moves less than this many SCREEN pixels between mouse-down and
 // mouse-up is treated as a CLICK, not a resize DRAG. Mirrors the existing interactive
@@ -113,6 +128,12 @@ const COLUMN_HIGHLIGHT_TESTID = 'column-selected-highlight';
 const TITLE_RECT_TESTID = 'title-rect';
 const HEADER_RECT_TESTID = 'header-rect';
 const TITLE_HIT_TESTID = 'title-hit-line';
+
+// data-testids for the cut lines: each visible line, its transparent hit line, and the
+// line following the pointer while one is drawn or moved.
+const CUT_LINE_TESTID = 'cut-line';
+const CUT_HIT_TESTID = 'cut-hit-line';
+const CUT_PREVIEW_TESTID = 'cut-line-preview';
 
 // Screen-px margin drawn OUTSIDE the first headerCount rows for the header rectangle.
 const HEADER_MARGIN_PX = 3;
@@ -147,35 +168,7 @@ function buildManualTable(list, page, b, pixelWidth, pixelHeight) {
 
   const tabs = (list ?? []).filter((t) => t.pdfPage === page).length;
 
-  // Exhaustive top-position collection: top-level list plus every nested `next` table.
-  const allTables = [];
-  const collect = (arr) => {
-    (arr ?? []).forEach((t) => {
-      allTables.push(t);
-      if (t.next) collect(Object.values(t.next));
-    });
-  };
-  collect(list);
-  let above = null;
-  let below = null;
-  allTables
-    .filter((t) => t.pdfPage === page)
-    .forEach((t) => {
-      const top = t.bounds.top;
-      if (top < T) {
-        if (above === null || top > above.bounds.top) above = t;
-      } else if (below === null || top < below.bounds.top) below = t;
-    });
-  let tableInPage;
-  if (above && below) {
-    tableInPage = ((above.tableInPage ?? 0) + (below.tableInPage ?? 0)) / 2;
-  } else if (above) {
-    tableInPage = (above.tableInPage ?? 0) + 1;
-  } else if (below) {
-    tableInPage = (below.tableInPage ?? 0) - 1;
-  } else {
-    tableInPage = 0;
-  }
+  const tableInPage = tableInPageAt(list ?? [], page, T);
 
   const bounds = { top: T, left: L, width: W, height: H };
   const table = {
@@ -235,7 +228,6 @@ export function StagedPageGridEditor({
   layerVisibility = {},
   dim = false,
   onEditTables,
-  onCreatedTable,
   // The table rooting an open linking session, or null. Owned by the host, because a session
   // spans this panel and the page thumbnails.
   linkingRootId = null,
@@ -259,6 +251,10 @@ export function StagedPageGridEditor({
   onColourPicked,
   onColourPreview,
   onClearColourPick,
+  // The selected table's cut lines (page-fraction y values) while a cut is in progress, else
+  // null. Owned by the host; this reports every change to it.
+  cutLines = null,
+  onCutLinesChange,
 }) {
   const [dims, setDims] = useState(null);
   const imgRef = useRef(null);
@@ -286,6 +282,11 @@ export function StagedPageGridEditor({
   const [newLine, setNewLine] = useState(null);
   const newLineDragRef = useRef(null);
 
+  // The cut gesture: `cutPreview` is the line following the pointer ({ index, y }, index
+  // null for a new line); the ref carries the gesture itself.
+  const [cutPreview, setCutPreview] = useState(null);
+  const cutDragRef = useRef(null);
+
   // The selected section-title row's `tableRow` (its 0-based row band in the selected
   // table), or null. `sectionAreaRect` is the live rubber-band preview (page fractions)
   // while the Section Title Row tool drags out a title's data area.
@@ -301,6 +302,9 @@ export function StagedPageGridEditor({
   // The browser fires a trailing `click` on the svg after any drag mouseup. Suppress that
   // one click so it is not mistaken for a select/create gesture.
   const suppressNextClickRef = useRef(false);
+  // The table id a centre-view click is about to select, so its selection does not scroll.
+  const centreClickedTableIdRef = useRef(null);
+  const selectedAnchorRef = useRef(null);
 
   // This page's tables: those in the top-level list, plus those joined under another table's
   // grid. A saved link grid moves the joined tables off the top-level list, but they are on
@@ -334,6 +338,7 @@ export function StagedPageGridEditor({
   // passes, so it is honoured in both. The Header tool draws the header rectangle whatever
   // the Special flag says, and suppresses the other special areas while it is armed.
   const gridMode = editorMode === 'grid';
+  const cutting = editorMode === 'border' && cutLines != null && selected != null;
   const showBorders = layerVisibility.border !== false;
   const showRows = gridMode && layerVisibility.rows !== false;
   const showColumns = gridMode && layerVisibility.columns !== false;
@@ -947,8 +952,10 @@ export function StagedPageGridEditor({
       return;
     }
     onEditTables(built.list);
-    if (onSelectTable) onSelectTable(built.table.tableId);
-    if (onCreatedTable) onCreatedTable(built.table.tableId);
+    if (onSelectTable) {
+      centreClickedTableIdRef.current = built.table.tableId;
+      onSelectTable(built.table.tableId);
+    }
   };
 
   // ---- Section-title rows (Special Cells) ---------------------------------------------
@@ -1030,7 +1037,7 @@ export function StagedPageGridEditor({
       });
       return;
     }
-    // The Merged tool's drag spans the cell at the drawn block's top-left over the whole
+    // The Merge Cells tool's drag spans the cell at the drawn block's top-left over the whole
     // block, deleting every merge the block overlaps. Drawing the block an existing merge
     // already occupies deletes that merge instead — see withMergedBlock, which decides
     // between the two. The table is looked up afresh rather than taken from the closed-over
@@ -1216,7 +1223,74 @@ export function StagedPageGridEditor({
     if (band) addDividerAt('columnWidths', column, frac.fx - band.left);
   };
 
+  // ---- Cut lines: press inside the selected table, drag, release ----------------------
+
+  const handleCutMove = (e) => {
+    const g = cutDragRef.current;
+    if (!g || !selected) return;
+    if (g.kind === 'move' && !g.moved) {
+      const dx = e.clientX - g.startClientX;
+      const dy = e.clientY - g.startClientY;
+      if (Math.hypot(dx, dy) <= CLICK_DRAG_THRESHOLD_PX) return;
+      g.moved = true;
+    }
+    const frac = eventToFraction(e);
+    if (!frac) return;
+    g.cur = clampCutPosition(frac.fy, selected.bounds, onePxFractionY);
+    setCutPreview({ index: g.kind === 'move' ? g.index : null, y: g.cur });
+  };
+
+  const handleCutEnd = () => {
+    window.removeEventListener('mousemove', handleCutMove);
+    window.removeEventListener('mouseup', handleCutEnd);
+    const g = cutDragRef.current;
+    cutDragRef.current = null;
+    setCutPreview(null);
+    suppressNextClickRef.current = true;
+    setTimeout(() => {
+      suppressNextClickRef.current = false;
+    }, 0);
+    if (!g || !onCutLinesChange) return;
+    if (g.kind === 'new') onCutLinesChange(addCutLine(cutLines ?? [], g.cur));
+    else if (g.moved) onCutLinesChange(moveCutLine(cutLines, g.index, g.cur));
+    else onCutLinesChange(removeCutLine(cutLines, g.index));
+  };
+
+  const handleCutLineHit = (index, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    cutDragRef.current = {
+      kind: 'move',
+      index,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      moved: false,
+      cur: cutLines[index],
+    };
+    window.addEventListener('mousemove', handleCutMove);
+    window.addEventListener('mouseup', handleCutEnd);
+  };
+
   const handleOverlayMouseDown = (e) => {
+    // While cutting, a press inside the selected table starts a new cut line, and nothing
+    // else — the create gesture included — takes the press.
+    if (cutting) {
+      const frac = eventToFraction(e);
+      if (!frac) return;
+      const b = selected.bounds;
+      const inside =
+        frac.fx >= b.left &&
+        frac.fx <= b.left + b.width &&
+        frac.fy >= b.top &&
+        frac.fy <= b.top + b.height;
+      if (!inside) return;
+      const cur = clampCutPosition(frac.fy, b, onePxFractionY);
+      cutDragRef.current = { kind: 'new', cur };
+      setCutPreview({ index: null, y: cur });
+      window.addEventListener('mousemove', handleCutMove);
+      window.addEventListener('mouseup', handleCutEnd);
+      return;
+    }
     // The Rows and Columns tools: a press inside the table but not on a line begins a new
     // line, which follows the pointer until it is released. A press ON a line is taken by
     // that line's own hit line, which starts a move instead.
@@ -1439,7 +1513,10 @@ export function StagedPageGridEditor({
         frac.fy >= t.bounds.top &&
         frac.fy <= t.bounds.top + t.bounds.height
     );
-    if (hit) onSelectTable(hit.tableId);
+    if (hit) {
+      centreClickedTableIdRef.current = hit.tableId;
+      onSelectTable(hit.tableId);
+    }
   };
 
 
@@ -1448,10 +1525,11 @@ export function StagedPageGridEditor({
   const startCreate = useCallback(() => setCreating(true), []);
   const startDelete = useCallback(
     (tableId) => {
-      const t = findTableById(metadataTables, tableId);
-      if (t) commitTableEdit(tableId, { ...t, deleted: true });
+      const list = metadataTables ?? [];
+      const next = deleteTablesUnlinking(list, (t) => t.tableId === tableId);
+      if (next !== list) onEditTables(next);
     },
-    [metadataTables, commitTableEdit]
+    [metadataTables, onEditTables]
   );
 
   // Run one FINAL axis-only structural edit (menu add/delete) on the selected table and
@@ -1507,6 +1585,13 @@ export function StagedPageGridEditor({
     setSectionAreaRect(null);
   }, [editorMode, tool, specialTool, selected?.tableId]);
 
+  // No table is created while cutting, so an armed create is dropped when a cut begins.
+  useEffect(() => {
+    if (!cutting) return;
+    setCreating(false);
+    setCreateRect(null);
+  }, [cutting]);
+
   // Remove any lingering window listeners if the editor unmounts mid-drag.
   useEffect(() => {
     return () => {
@@ -1520,9 +1605,26 @@ export function StagedPageGridEditor({
       window.removeEventListener('mouseup', handleSectionAreaEnd);
       window.removeEventListener('mousemove', handleNewLineMove);
       window.removeEventListener('mouseup', handleNewLineEnd);
+      window.removeEventListener('mousemove', handleCutMove);
+      window.removeEventListener('mouseup', handleCutEnd);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Scroll the selected table's anchor into view when the selection arrives from outside the
+  // centre view. It waits for dims so the scroll happens once the page image is laid out;
+  // the scroll container is PageTableEditor's overflow: 'auto' box.
+  useEffect(() => {
+    if (!selected || !dims) return;
+    const clicked = centreClickedTableIdRef.current;
+    centreClickedTableIdRef.current = null;
+    if (clicked === selected.tableId) return;
+    const el = selectedAnchorRef.current;
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView(selectionScrollIntoViewOptions());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.tableId, dims, page]);
 
   // Measure the image's rendered screen size, kept fresh with a ResizeObserver, once the
   // image has loaded (dims set). Drives overlayScale for the HTML overlays (selection label).
@@ -1613,7 +1715,7 @@ export function StagedPageGridEditor({
   // gridMode freezes the boundary — and only the selected table: an unselected table is
   // drawn to be seen and clicked, never dragged.
   const selectedEdges = () => {
-    if (!selected || gridMode) return null;
+    if (!selected || gridMode || cutting) return null;
     const x = selected.bounds.left * pixelWidth;
     const y = selected.bounds.top * pixelHeight;
     const w = selected.bounds.width * pixelWidth;
@@ -1661,6 +1763,83 @@ export function StagedPageGridEditor({
         {samePage.map((t) => borderRect(t, t.tableId === selected?.tableId))}
         {selectedEdges()}
       </g>
+    );
+  };
+
+  // The selected table's cut lines while cutting, each with a transparent hit line (drag
+  // moves, click removes), plus the line following the pointer during a gesture.
+  const renderCutLines = () => {
+    if (!cutting) return null;
+    const x1 = selected.bounds.left * pixelWidth;
+    const x2 = (selected.bounds.left + selected.bounds.width) * pixelWidth;
+    const visible = (key, y, testId) => (
+      <line
+        key={key}
+        x1={x1}
+        y1={y}
+        x2={x2}
+        y2={y}
+        data-testid={testId}
+        data-colour={cutColourKey()}
+        style={{ stroke: cutColour(), pointerEvents: 'none' }}
+        strokeWidth={cutLineWidthPx()}
+        strokeDasharray={cutLineDash()}
+        vectorEffect={'non-scaling-stroke'}
+      />
+    );
+    return (
+      <g>
+        {cutLines.map((line, i) => {
+          if (cutPreview && cutPreview.index === i) return null;
+          const y = line * pixelHeight;
+          return (
+            <Fragment key={`cut-${i}`}>
+              {visible('line', y, CUT_LINE_TESTID)}
+              <line
+                x1={x1}
+                y1={y}
+                x2={x2}
+                y2={y}
+                data-testid={CUT_HIT_TESTID}
+                stroke={'transparent'}
+                strokeWidth={hitLineWidthPx()}
+                vectorEffect={'non-scaling-stroke'}
+                cursor={'ns-resize'}
+                style={{ pointerEvents: 'stroke' }}
+                onMouseDown={(e) => handleCutLineHit(i, e)}
+              />
+            </Fragment>
+          );
+        })}
+        {cutPreview
+          ? visible('preview', cutPreview.y * pixelHeight, CUT_PREVIEW_TESTID)
+          : null}
+      </g>
+    );
+  };
+
+  // An invisible box over the selected table, whatever the Borders layer, for the centre
+  // view to scroll into view. It reaches selectedTableLabelClearancePx() screen px above the
+  // table, stopping at the page top, so the name label above the table is scrolled in too.
+  const renderSelectedAnchor = () => {
+    if (!selected) return null;
+    const top = selected.bounds.top * pixelHeight + tableShift(selected);
+    const clearance = overlayScale
+      ? selectedTableLabelClearancePx() / overlayScale.sy
+      : selectedTableLabelClearancePx();
+    const y = Math.max(0, top - clearance);
+    return (
+      <rect
+        ref={selectedAnchorRef}
+        data-testid={'selected-table-anchor'}
+        data-tableid={selected.tableId}
+        fill={'none'}
+        style={{ pointerEvents: 'none' }}
+        x={selected.bounds.left * pixelWidth}
+        y={y}
+        width={selected.bounds.width * pixelWidth}
+        height={selected.bounds.height * pixelHeight + top - y}
+      />
     );
   };
 
@@ -2417,6 +2596,8 @@ export function StagedPageGridEditor({
           }}
         >
           {renderBorder()}
+          {renderCutLines()}
+          {renderSelectedAnchor()}
           {renderGridLines()}
           {renderSpecial()}
           {renderColours()}
@@ -2496,7 +2677,9 @@ export function StagedPageGridEditor({
                 text={text}
                 interactive={!gridMode}
                 onClick={() =>
-                  onToggleLinking(ending ? null : t.tableId)
+                  onToggleLinking(
+                    linkLabelToggleTarget(t, state, linkParents, linkingRootId)
+                  )
                 }
               />
             </Fragment>

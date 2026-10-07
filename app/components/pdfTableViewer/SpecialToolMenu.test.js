@@ -37,7 +37,7 @@ describe('SpecialToolMenu', () => {
     expect(rendered).toEqual(KEYS.map((k) => `special-tool-${k}`));
     expect(screen.getByText('Section')).toBeInTheDocument();
     expect(screen.getByText('Title')).toBeInTheDocument();
-    expect(screen.getByText('Merged')).toBeInTheDocument();
+    expect(screen.getByText('Merge Cells')).toBeInTheDocument();
     expect(screen.getByText('Columns')).toBeInTheDocument();
     expect(screen.getByText('Cell')).toBeInTheDocument();
   });
@@ -49,7 +49,7 @@ describe('SpecialToolMenu', () => {
     expect(screen.getAllByRole('button')).not.toContain(heading);
   });
 
-  it('places Joined end row after Merged and before the Colouring heading', () => {
+  it('places Joined end row after Merge Cells and before the Colouring heading', () => {
     render(<SpecialToolMenu onSelectSpecialTool={() => {}} />);
     const merged = screen.getByTestId('special-tool-merged');
     const joined = screen.getByTestId('special-tool-joinedEndRow');

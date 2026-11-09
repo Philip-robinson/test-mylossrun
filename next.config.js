@@ -1,5 +1,21 @@
+const readVersion = () => {
+  try {
+    return require('fs').readFileSync(require('path').resolve(__dirname, 'VERSION'), 'utf8').trim();
+  } catch {
+    return '';
+  }
+};
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'export',
+  images: {
+    unoptimized: true,
+  },
+  env: {
+    NEXT_PUBLIC_APP_VERSION: readVersion(),
+    MYLOSSRUN_BASE_URL: process.env.MYLOSSRUN_BASE_URL || '',
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },

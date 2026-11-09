@@ -20,14 +20,13 @@ import {
   linkedEmphasisColour,
   layerSpecialCellsColour,
   mergedCellOutlineWidthPx,
+  noRoomForGridLineLabel,
   splitRowWaveHeightPx,
   splitRowWavePitchPx,
   sectionTitleMarkerColour,
   sectionTitleMarkerDash,
   sectionTitlePlaceholderColumnName,
   selectedColouredAreaHighlight,
-  selectedColumnHighlight,
-  selectedRowHighlight,
   selectedSectionTitleHighlight,
   selectedTableLabelClearancePx,
   selectionScrollIntoViewOptions,
@@ -41,17 +40,16 @@ import {
   rgbToHex,
   rgbaToPixels,
 } from 'components/pdfTableViewer/colourUtils';
-import TableNameSizeLabel from 'components/pdfTableViewer/TableNameSizeLabel';
-import TableLinkLabel from 'components/pdfTableViewer/TableLinkLabel';
+import TableLabelPair from 'components/pdfTableViewer/TableLabelPair';
 import TableHelpFrame from 'components/pdfTableViewer/TableHelpFrame';
 import {
   LINK_LABEL_END_LINKING,
   cellBlockFromRect,
   clampBoundaryTarget,
   cleanupAxis,
-  cumulative,
   deleteTablesUnlinking,
   findTableById,
+  gridSquareAtFraction,
   identityMap,
   makeDefaultCell,
   linkLabelText,
@@ -79,6 +77,7 @@ import {
   cellBounds,
   columnBounds,
   columnIndexAtFraction,
+  lineInteraction,
   rowBounds,
   rowIndexAtFraction,
   rowNearestCentre,
@@ -90,6 +89,17 @@ import {
   warpY,
 } from 'components/pdfTableViewer/tableSeparationUtils';
 import { tableOutlinePath } from 'components/pdfTableViewer/wavyLineUtils';
+import {
+  applySplitMove,
+  axisHasSegments,
+  dividerPolyline,
+  isStaggered,
+  joinLineBetweenNeighbours,
+  lineFitsInBand,
+  linePieces,
+  nominalDividerPosition,
+  wholeLineMoveLimits,
+} from 'components/pdfTableViewer/gridLineSegmentUtils';
 import {
   addCutLine,
   clampCutPosition,
@@ -112,15 +122,12 @@ const HIT_LINE_TESTID = 'hit-line';
 const BORDER_RECT_TESTID = 'table-boundary';
 
 // data-testids for the Rows / Columns mode grid lines. Each internal divider draws a
-// visible coloured line (…-line), a transparent wide-stroke hit line that receives the
-// click/drag pointer events (…-hit-line), and — when selected — a transparent highlight
-// line on each side (…-selected-highlight).
+// visible coloured line or staggered polyline (…-line) and, per cell along it, a
+// transparent wide-stroke hit line that receives the click/drag pointer events (…-hit-line).
 const ROW_LINE_TESTID = 'row-line';
 const ROW_HIT_TESTID = 'row-hit-line';
-const ROW_HIGHLIGHT_TESTID = 'row-selected-highlight';
 const COLUMN_LINE_TESTID = 'column-line';
 const COLUMN_HIT_TESTID = 'column-hit-line';
-const COLUMN_HIGHLIGHT_TESTID = 'column-selected-highlight';
 
 // data-testids for the Special Cells mode overlays: the dotted title rectangle, the black
 // dotted header rectangle, and the four transparent hit lines drawn on the title's sides
@@ -218,8 +225,9 @@ export function StagedPageGridEditor({
   onSelectTable,
   // 'border' (the boundary pass) or 'grid' (the contents pass).
   editorMode = 'border',
-  // The armed grid tool ('rows' | 'columns' | 'special' | null) and, for the Special tool,
-  // which of its entries is armed. Both are null in borderMode.
+  // The armed line tool ('rows' | 'rowSplit' | 'rowJoin' | 'columns' | 'columnSplit' |
+  // 'columnJoin' | null) and the armed Special entry; at most one is non-null, and both
+  // are null in borderMode.
   tool = null,
   specialTool = null,
   // Which layers are drawn: { border, rows, columns, special, colours }. A missing key
@@ -234,7 +242,6 @@ export function StagedPageGridEditor({
   onToggleLinking = () => {},
   onRequestCreate,
   onRequestDelete,
-  onSelectedLineChange,
   onSelectedSectionRowChange,
   colouredAreas = [],
   selectedColouredIndex = null,
@@ -270,11 +277,6 @@ export function StagedPageGridEditor({
   // through onRequestCreate). While true, an empty-area drag draws a new border.
   const [creating, setCreating] = useState(false);
   const [createRect, setCreateRect] = useState(null); // page-fraction {left,top,width,height}
-
-  // The selected internal grid line in Rows / Columns mode: { orientation: 'row' | 'column',
-  // index } (index is the 1-based divider index k) or null. Reported up via
-  // onSelectedLineChange so the Options block can enable/disable its buttons.
-  const [selectedLine, setSelectedLine] = useState(null);
 
   // The Rows / Columns tools' new-line gesture: a press in empty space draws a line that
   // follows the pointer and is written where it is released. `newLine` is the live preview
@@ -343,23 +345,9 @@ export function StagedPageGridEditor({
   const showRows = gridMode && layerVisibility.rows !== false;
   const showColumns = gridMode && layerVisibility.columns !== false;
   const showSpecial = gridMode && layerVisibility.special !== false;
-  const headerToolArmed = gridMode && tool === 'special' && specialTool === 'header';
+  const headerToolArmed = gridMode && specialTool === 'header';
   const showHeader = showSpecial || headerToolArmed;
   const showOtherSpecial = showSpecial && !headerToolArmed;
-  // Any tool on the Special menu: Header, Title, Hide Row, Section and the Colouring
-  // group. Each acts on a press somewhere in the table rather than on a grid line.
-  const specialToolArmed = gridMode && tool === 'special' && specialTool != null;
-
-  // Grid lines are draggable throughout the contents pass. An armed Rows or Columns tool
-  // does not take the drag away — it decides what a press that does NOT move means, which
-  // handleDragEnd settles on release.
-  //
-  // An armed Special tool DOES take it away. Those tools want a press anywhere in the
-  // table, and a press that happened to land within the hit line's 8px stroke would move
-  // the divider instead of doing what the tool is for — picking a row to colour, dropping
-  // a section title, dragging out a title rectangle. Withholding the hit line leaves the
-  // lines drawn but inert, so the tool gets every press inside the table.
-  const linesDraggable = gridMode && !specialToolArmed;
 
   // The Validate tables pass's display-only separation of the page's tables, or null when
   // off. Its bands shift what is drawn; every page coordinate is left as it was.
@@ -388,11 +376,6 @@ export function StagedPageGridEditor({
   // the page image is drawn.
   const warpRect = (b) =>
     warpSpan(bands, b.top * pixelHeight, (b.top + b.height) * pixelHeight);
-
-  // The axis a tool is armed for, or null: 'row' for the Rows tool, 'column' for Columns.
-  const toolFor = (orientation) =>
-    (orientation === 'row' && tool === 'rows') ||
-    (orientation === 'column' && tool === 'columns');
 
   // Convert a pointer event's screen coordinates to page fractions (0..1). Null when the
   // geometry is not ready. X and Y scale independently (preserveAspectRatio="none").
@@ -617,25 +600,44 @@ export function StagedPageGridEditor({
       if (Math.hypot(dx, dy) <= CLICK_DRAG_THRESHOLD_PX) return;
       drag.moved = true;
     }
-    // Internal grid dividers (Rows / Columns modes) move two adjacent cells
-    // equal-and-opposite (or squeeze a crossed cell to 0) without touching bounds.
+    // Internal grid dividers, by the pressed tool's mode. 'join' never moves anything.
+    // 'split' moves the pressed run by the pointer's movement since the press, within
+    // applySplitMove's limit, measured against the press-time table. 'line' moves the line
+    // by the pointer's movement since the press, two adjacent cells equal-and-opposite (or squeezes a crossed cell to 0) without touching
+    // bounds; on a staggered axis it stops at the whole-line move limit instead.
     if (kind === 'grid-v' || kind === 'grid-h') {
-      const { k } = drag;
+      const { k, mode, startTable } = drag;
+      if (mode === 'join') return;
       const vertical = kind === 'grid-v';
-      const cells = (vertical ? t.columnWidths : t.rowHeights) ?? [];
+      const axisKey = vertical ? 'columnWidths' : 'rowHeights';
+      const raw = vertical ? frac.fx : frac.fy;
+      if (mode === 'split') {
+        const from = vertical ? drag.startFraction.fx : drag.startFraction.fy;
+        const newTable = {
+          ...t,
+          [axisKey]: applySplitMove(startTable, axisKey, k, drag.cell, raw - from),
+        };
+        drag.last = newTable;
+        commitTableEdit(tableId, newTable);
+        return;
+      }
+      const cells = t[axisKey] ?? [];
       const origin = vertical ? t.bounds.left : t.bounds.top;
       const span = vertical ? t.bounds.width : t.bounds.height;
       const minFrac = vertical ? onePxFractionX : onePxFractionY;
-      const raw = vertical ? frac.fx : frac.fy;
+      // The line's press-time position moved by the pointer's movement since the press, so
+      // pressing a displaced piece of a staggered line does not jump the line to the pointer.
+      const from = vertical ? drag.startFraction.fx : drag.startFraction.fy;
+      const nominal = nominalDividerPosition(startTable, axisKey, k);
       // Clamp the divider strictly inside the table area, one rendered pixel from each edge.
-      const p = Math.max(
+      let p = Math.max(
         origin + minFrac,
-        Math.min(origin + span - minFrac, raw)
+        Math.min(origin + span - minFrac, nominal + raw - from)
       );
-      const moved = moveDivider(cells, k, p, origin);
-      const newTable = vertical
-        ? { ...t, columnWidths: moved }
-        : { ...t, rowHeights: moved };
+      if (drag.limits) {
+        p = Math.max(nominal + drag.limits.min, Math.min(nominal + drag.limits.max, p));
+      }
+      const newTable = { ...t, [axisKey]: moveDivider(cells, k, p, origin) };
       drag.last = newTable;
       commitTableEdit(tableId, newTable);
       return;
@@ -699,73 +701,96 @@ export function StagedPageGridEditor({
       window.removeEventListener('mouseup', handleDragEnd);
       return;
     }
-    // Internal grid-line gesture. A sub-threshold gesture is a press-and-release: with the
-    // matching tool armed that DELETES the line, and otherwise it selects it. A real drag
-    // reconciles the moved divider either way.
+    // Internal grid-line gesture, by the pressed tool's mode. 'line': a sub-threshold
+    // press-and-release DELETES the line and a real drag reconciles the moved divider.
+    // 'split': a drag reconciles the moved run against the press-time table; a release
+    // changes nothing. 'join': a release straightens a staggered line; a drag or a straight
+    // line changes nothing.
     if (drag && (drag.kind === 'grid-v' || drag.kind === 'grid-h')) {
-      const orientation = drag.kind === 'grid-v' ? 'column' : 'row';
-      if (!drag.moved && toolFor(orientation)) {
-        dragRef.current = null;
-        window.removeEventListener('mousemove', handleDragMove);
-        window.removeEventListener('mouseup', handleDragEnd);
-        deleteDividerAt(
-          orientation === 'column' ? 'columnWidths' : 'rowHeights',
-          drag.k
+      dragRef.current = null;
+      window.removeEventListener('mousemove', handleDragMove);
+      window.removeEventListener('mouseup', handleDragEnd);
+      const axisKey = drag.kind === 'grid-v' ? 'columnWidths' : 'rowHeights';
+      const { startTable } = drag;
+      if (drag.mode === 'split') {
+        const finalTable = drag.last;
+        if (!drag.moved || !finalTable || !startTable) return;
+        const axis = finalTable[axisKey];
+        commitTableEdit(
+          drag.tableId,
+          reconcileAxisEdit(
+            startTable,
+            finalTable,
+            axisKey,
+            axis,
+            identityMap(axis.length),
+            startTable.bounds
+          )
+        );
+        return;
+      }
+      if (drag.mode === 'join') {
+        const axis = startTable?.[axisKey];
+        if (drag.moved || !axis || !isStaggered(axis[drag.k - 1])) return;
+        commitTableEdit(
+          drag.tableId,
+          reconcileAxisEdit(
+            startTable,
+            startTable,
+            axisKey,
+            joinLineBetweenNeighbours(startTable, axisKey, drag.k),
+            identityMap(axis.length),
+            startTable.bounds
+          )
         );
         return;
       }
       if (!drag.moved) {
-        setSelectedLine({
-          orientation,
-          index: drag.k,
-        });
-      } else {
-        const orig = (metadataTables ?? []).find(
-          (x) => x.tableId === drag.tableId
-        );
-        const finalTable = drag.last ?? orig;
-        if (finalTable) {
-          const vertical = drag.kind === 'grid-v';
-          const axis = (vertical ? finalTable.columnWidths : finalTable.rowHeights) ?? [];
-          // Treat anything at or below half a rendered pixel as a squeezed 0.
-          const epsilon = (vertical ? onePxFractionX : onePxFractionY) * 0.5;
-          const cleaned = cleanupAxis(axis, epsilon);
-          // Index map for the cleaned axis: survivors are the entries above epsilon, in
-          // order; if cleanup would empty the axis it keeps the single largest entry
-          // (mirroring cleanupAxis). moveDivider preserves the entry count, so these
-          // indices also address the pre-drag axis.
-          const kept = [];
-          axis.forEach((c, i) => {
-            if (c.value > epsilon) kept.push(i);
-          });
-          let changedMap = kept;
-          if (kept.length === 0) {
-            let best = 0;
-            axis.forEach((c, i) => {
-              if (c.value > axis[best].value) best = i;
-            });
-            changedMap = [best];
-          }
-          // Reconcile against the PRE-DRAG geometry (`prev`) so only cells whose grid square
-          // actually shifted reset confidence; commit onto the final interim table so its
-          // untouched axis is kept. The move keeps bounds fixed.
-          const prev = orig ?? finalTable;
-          commitTableEdit(
-            drag.tableId,
-            reconcileAxisEdit(
-              prev,
-              finalTable,
-              vertical ? 'columnWidths' : 'rowHeights',
-              cleaned,
-              changedMap,
-              prev.bounds
-            )
-          );
-        }
+        deleteDividerAt(axisKey, drag.k);
+        return;
       }
-      dragRef.current = null;
-      window.removeEventListener('mousemove', handleDragMove);
-      window.removeEventListener('mouseup', handleDragEnd);
+      const orig = (metadataTables ?? []).find(
+        (x) => x.tableId === drag.tableId
+      );
+      const finalTable = drag.last ?? orig;
+      if (finalTable) {
+        const vertical = drag.kind === 'grid-v';
+        const axis = (vertical ? finalTable.columnWidths : finalTable.rowHeights) ?? [];
+        // Treat anything at or below half a rendered pixel as a squeezed 0.
+        const epsilon = (vertical ? onePxFractionX : onePxFractionY) * 0.5;
+        const cleaned = cleanupAxis(axis, epsilon);
+        // Index map for the cleaned axis: survivors are the entries above epsilon, in
+        // order; if cleanup would empty the axis it keeps the single largest entry
+        // (mirroring cleanupAxis). moveDivider preserves the entry count, so these
+        // indices also address the pre-drag axis.
+        const kept = [];
+        axis.forEach((c, i) => {
+          if (c.value > epsilon) kept.push(i);
+        });
+        let changedMap = kept;
+        if (kept.length === 0) {
+          let best = 0;
+          axis.forEach((c, i) => {
+            if (c.value > axis[best].value) best = i;
+          });
+          changedMap = [best];
+        }
+        // Reconcile against the PRE-DRAG geometry (`prev`) so only cells whose grid square
+        // actually shifted reset confidence; commit onto the final interim table so its
+        // untouched axis is kept. The move keeps bounds fixed.
+        const prev = orig ?? finalTable;
+        commitTableEdit(
+          drag.tableId,
+          reconcileAxisEdit(
+            prev,
+            finalTable,
+            vertical ? 'columnWidths' : 'rowHeights',
+            cleaned,
+            changedMap,
+            prev.bounds
+          )
+        );
+      }
       return;
     }
     // Only a boundary DRAG (moved past the threshold) reconciles; a sub-threshold click
@@ -828,17 +853,31 @@ export function StagedPageGridEditor({
     window.addEventListener('mouseup', handleDragEnd);
   };
 
-  // Begin an internal grid-line gesture (Rows / Columns modes). `orientation` is 'row' (a
-  // horizontal divider on rowHeights) or 'column' (a vertical divider on columnWidths); `k`
-  // is the 1-based divider index. A sub-threshold release selects the line; a drag moves it.
-  const handleLineHit = (orientation, k, e) => {
+  // Begin an internal grid-line gesture. `orientation` is 'row' (a horizontal divider on
+  // rowHeights) or 'column' (a vertical divider on columnWidths); `k` is the 1-based divider
+  // index and `cell` the cell along the line whose piece was pressed. The armed tool's
+  // `mode` decides the gesture: 'line' (Rows / Columns) deletes on a release and moves the
+  // whole line on a drag, within the move limit when the axis is staggered; 'split' drags
+  // the pressed run; 'join' straightens a staggered line on a release.
+  const handleLineHit = (orientation, k, e, cell) => {
     if (!onEditTables || !selected) return;
     e.preventDefault();
     e.stopPropagation();
+    const mode = lineInteraction(tool, orientation);
+    const axisKey = orientation === 'column' ? 'columnWidths' : 'rowHeights';
+    const startTable = findTableById(metadataTables, selected.tableId);
     dragRef.current = {
       kind: orientation === 'column' ? 'grid-v' : 'grid-h',
       tableId: selected.tableId,
       k,
+      cell,
+      mode,
+      startTable,
+      startFraction: eventToFraction(e),
+      limits:
+        mode === 'line' && axisHasSegments(startTable?.[axisKey])
+          ? wholeLineMoveLimits(startTable, axisKey, k)
+          : null,
       startClientX: e.clientX,
       startClientY: e.clientY,
       moved: false,
@@ -959,22 +998,6 @@ export function StagedPageGridEditor({
   };
 
   // ---- Section-title rows (Special Cells) ---------------------------------------------
-
-  // The 0-based row band of the selected table that page-fraction point `frac` falls in,
-  // or null when it is outside the table (matching renderHorizontalLines' cumulative math).
-  const sectionRowBandAt = (frac) => {
-    if (!selected) return null;
-    const { left, top, width } = selected.bounds;
-    if (frac.fx < left || frac.fx > left + width) return null;
-    const rows = (selected.rowHeights ?? []).map((v) => v.value);
-    const offsets = cumulative(rows);
-    for (let r = 0; r < rows.length; r += 1) {
-      const bandTop = top + (r === 0 ? 0 : offsets[r - 1]);
-      const bandBottom = top + offsets[r];
-      if (frac.fy >= bandTop && frac.fy <= bandBottom) return r;
-    }
-    return null;
-  };
 
   // Rubber-band drag that sets the selected section-title row's data area. A gesture that
   // moves less than the click threshold is a CLICK (handled by the click handler as a row
@@ -1137,16 +1160,13 @@ export function StagedPageGridEditor({
   };
 
   const colourToolArmed =
-    gridMode &&
-    tool === 'special' &&
-    colourSpecialToolKeys().includes(specialTool);
+    gridMode && colourSpecialToolKeys().includes(specialTool);
   // The gestures that rubber-band a rectangle rather than acting on a click.
   // The Title tool is armed: its rectangle offers its four draggable sides.
-  const titleToolArmed = gridMode && tool === 'special' && specialTool === 'title';
+  const titleToolArmed = gridMode && specialTool === 'title';
 
   const armedForDrag =
     gridMode &&
-    tool === 'special' &&
     (specialTool === 'sectionTitle' ||
       specialTool === 'colouredArea' ||
       specialTool === 'title' ||
@@ -1208,19 +1228,20 @@ export function StagedPageGridEditor({
     if (!g || !selected) return;
     // The line is written where the pointer was released, which is where the user last saw
     // the preview — a press with no movement releases where it was pressed, so the two
-    // cases are one.
+    // cases are one. The band is the grid square's row (or column) under the pointer, and a
+    // line that would cross a staggered line in that band is refused with a toast.
     const frac = g.cur;
-    if (g.orientation === 'row') {
-      const row = rowIndexAtFraction(selected, frac);
-      if (row == null) return;
-      const band = rowBounds(selected, row);
-      if (band) addDividerAt('rowHeights', row, frac.fy - band.top);
+    const square = gridSquareAtFraction(selected, frac);
+    if (!square) return;
+    const vertical = g.orientation === 'column';
+    const axisKey = vertical ? 'columnWidths' : 'rowHeights';
+    const band = vertical ? square.column : square.row;
+    const position = vertical ? frac.fx : frac.fy;
+    if (!lineFitsInBand(selected, axisKey, band, position)) {
+      toast(noRoomForGridLineLabel());
       return;
     }
-    const column = columnIndexAtFraction(selected, frac);
-    if (column == null) return;
-    const band = columnBounds(selected, column);
-    if (band) addDividerAt('columnWidths', column, frac.fx - band.left);
+    addDividerAt(axisKey, band, position - nominalDividerPosition(selected, axisKey, band));
   };
 
   // ---- Cut lines: press inside the selected table, drag, release ----------------------
@@ -1389,7 +1410,6 @@ export function StagedPageGridEditor({
       (arr) => mergeCells(arr, k),
       (len) => mergeMap(len, k)
     );
-    setSelectedLine(null);
   };
 
   // The Special tool's row actions: the header's last row, a hidden row, or removing an
@@ -1446,7 +1466,7 @@ export function StagedPageGridEditor({
       return;
     }
 
-    if (gridMode && tool && selected && frac) {
+    if (gridMode && (tool || specialTool) && selected && frac) {
       // A click inside a saved coloured area selects it for editing, whichever colour
       // tool is armed.
       if (colourToolArmed) {
@@ -1460,8 +1480,9 @@ export function StagedPageGridEditor({
       const row = rowIndexAtFraction(selected, frac);
       const column = columnIndexAtFraction(selected, frac);
       if (row != null && column != null) {
-        // The Rows and Columns tools do all their work on the press/release gesture above.
-        if (tool === 'rows' || tool === 'columns') return;
+        // The line tools do all their work on the press/release gestures on lines and, for
+        // Rows / Columns, in empty space.
+        if (tool) return;
         if (specialTool === 'colouredRows') {
           togglePending('rows', row, (i) => rowBounds(selected, i));
           return;
@@ -1566,21 +1587,15 @@ export function StagedPageGridEditor({
     if (onRequestDelete) onRequestDelete(startDelete);
   }, [onRequestDelete, startDelete]);
 
-  // Report the selected grid line up so the Options block can enable/disable its buttons.
-  useEffect(() => {
-    if (onSelectedLineChange) onSelectedLineChange(selectedLine);
-  }, [onSelectedLineChange, selectedLine]);
-
   // Report the selected section-title row up so the Options block can bind the "Column
   // name" combo and enable/disable "Delete Section Title Row".
   useEffect(() => {
     if (onSelectedSectionRowChange) onSelectedSectionRowChange(selectedSectionRow);
   }, [onSelectedSectionRowChange, selectedSectionRow]);
 
-  // A line or section-title selection belongs to the table and the tool it was made under,
-  // so both are dropped when either changes.
+  // A section-title selection belongs to the table and the tool it was made under, so it is
+  // dropped when either changes.
   useEffect(() => {
-    setSelectedLine(null);
     setSelectedSectionRow(null);
     setSectionAreaRect(null);
   }, [editorMode, tool, specialTool, selected?.tableId]);
@@ -1843,183 +1858,104 @@ export function StagedPageGridEditor({
     );
   };
 
-  // The selected table's internal horizontal grid lines (row dividers), drawn in
-  // layerRowsColour() when the Rows layer is on and layerGrey() when it is off. When
-  // `interactive`, each carries a transparent wide-stroke hit line (click selects, drag
-  // moves) and the selected divider is flanked by a highlight line immediately above and
-  // below.
-  const renderHorizontalLines = (interactive) => {
+  // The selected table's internal dividers on one axis: 'row' draws the horizontal lines
+  // (rowHeights) in layerRowsColour(), 'column' the vertical ones (columnWidths) in
+  // layerColumnsColour(), each in layerGrey() while its layer is off. Each divider is drawn
+  // from its dividerPolyline: a straight divider is a <line> between its two points, a
+  // staggered one a <polyline> through them. When `interactive`, every linePieces piece
+  // carries its own transparent wide-stroke hit line, whose press handleLineHit takes in the
+  // armed tool's mode.
+  const renderDividers = (orientation, interactive) => {
     if (!selected) return null;
-    const x = selected.bounds.left * pixelWidth;
-    const w = selected.bounds.width * pixelWidth;
-    const rows = (selected.rowHeights ?? []).map((v) => v.value);
-    const offsets = cumulative(rows); // the last is the total height (far edge; skipped)
+    const vertical = orientation === 'column';
+    const axisKey = vertical ? 'columnWidths' : 'rowHeights';
+    const axis = selected[axisKey] ?? [];
+    const lineTestId = vertical ? COLUMN_LINE_TESTID : ROW_LINE_TESTID;
+    const hitTestId = vertical ? COLUMN_HIT_TESTID : ROW_HIT_TESTID;
+    const layerOn = vertical ? showColumns : showRows;
+    const layerColour = vertical ? layerColumnsColour() : layerRowsColour();
+    const stroke = { stroke: layerOn ? layerColour : layerGrey() };
+    // A point `along` the divider at `position` across it, in drawn pixels.
+    const point = (along, position) =>
+      vertical
+        ? [position * pixelWidth, along * pixelHeight]
+        : [along * pixelWidth, position * pixelHeight];
     const out = [];
-    for (let k = 1; k < rows.length; k += 1) {
-      const offset = selected.bounds.top + offsets[k - 1];
-      const ly = offset * pixelHeight;
-      out.push(
-        <line
-          key={`row-${k}`}
-          data-testid={ROW_LINE_TESTID}
-          x1={x}
-          y1={ly}
-          x2={x + w}
-          y2={ly}
-          style={{ stroke: showRows ? layerRowsColour() : layerGrey() }}
-          strokeWidth={1}
-          vectorEffect={'non-scaling-stroke'}
-        />
+    for (let k = 1; k < axis.length; k += 1) {
+      const drawn = dividerPolyline(selected, axisKey, k).map(([along, position]) =>
+        point(along, position)
       );
-      if (interactive) {
+      if (isStaggered(axis[k - 1])) {
         out.push(
-          <line
-            key={`row-hit-${k}`}
-            data-testid={ROW_HIT_TESTID}
-            x1={x}
-            y1={ly}
-            x2={x + w}
-            y2={ly}
-            stroke={'transparent'}
-            strokeWidth={hitLineWidthPx()}
+          <polyline
+            key={`${orientation}-${k}`}
+            data-testid={lineTestId}
+            data-staggered={'true'}
+            points={drawn.map(([px, py]) => `${px},${py}`).join(' ')}
+            fill={'none'}
+            style={stroke}
+            strokeWidth={1}
             vectorEffect={'non-scaling-stroke'}
-            cursor={'ns-resize'}
-            style={{ pointerEvents: 'stroke' }}
-            onMouseDown={(e) => handleLineHit('row', k, e)}
           />
         );
-        if (
-          selectedLine &&
-          selectedLine.orientation === 'row' &&
-          selectedLine.index === k
-        ) {
-          const yAbove = (offset - onePxFractionY) * pixelHeight;
-          const yBelow = (offset + onePxFractionY) * pixelHeight;
+      } else {
+        const [[x1, y1], [x2, y2]] = drawn;
+        out.push(
+          <line
+            key={`${orientation}-${k}`}
+            data-testid={lineTestId}
+            x1={x1}
+            y1={y1}
+            x2={x2}
+            y2={y2}
+            style={stroke}
+            strokeWidth={1}
+            vectorEffect={'non-scaling-stroke'}
+          />
+        );
+      }
+      if (interactive) {
+        linePieces(selected, axisKey, k).forEach((piece) => {
+          const [x1, y1] = point(piece.start, piece.position);
+          const [x2, y2] = point(piece.end, piece.position);
           out.push(
             <line
-              key={`row-hl-a-${k}`}
-              data-testid={ROW_HIGHLIGHT_TESTID}
-              x1={x}
-              y1={yAbove}
-              x2={x + w}
-              y2={yAbove}
-              style={{ stroke: selectedRowHighlight() }}
-              strokeWidth={1}
+              key={`${orientation}-hit-${k}-${piece.cell}`}
+              data-testid={hitTestId}
+              data-cell={piece.cell}
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke={'transparent'}
+              strokeWidth={hitLineWidthPx()}
               vectorEffect={'non-scaling-stroke'}
-            />,
-            <line
-              key={`row-hl-b-${k}`}
-              data-testid={ROW_HIGHLIGHT_TESTID}
-              x1={x}
-              y1={yBelow}
-              x2={x + w}
-              y2={yBelow}
-              style={{ stroke: selectedRowHighlight() }}
-              strokeWidth={1}
-              vectorEffect={'non-scaling-stroke'}
+              cursor={vertical ? 'ew-resize' : 'ns-resize'}
+              style={{ pointerEvents: 'stroke' }}
+              onMouseDown={(e) => handleLineHit(orientation, k, e, piece.cell)}
             />
           );
-        }
+        });
       }
     }
     return out;
   };
 
-  // The selected table's internal vertical grid lines (column dividers), drawn in
-  // layerColumnsColour() when the Columns layer is on and layerGrey() when it is off;
-  // interactive with a highlight line on each side of the selected divider.
-  const renderVerticalLines = (interactive) => {
-    if (!selected) return null;
-    const y = selected.bounds.top * pixelHeight;
-    const h = selected.bounds.height * pixelHeight;
-    const cols = (selected.columnWidths ?? []).map((v) => v.value);
-    const offsets = cumulative(cols); // the last is the total width (far edge; skipped)
-    const out = [];
-    for (let k = 1; k < cols.length; k += 1) {
-      const offset = selected.bounds.left + offsets[k - 1];
-      const lx = offset * pixelWidth;
-      out.push(
-        <line
-          key={`col-${k}`}
-          data-testid={COLUMN_LINE_TESTID}
-          x1={lx}
-          y1={y}
-          x2={lx}
-          y2={y + h}
-          style={{ stroke: showColumns ? layerColumnsColour() : layerGrey() }}
-          strokeWidth={1}
-          vectorEffect={'non-scaling-stroke'}
-        />
-      );
-      if (interactive) {
-        out.push(
-          <line
-            key={`col-hit-${k}`}
-            data-testid={COLUMN_HIT_TESTID}
-            x1={lx}
-            y1={y}
-            x2={lx}
-            y2={y + h}
-            stroke={'transparent'}
-            strokeWidth={hitLineWidthPx()}
-            vectorEffect={'non-scaling-stroke'}
-            cursor={'ew-resize'}
-            style={{ pointerEvents: 'stroke' }}
-            onMouseDown={(e) => handleLineHit('column', k, e)}
-          />
-        );
-        if (
-          selectedLine &&
-          selectedLine.orientation === 'column' &&
-          selectedLine.index === k
-        ) {
-          const xLeft = (offset - onePxFractionX) * pixelWidth;
-          const xRight = (offset + onePxFractionX) * pixelWidth;
-          out.push(
-            <line
-              key={`col-hl-l-${k}`}
-              data-testid={COLUMN_HIGHLIGHT_TESTID}
-              x1={xLeft}
-              y1={y}
-              x2={xLeft}
-              y2={y + h}
-              style={{ stroke: selectedColumnHighlight() }}
-              strokeWidth={1}
-              vectorEffect={'non-scaling-stroke'}
-            />,
-            <line
-              key={`col-hl-r-${k}`}
-              data-testid={COLUMN_HIGHLIGHT_TESTID}
-              x1={xRight}
-              y1={y}
-              x2={xRight}
-              y2={y + h}
-              style={{ stroke: selectedColumnHighlight() }}
-              strokeWidth={1}
-              vectorEffect={'non-scaling-stroke'}
-            />
-          );
-        }
-      }
-    }
-    return out;
-  };
-
-  // Both axes of the selected table's grid. Each is drawn in its layer's colour or in grey,
-  // and both are draggable in gridMode while no tool is armed — the boundary pass draws
-  // them display-only, as context for the border being resized.
+  // Both axes of the selected table's grid, each drawn in its layer's colour or in grey.
+  // Only the axis an armed line tool acts on carries hit lines, whatever its mode: 'line'
+  // (Rows / Columns) deletes or moves a line, 'split' moves a run, 'join' straightens a
+  // staggered line. With no line tool armed the grid is display-only.
   const renderGridLines = () => {
     if (!selected) return null;
     // The boundary pass draws no grid at all: it is about where a table starts and ends,
     // and the interior belongs to the pass that follows it.
     if (!gridMode) return null;
-    // A hit line is rendered when the divider can be dragged OR when its own tool is
-    // armed: the armed tool's click on that line is what "very close to a grid line"
-    // means, so the same 8px stroke serves both.
+    const rowInteraction = lineInteraction(tool, 'row');
+    const columnInteraction = lineInteraction(tool, 'column');
     return (
       <g transform={selectedShift}>
-        {renderHorizontalLines(linesDraggable || tool === 'rows')}
-        {renderVerticalLines(linesDraggable || tool === 'columns')}
+        {renderDividers('row', rowInteraction != null)}
+        {renderDividers('column', columnInteraction != null)}
       </g>
     );
   };
@@ -2029,12 +1965,16 @@ export function StagedPageGridEditor({
   // centred above it.
   const renderHeaderRect = () => {
     if (!selected || !(selected.headerCount > 0)) return null;
-    const rows = (selected.rowHeights ?? []).map((v) => v.value);
-    if (rows.length === 0) return null;
-    const n = Math.min(selected.headerCount, rows.length);
-    const offsets = cumulative(rows); // offsets[n-1] = sum of the first n row heights
+    const rowCount = (selected.rowHeights ?? []).length;
+    if (rowCount === 0) return null;
+    const n = Math.min(selected.headerCount, rowCount);
     const topFrac = selected.bounds.top;
-    const bottomFrac = selected.bounds.top + offsets[n - 1];
+    // The lowest bottom of the header rows, following any staggered divider.
+    let bottomFrac = topFrac;
+    for (let r = 0; r < n; r += 1) {
+      const band = rowBounds(selected, r);
+      bottomFrac = Math.max(bottomFrac, band.top + band.height);
+    }
     // Convert the screen-px margin into drawn (×pixel) units on each axis via overlayScale.
     const mx = overlayScale ? HEADER_MARGIN_PX / overlayScale.sx : HEADER_MARGIN_PX;
     const my = overlayScale ? HEADER_MARGIN_PX / overlayScale.sy : HEADER_MARGIN_PX;
@@ -2081,8 +2021,6 @@ export function StagedPageGridEditor({
     if (!selected) return null;
     const list = selected.sectionTitles ?? [];
     if (list.length === 0) return null;
-    const rows = (selected.rowHeights ?? []).map((v) => v.value);
-    const offsets = cumulative(rows);
     const dx = overlayScale ? 1 / overlayScale.sx : 1;
     const dy = overlayScale ? 1 / overlayScale.sy : 1;
     const bx = selected.bounds.left * pixelWidth;
@@ -2097,10 +2035,10 @@ export function StagedPageGridEditor({
       <g>
         {list.map((st, i) => {
           const r = st.tableRow;
-          if (r < 0 || r >= rows.length) return null;
-          const topFrac = selected.bounds.top + (r === 0 ? 0 : offsets[r - 1]);
-          const y = topFrac * pixelHeight;
-          const h = rows[r] * pixelHeight;
+          const band = rowBounds(selected, r);
+          if (!band) return null;
+          const y = band.top * pixelHeight;
+          const h = band.height * pixelHeight;
           const parts = [
             <rect
               key={`st-${i}`}
@@ -2278,10 +2216,10 @@ export function StagedPageGridEditor({
   };
 
   // The selected table's merged cells, each outlined over its whole spanned block
-  // (recalcCellBounds sums the spanned axis entries). Deliberate limitation: the grid lines
-  // running through a block are left drawn, because teaching renderHorizontalLines and
-  // renderVerticalLines about spans and partial lines is a far larger change than this
-  // needs, and the solid outline over them is unambiguous.
+  // (recalcCellBounds is the bounding box of the block's effective grid squares). Deliberate
+  // limitation: the grid lines running through a block are left drawn, because teaching
+  // renderDividers about spans is a far larger change than this needs, and the solid
+  // outline over them is unambiguous.
   const renderMergedCells = () => {
     if (!selected) return null;
     return (
@@ -2622,7 +2560,8 @@ export function StagedPageGridEditor({
         />
       )}
       {/* Every table's pair of labels: name + "cols × rows" above its top-left corner, and
-          its Link label above its top-right. Absolutely-positioned HTML siblings (the SVG's
+          its Link label above its top-right, the Link label lifted above the name when the
+          table is too narrow for both. Absolutely-positioned HTML siblings (the SVG's
           preserveAspectRatio="none" would distort text). Independent of mouse movement.
 
           The selected table's labels take the border colour and the rest the de-emphasised
@@ -2659,30 +2598,29 @@ export function StagedPageGridEditor({
               ? layerBorderColour()
               : layerGrey();
           return (
-            <Fragment key={`labels-${t.tableId}`}>
-              <TableNameSizeLabel
-                table={t}
-                left={left}
-                top={top}
-                colour={isSelected ? layerBorderColour() : layerGrey()}
-                colourName={isSelected ? 'border' : 'grey'}
-              />
-              <TableLinkLabel
-                table={t}
-                left={right}
-                top={top}
-                colour={colour}
-                colourName={colourName}
-                state={state}
-                text={text}
-                interactive={!gridMode}
-                onClick={() =>
+            <TableLabelPair
+              key={`labels-${t.tableId}`}
+              left={left}
+              right={right}
+              top={top}
+              name={{
+                table: t,
+                colour: isSelected ? layerBorderColour() : layerGrey(),
+                colourName: isSelected ? 'border' : 'grey',
+              }}
+              link={{
+                table: t,
+                colour,
+                colourName,
+                state,
+                text,
+                interactive: !gridMode,
+                onClick: () =>
                   onToggleLinking(
                     linkLabelToggleTarget(t, state, linkParents, linkingRootId)
-                  )
-                }
-              />
-            </Fragment>
+                  ),
+              }}
+            />
           );
         })}
     </Box>

@@ -6,6 +6,7 @@ import {
   layerColumnsColour,
   layerGrey,
   layerRowsColour,
+  noRoomForGridLineLabel,
   sectionTitlePlaceholderColumnName,
   selectedTableLabelClearancePx,
   selectionScrollIntoViewOptions,
@@ -147,6 +148,12 @@ beforeEach(() => {
     }),
   });
 });
+
+// The hit-line piece of the armed divider that lies along cell `cell`.
+const hitPiece = (testId, cell) =>
+  screen
+    .getAllByTestId(testId)
+    .find((piece) => piece.getAttribute('data-cell') === String(cell));
 
 // Render, load a 100x100 image, and wait for the SVG overlay to appear.
 async function renderLoaded(props) {
@@ -395,7 +402,7 @@ describe('StagedPageGridEditor', () => {
       baseProps({
         selectedTableId: 't1',
         editorMode: 'grid',
-        tool: 'special',
+        tool: null,
         specialTool: 'title',
         ...overrides,
       });
@@ -838,6 +845,106 @@ describe('StagedPageGridEditor', () => {
       expect(screen.getByTestId('row-line').style.stroke).toBe(layerRowsColour());
     });
 
+    // Alpha with its row divider stepped 0.01 down along column 1.
+    const staggeredAlpha = (overrides = {}) => {
+      const table = alpha();
+      return {
+        ...table,
+        rowHeights: [
+          { ...table.rowHeights[0], segments: [{ offset: 0.01, start: 1 }] },
+          table.rowHeights[1],
+        ],
+        ...overrides,
+      };
+    };
+
+    const polylinePoints = (element) =>
+      element
+        .getAttribute('points')
+        .trim()
+        .split(/\s+/)
+        .map((pair) => pair.split(',').map(Number));
+
+    it('draws a staggered divider as one polyline through its pieces', async () => {
+      await renderLoaded(
+        gridProps({ metadataTables: [staggeredAlpha(), beta()] })
+      );
+      const line = screen.getByTestId('row-line');
+      expect(line.tagName.toLowerCase()).toBe('polyline');
+      expect(line.getAttribute('data-staggered')).toBe('true');
+      expect(line.getAttribute('fill')).toBe('none');
+      const expected = [
+        [0, 50],
+        [50, 50],
+        [50, 60],
+        [100, 60],
+      ];
+      const points = polylinePoints(line);
+      expect(points).toHaveLength(expected.length);
+      points.forEach(([x, y], i) => {
+        expect(x).toBeCloseTo(expected[i][0], 6);
+        expect(y).toBeCloseTo(expected[i][1], 6);
+      });
+    });
+
+    it('draws a straight divider as a line', async () => {
+      await renderLoaded(gridProps());
+      const line = screen.getByTestId('row-line');
+      expect(line.tagName.toLowerCase()).toBe('line');
+      expect(line.getAttribute('data-staggered')).toBeNull();
+    });
+
+    it('gives each cell along an armed divider its own hit piece', async () => {
+      await renderLoaded(gridProps({ tool: 'rows' }));
+      const pieces = screen.getAllByTestId('row-hit-line');
+      expect(pieces.map((p) => p.getAttribute('data-cell'))).toEqual(['0', '1']);
+    });
+
+    it('places each hit piece on its cell of a staggered divider', async () => {
+      await renderLoaded(
+        gridProps({ tool: 'rows', metadataTables: [staggeredAlpha(), beta()] })
+      );
+      const piece = hitPiece('row-hit-line', 1);
+      expect(Number(piece.getAttribute('x1'))).toBeCloseTo(50, 6);
+      expect(Number(piece.getAttribute('x2'))).toBeCloseTo(100, 6);
+      expect(Number(piece.getAttribute('y1'))).toBeCloseTo(60, 6);
+      expect(Number(piece.getAttribute('y2'))).toBeCloseTo(60, 6);
+    });
+
+    const rectBottom = (rect) =>
+      Number(rect.getAttribute('y')) + Number(rect.getAttribute('height'));
+
+    it('extends the header rectangle to the lowest step of a staggered divider', async () => {
+      const { unmount } = await renderLoaded(
+        gridProps({ metadataTables: [{ ...alpha(), headerCount: 1 }, beta()] })
+      );
+      const straightBottom = rectBottom(screen.getByTestId('header-rect'));
+      unmount();
+      await renderLoaded(
+        gridProps({ metadataTables: [staggeredAlpha({ headerCount: 1 }), beta()] })
+      );
+      expect(rectBottom(screen.getByTestId('header-rect'))).toBeCloseTo(
+        straightBottom + 10,
+        6
+      );
+    });
+
+    it('extends a section-title band to the lowest step of a staggered divider', async () => {
+      const sectionTitles = [
+        { tableRow: 0, delete: true, columnName: null, data: null },
+      ];
+      await renderLoaded(
+        gridProps({
+          metadataTables: [staggeredAlpha({ sectionTitles }), beta()],
+        })
+      );
+      const band = screen
+        .getAllByTestId('section-title-0')
+        .find((el) => el.tagName.toLowerCase() === 'rect');
+      expect(Number(band.getAttribute('y'))).toBeCloseTo(0, 6);
+      expect(Number(band.getAttribute('height'))).toBeCloseTo(60, 6);
+    });
+
     it('draws the header, the section-title rows and the coloured areas when Special is on', async () => {
       await renderLoaded(
         gridProps({
@@ -869,7 +976,7 @@ describe('StagedPageGridEditor', () => {
           metadataTables: [specialTable(), beta()],
           colouredAreas: [{ left: 0.5, top: 0.5, width: 0.1, height: 0.1 }],
           layerVisibility: { rows: true, columns: true, special: false, colours: true },
-          tool: 'special',
+          tool: null,
           specialTool: 'header',
         })
       );
@@ -899,14 +1006,26 @@ describe('StagedPageGridEditor', () => {
       expect(screen.getByTestId('merged-cell-0-0')).toBeInTheDocument();
     });
 
-    it('moves a grid line while no tool is armed', async () => {
-      const onEditTables = jest.fn();
-      await renderLoaded(gridProps({ onEditTables }));
-      const hit = screen.getByTestId('row-hit-line');
-      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
-      fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
-      fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
-      expect(editedAlpha(onEditTables).rowHeights[0].value).toBeCloseTo(0.07, 5);
+    it('offers no grid-line hit lines while no tool is armed', async () => {
+      await renderLoaded(gridProps({ tool: null }));
+      expect(screen.queryByTestId('row-hit-line')).toBeNull();
+      expect(screen.queryByTestId('column-hit-line')).toBeNull();
+    });
+
+    it('offers hit lines on the rows only while the Rows tool is armed', async () => {
+      const { container } = await renderLoaded(gridProps({ tool: 'rows' }));
+      expect(
+        container.querySelectorAll('[data-testid="row-hit-line"]').length
+      ).toBeGreaterThan(0);
+      expect(screen.queryByTestId('column-hit-line')).toBeNull();
+    });
+
+    it('offers hit lines on the columns only while the Columns tool is armed', async () => {
+      const { container } = await renderLoaded(gridProps({ tool: 'columns' }));
+      expect(
+        container.querySelectorAll('[data-testid="column-hit-line"]').length
+      ).toBeGreaterThan(0);
+      expect(screen.queryByTestId('row-hit-line')).toBeNull();
     });
 
     // A Special tool acts on a press anywhere in the table, so a press that happened to
@@ -925,14 +1044,14 @@ describe('StagedPageGridEditor', () => {
       ['merged'],
     ])('with the %s Special tool armed', (specialTool) => {
       it('offers no grid-line hit lines to drag', async () => {
-        await renderLoaded(gridProps({ tool: 'special', specialTool }));
+        await renderLoaded(gridProps({ tool: null, specialTool }));
         expect(screen.queryByTestId('row-hit-line')).toBeNull();
         expect(screen.queryByTestId('column-hit-line')).toBeNull();
       });
 
       it('still draws the grid lines', async () => {
         const { container } = await renderLoaded(
-          gridProps({ tool: 'special', specialTool })
+          gridProps({ tool: null, specialTool })
         );
         expect(
           container.querySelectorAll('[data-testid="row-line"]').length
@@ -941,18 +1060,6 @@ describe('StagedPageGridEditor', () => {
           container.querySelectorAll('[data-testid="column-line"]').length
         ).toBeGreaterThan(0);
       });
-    });
-
-    it('leaves the grid lines draggable when Special is armed with no tool picked', async () => {
-      const onEditTables = jest.fn();
-      await renderLoaded(
-        gridProps({ tool: 'special', specialTool: null, onEditTables })
-      );
-      const hit = screen.getByTestId('row-hit-line');
-      fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
-      fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
-      fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
-      expect(editedAlpha(onEditTables).rowHeights[0].value).toBeCloseTo(0.07, 5);
     });
   });
 
@@ -965,7 +1072,7 @@ describe('StagedPageGridEditor', () => {
     it('deletes the line a press and release lands on, keeping the cells above', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ tool: 'rows', onEditTables }));
-      const hit = screen.getByTestId('row-hit-line');
+      const hit = hitPiece('row-hit-line', 0);
       fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
       fireEvent.mouseUp(window, { clientX: 50, clientY: 50 });
 
@@ -977,7 +1084,7 @@ describe('StagedPageGridEditor', () => {
     it('moves the line a press and drag lands on, rather than deleting it', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ tool: 'rows', onEditTables }));
-      const hit = screen.getByTestId('row-hit-line');
+      const hit = hitPiece('row-hit-line', 0);
       fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
       fireEvent.mouseMove(window, { clientX: 50, clientY: 70 });
       fireEvent.mouseUp(window, { clientX: 50, clientY: 70 });
@@ -1055,7 +1162,7 @@ describe('StagedPageGridEditor', () => {
     it('deletes the line a press and release lands on, keeping the cells to the left', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ tool: 'columns', onEditTables }));
-      const hit = screen.getByTestId('column-hit-line');
+      const hit = hitPiece('column-hit-line', 0);
       fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
       fireEvent.mouseUp(window, { clientX: 50, clientY: 50 });
       expect(editedAlpha(onEditTables).columnWidths).toHaveLength(1);
@@ -1064,7 +1171,7 @@ describe('StagedPageGridEditor', () => {
     it('moves the line a press and drag lands on', async () => {
       const onEditTables = jest.fn();
       await renderLoaded(gridProps({ tool: 'columns', onEditTables }));
-      const hit = screen.getByTestId('column-hit-line');
+      const hit = hitPiece('column-hit-line', 0);
       fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 });
       fireEvent.mouseMove(window, { clientX: 70, clientY: 50 });
       fireEvent.mouseUp(window, { clientX: 70, clientY: 50 });
@@ -1092,11 +1199,309 @@ describe('StagedPageGridEditor', () => {
     });
   });
 
+  // Gamma is two rows of 0.05 and three columns of 0.04 from the page origin, so its
+  // horizontal divider sits at screen y 50 with pieces over x 0..40, 40..80 and 80..120,
+  // and its vertical dividers sit at screen x 40 and 80 with pieces over y 0..50 and 50..100.
+  // `rowSegments` / `columnSegments` stagger the first divider of that axis.
+  const gamma = ({ rowSegments, columnSegments } = {}) => ({
+    ...alpha(),
+    tableId: 't3',
+    name: 'Gamma',
+    bounds: { left: 0, top: 0, width: 0.12, height: 0.1 },
+    columnWidths: [
+      columnSegments
+        ? { value: 0.04, confidence: 90, segments: columnSegments }
+        : { value: 0.04, confidence: 90 },
+      { value: 0.04, confidence: 90 },
+      { value: 0.04, confidence: 90 },
+    ],
+    rowHeights: [
+      rowSegments
+        ? { value: 0.05, confidence: 90, segments: rowSegments }
+        : { value: 0.05, confidence: 90 },
+      { value: 0.05, confidence: 90 },
+    ],
+    cells: gridCells(2, 3),
+  });
+  const gammaProps = (table, overrides = {}) =>
+    baseProps({
+      editorMode: 'grid',
+      selectedTableId: 't3',
+      metadataTables: [table],
+      ...overrides,
+    });
+  const editedGamma = (onEditTables) =>
+    lastList(onEditTables).find((t) => t.tableId === 't3');
+  const confidenceAt = (table, row, column) =>
+    table.cells.find((c) => c.row === row && c.column === column).confidence;
+
+  describe('the Row Split tool', () => {
+    it('drags the pressed piece and the cells after it into a segment', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gammaProps(gamma(), { tool: 'rowSplit', onEditTables }));
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 60, clientY: 70 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 70 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.rowHeights[0].value).toBeCloseTo(0.05, 6);
+      expect(edited.rowHeights[0].segments).toEqual([
+        { offset: expect.closeTo(0.02, 6), start: 1 },
+      ]);
+    });
+
+    it('stops the run at 90% of the neighbouring band', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gammaProps(gamma(), { tool: 'rowSplit', onEditTables }));
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 60, clientY: 100 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 100 });
+
+      expect(editedGamma(onEditTables).rowHeights[0].segments).toEqual([
+        { offset: expect.closeTo(0.045, 6), start: 1 },
+      ]);
+    });
+
+    it('moves the first run through the band value, keeping later runs in place', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rowSplit',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('row-hit-line', 0), { clientX: 20, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 20, clientY: 60 });
+      fireEvent.mouseUp(window, { clientX: 20, clientY: 60 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.rowHeights[0].value).toBeCloseTo(0.06, 6);
+      expect(edited.rowHeights[1].value).toBeCloseTo(0.04, 6);
+      expect(edited.rowHeights[0].segments).toEqual([
+        { offset: expect.closeTo(0.01, 6), start: 1 },
+      ]);
+    });
+
+    it('changes nothing on a press and release on a line', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gammaProps(gamma(), { tool: 'rowSplit', onEditTables }));
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 50 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 50 });
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+
+    it('adds no line on a press in empty space', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(
+        gammaProps(gamma(), { tool: 'rowSplit', onEditTables })
+      );
+      const svg = container.querySelector('svg');
+      fireEvent.mouseDown(svg, { clientX: 20, clientY: 10 });
+      fireEvent.mouseUp(window, { clientX: 20, clientY: 10 });
+      fireEvent.click(svg, { clientX: 20, clientY: 10 });
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the Row Join tool', () => {
+    it('straightens a staggered line and zeroes the cells whose square moved', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rowJoin',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 70 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 70 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.rowHeights[0]).not.toHaveProperty('segments');
+      expect(edited.rowHeights[0].value).toBeCloseTo(0.05, 6);
+      expect(confidenceAt(edited, 0, 0)).toBe(90);
+      expect(confidenceAt(edited, 1, 0)).toBe(90);
+      expect(confidenceAt(edited, 0, 1)).toBe(0);
+      expect(confidenceAt(edited, 1, 2)).toBe(0);
+    });
+
+    it('changes nothing on a click on a straight line', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gammaProps(gamma(), { tool: 'rowJoin', onEditTables }));
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 50 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 50 });
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+
+    it('changes nothing on a drag', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rowJoin',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 70 });
+      fireEvent.mouseMove(window, { clientX: 60, clientY: 90 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 90 });
+      expect(onEditTables).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the Column Split and Column Join tools', () => {
+    it('Column Split drags the pressed piece and the cells after it into a segment', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(gammaProps(gamma(), { tool: 'columnSplit', onEditTables }));
+      fireEvent.mouseDown(hitPiece('column-hit-line', 1), { clientX: 40, clientY: 75 });
+      fireEvent.mouseMove(window, { clientX: 50, clientY: 75 });
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 75 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.columnWidths[0].value).toBeCloseTo(0.04, 6);
+      expect(edited.columnWidths[0].segments).toEqual([
+        { offset: expect.closeTo(0.01, 6), start: 1 },
+      ]);
+    });
+
+    it('Column Join straightens a staggered line', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ columnSegments: [{ offset: 0.01, start: 1 }] }), {
+          tool: 'columnJoin',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('column-hit-line', 1), { clientX: 50, clientY: 75 });
+      fireEvent.mouseUp(window, { clientX: 50, clientY: 75 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.columnWidths[0]).not.toHaveProperty('segments');
+      expect(edited.columnWidths[0].value).toBeCloseTo(0.04, 6);
+    });
+
+    it('Column Join stops a piece short of a staggered neighbour it would cross', async () => {
+      // On row 1 divider 1 sits at 0.09 and divider 2 at 0.11; divider 2's straight position is 0.08.
+      const onEditTables = jest.fn();
+      const crossed = {
+        ...gamma({ columnSegments: [{ offset: 0.05, start: 1 }] }),
+      };
+      crossed.columnWidths = [
+        crossed.columnWidths[0],
+        { value: 0.04, confidence: 90, segments: [{ offset: 0.03, start: 1 }] },
+        crossed.columnWidths[2],
+      ];
+      await renderLoaded(gammaProps(crossed, { tool: 'columnJoin', onEditTables }));
+      const dividerTwoRowOne = screen
+        .getAllByTestId('column-hit-line')
+        .filter((piece) => piece.getAttribute('data-cell') === '1')[1];
+      fireEvent.mouseDown(dividerTwoRowOne, { clientX: 110, clientY: 75 });
+      fireEvent.mouseUp(window, { clientX: 110, clientY: 75 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.columnWidths[1].value).toBeCloseTo(0.04, 6);
+      expect(edited.columnWidths[1].segments).toEqual([
+        { offset: expect.closeTo(0.012, 6), start: 1 },
+      ]);
+    });
+  });
+
+  describe('the Rows tool on a staggered table', () => {
+    it('stops a whole-line drag at 90% of the band', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rows',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('row-hit-line', 0), { clientX: 20, clientY: 50 });
+      fireEvent.mouseMove(window, { clientX: 20, clientY: 100 });
+      fireEvent.mouseUp(window, { clientX: 20, clientY: 100 });
+
+      // The tightest cell is a staggered one: 0.07 to the bottom at 0.1 leaves 0.03.
+      const edited = editedGamma(onEditTables);
+      expect(edited.rowHeights).toHaveLength(2);
+      expect(edited.rowHeights[0].value).toBeCloseTo(0.05 + 0.9 * 0.03, 6);
+      expect(edited.rowHeights[0].segments).toEqual([
+        { offset: expect.closeTo(0.02, 6), start: 1 },
+      ]);
+    });
+
+    it('moves the whole line with the pointer when pressed on a displaced piece', async () => {
+      // The line sits at 0.05 with its second piece displaced to 0.07; pressing that piece
+      // and dragging up 5px must move the line up, not jump it to the pointer.
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rows',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('row-hit-line', 1), { clientX: 60, clientY: 70 });
+      fireEvent.mouseMove(window, { clientX: 60, clientY: 65 });
+      fireEvent.mouseUp(window, { clientX: 60, clientY: 65 });
+
+      const edited = editedGamma(onEditTables);
+      expect(edited.rowHeights[0].value).toBeCloseTo(0.045, 6);
+      expect(edited.rowHeights[0].segments).toEqual([
+        { offset: expect.closeTo(0.02, 6), start: 1 },
+      ]);
+    });
+
+    it('moves the whole line by the drag when pressed on the undisplaced piece', async () => {
+      const onEditTables = jest.fn();
+      await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rows',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(hitPiece('row-hit-line', 0), { clientX: 20, clientY: 52 });
+      fireEvent.mouseMove(window, { clientX: 20, clientY: 57 });
+      fireEvent.mouseUp(window, { clientX: 20, clientY: 57 });
+
+      expect(editedGamma(onEditTables).rowHeights[0].value).toBeCloseTo(0.055, 6);
+    });
+
+    it('refuses a new line where a staggered line intrudes on the band', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rows',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(container.querySelector('svg'), { clientX: 20, clientY: 60 });
+      fireEvent.mouseUp(window, { clientX: 20, clientY: 60 });
+
+      expect(onEditTables).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalledWith(noRoomForGridLineLabel());
+    });
+
+    it('adds a new line at the press where it fits', async () => {
+      const onEditTables = jest.fn();
+      const { container } = await renderLoaded(
+        gammaProps(gamma({ rowSegments: [{ offset: 0.02, start: 1 }] }), {
+          tool: 'rows',
+          onEditTables,
+        })
+      );
+      fireEvent.mouseDown(container.querySelector('svg'), { clientX: 20, clientY: 90 });
+      fireEvent.mouseUp(window, { clientX: 20, clientY: 90 });
+
+      expect(toast).not.toHaveBeenCalled();
+      expect(editedGamma(onEditTables).rowHeights.map((r) => r.value)).toEqual([
+        expect.closeTo(0.05, 6),
+        expect.closeTo(0.04, 6),
+        expect.closeTo(0.01, 6),
+      ]);
+    });
+  });
+
   describe('the Special tool', () => {
     it('Header: a click makes the clicked row the last header row', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
-        gridProps({ tool: 'special', specialTool: 'header', onEditTables })
+        gridProps({ tool: null, specialTool: 'header', onEditTables })
       );
       fireEvent.click(container.querySelector('svg'), {
         clientX: 25,
@@ -1108,7 +1513,7 @@ describe('StagedPageGridEditor', () => {
     it('Hide Row: a click hides the row, and a second click un-hides it', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
-        gridProps({ tool: 'special', specialTool: 'hideRow', onEditTables })
+        gridProps({ tool: null, specialTool: 'hideRow', onEditTables })
       );
       fireEvent.click(container.querySelector('svg'), {
         clientX: 25,
@@ -1127,7 +1532,7 @@ describe('StagedPageGridEditor', () => {
       const onEditAgain = jest.fn();
       const second = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'hideRow',
           metadataTables: [hidden, beta()],
           onEditTables: onEditAgain,
@@ -1143,7 +1548,7 @@ describe('StagedPageGridEditor', () => {
     it('Section Title Row: a drag names the nearest row with the placeholder column', async () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
-        gridProps({ tool: 'special', specialTool: 'sectionTitle', onEditTables })
+        gridProps({ tool: null, specialTool: 'sectionTitle', onEditTables })
       );
       const svg = container.querySelector('svg');
       // Drag inside row 1 (screen y 50..100), which is the row nearest the drawn centre.
@@ -1178,7 +1583,7 @@ describe('StagedPageGridEditor', () => {
       const onEditTables = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'sectionTitle',
           metadataTables: [withEntry, beta()],
           onEditTables,
@@ -1214,7 +1619,7 @@ describe('StagedPageGridEditor', () => {
 
     const mergedProps = (overrides = {}) =>
       gridProps({
-        tool: 'special',
+        tool: null,
         specialTool: 'merged',
         metadataTables: [texted(), beta()],
         ...overrides,
@@ -1338,7 +1743,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredRows',
           pendingSelection: null,
           onPendingSelectionChange,
@@ -1360,7 +1765,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredRows',
           pendingSelection: { kind: 'rows', rows: [1], columns: [], rect: null },
           onPendingSelectionChange,
@@ -1381,7 +1786,7 @@ describe('StagedPageGridEditor', () => {
     it('Coloured Rows: a pending row is drawn as a wash', async () => {
       await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredRows',
           pendingSelection: { kind: 'rows', rows: [1], columns: [], rect: null },
         })
@@ -1393,7 +1798,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredColumns',
           onPendingSelectionChange,
         })
@@ -1414,7 +1819,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredArea',
           onPendingSelectionChange,
         })
@@ -1437,7 +1842,7 @@ describe('StagedPageGridEditor', () => {
       const onColourSeed = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredRows',
           onColourSeed,
         })
@@ -1458,7 +1863,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredRows',
           colouredAreas: [{ left: 0, top: 0.05, width: 0.1, height: 0.05 }],
           onSelectColouredArea,
@@ -1482,7 +1887,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredCell',
           pendingSelection: null,
           onPendingSelectionChange,
@@ -1505,7 +1910,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredCell',
           pendingSelection: {
             kind: 'cell',
@@ -1534,7 +1939,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredCell',
           pendingSelection: {
             kind: 'cell',
@@ -1564,7 +1969,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredCell',
           colouredAreas: [{ left: 0, top: 0.05, width: 0.1, height: 0.05 }],
           onSelectColouredArea,
@@ -1584,7 +1989,7 @@ describe('StagedPageGridEditor', () => {
       const onPendingSelectionChange = jest.fn();
       const { container } = await renderLoaded(
         gridProps({
-          tool: 'special',
+          tool: null,
           specialTool: 'colouredRows',
           colourPickMode: 'foreground',
           onColourPicked,

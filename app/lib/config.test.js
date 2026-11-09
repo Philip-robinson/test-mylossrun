@@ -1,5 +1,4 @@
-import config from 'config';
-import * as configModule from 'config';
+import * as config from 'config';
 
 const isValidColour = (value) => {
   const el = document.createElement('div');
@@ -13,12 +12,10 @@ const namesCustomProperty = (value) => /^var\(--[a-z-]+\)$/.test(value);
 
 describe('overlay colour / width config', () => {
   it('gridLineColour() returns the live blue', () => {
-    expect(isValidColour(configModule.gridLineColour())).toBeTruthy();
     expect(isValidColour(config.gridLineColour())).toBeTruthy();
   });
 
   it('deletedGridLineColour() returns the deleted-preview grey', () => {
-    expect(isValidColour(configModule.deletedGridLineColour())).toBeTruthy();
     expect(isValidColour(config.deletedGridLineColour())).toBeTruthy();
   });
 });
@@ -28,30 +25,20 @@ describe('confidence threshold config', () => {
   // in, not the numbers themselves: both are percentages, and low has to sit below high
   // or the orange band between them disappears.
   it('are percentages, with low below high', () => {
-    for (const source of [configModule, config]) {
-      expect(source.lowConfidence()).toBeGreaterThan(0);
-      expect(source.highConfidence()).toBeLessThanOrEqual(100);
-      expect(source.lowConfidence()).toBeLessThan(source.highConfidence());
-    }
-  });
-
-  it('reads the same on both import paths', () => {
-    expect(config.highConfidence()).toBe(configModule.highConfidence());
-    expect(config.lowConfidence()).toBe(configModule.lowConfidence());
+    expect(config.lowConfidence()).toBeGreaterThan(0);
+    expect(config.highConfidence()).toBeLessThanOrEqual(100);
+    expect(config.lowConfidence()).toBeLessThan(config.highConfidence());
   });
 });
 
 describe('staged grid editor config', () => {
-  it('baseImageWidthPx() is a positive number exposed on both import paths', () => {
+  it('baseImageWidthPx() is a positive number', () => {
     // Assert the contract, not the tuned literal, so a value change here does not break tests.
-    expect(typeof configModule.baseImageWidthPx()).toBe('number');
-    expect(configModule.baseImageWidthPx()).toBeGreaterThan(0);
-    expect(config.baseImageWidthPx()).toBe(configModule.baseImageWidthPx());
+    expect(typeof config.baseImageWidthPx()).toBe('number');
+    expect(config.baseImageWidthPx()).toBeGreaterThan(0);
   });
 
   it('scaleDebounceMs() returns 400', () => {
-    expect(configModule.scaleDebounceMs()).toBeGreaterThan(200);
-    expect(configModule.scaleDebounceMs()).toBeLessThan(800);
     expect(config.scaleDebounceMs()).toBeGreaterThan(200);
     expect(config.scaleDebounceMs()).toBeLessThan(800);
   });
@@ -59,52 +46,35 @@ describe('staged grid editor config', () => {
 
 describe('layer colour config', () => {
   it('layerBorderColour() names the border custom property', () => {
-    expect(namesCustomProperty(configModule.layerBorderColour())).toBe(true);
-    expect(config.layerBorderColour()).toBe(configModule.layerBorderColour());
+    expect(namesCustomProperty(config.layerBorderColour())).toBe(true);
   });
 
   it('layerRowsColour() names the rows custom property', () => {
-    expect(namesCustomProperty(configModule.layerRowsColour())).toBe(true);
-    expect(config.layerRowsColour()).toBe(configModule.layerRowsColour());
+    expect(namesCustomProperty(config.layerRowsColour())).toBe(true);
   });
 
   it('layerColumnsColour() names the columns custom property', () => {
-    expect(namesCustomProperty(configModule.layerColumnsColour())).toBe(true);
-    expect(config.layerColumnsColour()).toBe(configModule.layerColumnsColour());
+    expect(namesCustomProperty(config.layerColumnsColour())).toBe(true);
   });
 
   it('layerSpecialCellsColour() names the special custom property', () => {
-    expect(namesCustomProperty(configModule.layerSpecialCellsColour())).toBe(true);
-    expect(config.layerSpecialCellsColour()).toBe(configModule.layerSpecialCellsColour());
+    expect(namesCustomProperty(config.layerSpecialCellsColour())).toBe(true);
   });
 
   it('layerColoursColour() names the colours custom property', () => {
-    expect(namesCustomProperty(configModule.layerColoursColour())).toBe(true);
-    expect(config.layerColoursColour()).toBe(configModule.layerColoursColour());
-  });
-
-  it('selectedRowHighlight() returns the 50% orange', () => {
-    expect(isValidColour(configModule.selectedRowHighlight())).toBeTruthy();
-    expect(isValidColour(config.selectedRowHighlight())).toBeTruthy();
-  });
-
-  it('selectedColumnHighlight() returns the 50% purple', () => {
-    expect(isValidColour(configModule.selectedColumnHighlight())).toBeTruthy();
-    expect(isValidColour(config.selectedColumnHighlight())).toBeTruthy();
+    expect(namesCustomProperty(config.layerColoursColour())).toBe(true);
   });
 
   it('selectedColouredAreaHighlight() returns the 50% brown', () => {
-    expect(isValidColour(configModule.selectedColouredAreaHighlight())).toBeTruthy();
     expect(isValidColour(config.selectedColouredAreaHighlight())).toBeTruthy();
   });
 
   it('sectionTitleMarkerColour() returns the section-title green', () => {
-    expect(isValidColour(configModule.sectionTitleMarkerColour())).toBeTruthy();
     expect(isValidColour(config.sectionTitleMarkerColour())).toBeTruthy();
   });
 
   it('sectionTitleMarkerDash() returns the dotted stroke dash array', () => {
-    const pair = configModule.sectionTitleMarkerDash().split(" ");
+    const pair = config.sectionTitleMarkerDash().split(" ");
     expect(pair.length).toBe(2);
     expect(parseInt(pair[0])).toBeGreaterThan(0);
     expect(parseInt(pair[0])).toBeLessThan(20);
@@ -113,7 +83,6 @@ describe('layer colour config', () => {
   });
 
   it('selectedSectionTitleHighlight() returns the 50% green', () => {
-    expect(isValidColour(configModule.selectedSectionTitleHighlight())).toBeTruthy();
     expect(isValidColour(config.selectedSectionTitleHighlight())).toBeTruthy();
   });
 });
@@ -122,59 +91,103 @@ describe('merged cell config', () => {
   // A share of a grid square, so what is asserted is the range it has to stay in: at or
   // below 0 every square the drawn rectangle touches at all would join the block, and at
   // or above 1 only a square covered edge to edge ever would.
-  it('mergeCoverageFraction() is a fraction of a square, on both import paths', () => {
-    for (const source of [configModule, config]) {
-      expect(source.mergeCoverageFraction()).toBeGreaterThan(0);
-      expect(source.mergeCoverageFraction()).toBeLessThan(1);
-    }
+  it('mergeCoverageFraction() is a fraction of a square', () => {
+    expect(config.mergeCoverageFraction()).toBeGreaterThan(0);
+    expect(config.mergeCoverageFraction()).toBeLessThan(1);
   });
 });
 
 describe('split row wave config', () => {
-  it('splitRowWaveHeightPx(), splitRowWavePitchPx() and reviewSplitRowWaveStrokeWidthPx() are positive, on both import paths', () => {
-    for (const source of [configModule, config]) {
-      expect(source.splitRowWaveHeightPx()).toBeGreaterThan(0);
-      expect(source.splitRowWavePitchPx()).toBeGreaterThan(0);
-      expect(source.reviewSplitRowWaveStrokeWidthPx()).toBeGreaterThan(0);
-    }
+  it('splitRowWaveHeightPx(), splitRowWavePitchPx() and reviewSplitRowWaveStrokeWidthPx() are positive', () => {
+    expect(config.splitRowWaveHeightPx()).toBeGreaterThan(0);
+    expect(config.splitRowWavePitchPx()).toBeGreaterThan(0);
+    expect(config.reviewSplitRowWaveStrokeWidthPx()).toBeGreaterThan(0);
   });
 
   it('reviewSplitRowWaveColour() is a colour distinct from the review cell border', () => {
-    for (const source of [configModule, config]) {
-      expect(isValidColour(source.reviewSplitRowWaveColour())).toBeTruthy();
-      expect(source.reviewSplitRowWaveColour()).not.toEqual(source.reviewCellBorderColour());
-    }
+    expect(isValidColour(config.reviewSplitRowWaveColour())).toBeTruthy();
+    expect(config.reviewSplitRowWaveColour()).not.toEqual(config.reviewCellBorderColour());
   });
 });
 
 describe('grid editor wavy border config', () => {
-  it('linkCellWaveHeightPx(), linkCellWavePitchPx() and linkCellBorderWidthPx() are positive, on both import paths', () => {
-    for (const source of [configModule, config]) {
-      expect(source.linkCellWaveHeightPx()).toBeGreaterThan(0);
-      expect(source.linkCellWavePitchPx()).toBeGreaterThan(0);
-      expect(source.linkCellBorderWidthPx()).toBeGreaterThan(0);
-    }
+  it('linkCellWaveHeightPx(), linkCellWavePitchPx() and linkCellBorderWidthPx() are positive', () => {
+    expect(config.linkCellWaveHeightPx()).toBeGreaterThan(0);
+    expect(config.linkCellWavePitchPx()).toBeGreaterThan(0);
+    expect(config.linkCellBorderWidthPx()).toBeGreaterThan(0);
   });
 });
 
 describe('review font scale config', () => {
-  it('reviewDefaultFontScalePercent() is one of the offered options, on both import paths', () => {
-    for (const source of [configModule, config]) {
-      expect(source.reviewFontScalePercentOptions()).toContain(
-        source.reviewDefaultFontScalePercent()
-      );
-    }
+  it('reviewDefaultFontScalePercent() is one of the offered options', () => {
+    expect(config.reviewFontScalePercentOptions()).toContain(
+      config.reviewDefaultFontScalePercent()
+    );
   });
 });
 
 describe('cut line config', () => {
-  it('cutLineWidthPx() is positive and cutLineDash() is two positive numbers, on both import paths', () => {
-    for (const source of [configModule, config]) {
-      expect(source.cutLineWidthPx()).toBeGreaterThan(0);
-      const pair = source.cutLineDash().split(' ');
-      expect(pair.length).toBe(2);
-      expect(Number(pair[0])).toBeGreaterThan(0);
-      expect(Number(pair[1])).toBeGreaterThan(0);
+  it('cutLineWidthPx() is positive and cutLineDash() is two positive numbers', () => {
+    expect(config.cutLineWidthPx()).toBeGreaterThan(0);
+    const pair = config.cutLineDash().split(' ');
+    expect(pair.length).toBe(2);
+    expect(Number(pair[0])).toBeGreaterThan(0);
+    expect(Number(pair[1])).toBeGreaterThan(0);
+  });
+});
+
+describe('grid line segment config', () => {
+  it('gridLineOffsetEpsilon() is above 0 and below 0.001', () => {
+    expect(config.gridLineOffsetEpsilon()).toBeGreaterThan(0);
+    expect(config.gridLineOffsetEpsilon()).toBeLessThan(0.001);
+  });
+
+  it('gridLineMoveLimitFraction() is above 0 and below 1', () => {
+    expect(config.gridLineMoveLimitFraction()).toBeGreaterThan(0);
+    expect(config.gridLineMoveLimitFraction()).toBeLessThan(1);
+  });
+});
+
+describe('cell image config', () => {
+  it('cellImageMarginFraction() is between 0 and 1', () => {
+    expect(config.cellImageMarginFraction()).toBeGreaterThan(0);
+    expect(config.cellImageMarginFraction()).toBeLessThan(1);
+  });
+
+  it('cellImageMarginMinPx() is above 0 and not above cellImageMarginMaxPx()', () => {
+    expect(config.cellImageMarginMinPx()).toBeGreaterThan(0);
+    expect(config.cellImageMarginMinPx()).toBeLessThanOrEqual(config.cellImageMarginMaxPx());
+  });
+
+  it('cellImageDefaultPageAspect() and cellImageGridLineStrokeWidth() are above 0', () => {
+    expect(config.cellImageDefaultPageAspect()).toBeGreaterThan(0);
+    expect(config.cellImageGridLineStrokeWidth()).toBeGreaterThan(0);
+  });
+});
+
+describe('baseUrl', () => {
+  const saved = process.env.MYLOSSRUN_BASE_URL;
+
+  afterEach(() => {
+    if (saved === undefined) {
+      delete process.env.MYLOSSRUN_BASE_URL;
+    } else {
+      process.env.MYLOSSRUN_BASE_URL = saved;
     }
+  });
+
+  it('returns MYLOSSRUN_BASE_URL', () => {
+    process.env.MYLOSSRUN_BASE_URL = 'https://api.example.com';
+    expect(config.baseUrl()).toBe('https://api.example.com');
+  });
+
+  it('throws when MYLOSSRUN_BASE_URL is not set', () => {
+    delete process.env.MYLOSSRUN_BASE_URL;
+    expect(() => config.baseUrl()).toThrow('MYLOSSRUN_BASE_URL is not set');
+  });
+
+  it('throws when MYLOSSRUN_BASE_URL is empty', () => {
+    process.env.MYLOSSRUN_BASE_URL = '';
+    expect(() => config.baseUrl()).toThrow('MYLOSSRUN_BASE_URL is not set');
   });
 });

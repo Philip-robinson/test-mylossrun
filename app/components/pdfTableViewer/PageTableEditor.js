@@ -8,7 +8,7 @@ import StagedPageGridEditor from 'components/pdfTableViewer/StagedPageGridEditor
 import LayersPanel from 'components/pdfTableViewer/LayersPanel';
 import EditorScaleSelector from 'components/pdfTableViewer/EditorScaleSelector';
 import DimDocumentToggle from 'components/pdfTableViewer/DimDocumentToggle';
-import GridToolRail from 'components/pdfTableViewer/GridToolRail';
+import GridToolbar from 'components/pdfTableViewer/GridToolbar';
 import DeleteAllTablesDialog from 'components/pdfTableViewer/DeleteAllTablesDialog';
 import {
   metadataTablesToOverlay,
@@ -167,7 +167,7 @@ export default function PageTableEditor({
     special: true,
     colours: true,
   });
-  // The armed grid tool and, for the Special tool, its armed entry.
+  // The armed line tool and the armed Special entry; at most one of them is non-null.
   const [tool, setTool] = useState(null);
   const [specialTool, setSpecialTool] = useState(null);
   // The coloured-area tools' draft: which rows / columns / rectangle are picked but not yet
@@ -177,9 +177,6 @@ export default function PageTableEditor({
     foreground: null,
     background: null,
   });
-  // The selected internal grid line reported up by StagedPageGridEditor, or null. Drives the
-  // enable/disable state of the Rows/Columns Options buttons.
-  const [selectedLine, setSelectedLine] = useState(null);
   // The selected section-title row's `tableRow` reported up by StagedPageGridEditor, or null.
   // Drives the Special Cells "Delete Section Title Row" button and the "Column name" combo.
   const [selectedSectionRow, setSelectedSectionRow] = useState(null);
@@ -471,7 +468,6 @@ export default function PageTableEditor({
     pageEdgeSelectionRef.current = null;
     const table = edge === 'first' ? ordered[0] : ordered[ordered.length - 1];
     onSelectTable(table.tableId);
-    setSelectedLine(null);
     setSelectedSectionRow(null);
     setSelectedColouredIndex(null);
     setPendingSelection(null);
@@ -945,7 +941,6 @@ export default function PageTableEditor({
     (table) => {
       leaveFor(() => {
         onSelectTable(table.tableId);
-        setSelectedLine(null);
         setSelectedSectionRow(null);
         setSelectedColouredIndex(null);
         setPendingSelection(null);
@@ -1028,21 +1023,19 @@ export default function PageTableEditor({
     setLayerVisibility((current) => ({ ...current, [key]: !current[key] }));
   }, []);
 
-  // Arm a grid tool, or disarm it when it is already armed. Only one is ever armed, and
-  // disarming the Special tool takes its armed entry with it.
+  // Arm a line tool, or disarm it when it is already armed. The tool-bar is one radio
+  // group, so any armed Special entry is disarmed.
   const handleSelectTool = useCallback((key) => {
-    setTool((current) => {
-      const next = current === key ? null : key;
-      if (next !== 'special') setSpecialTool(null);
-      return next;
-    });
+    setTool((current) => (current === key ? null : key));
+    setSpecialTool(null);
   }, []);
 
-  // Arm one of the Special tool's entries, or disarm it when it is already armed. Whatever
-  // the previous entry was accumulating is dropped: a half-finished coloured-row selection
-  // must not be submittable from another entry.
+  // Arm a Special entry, or disarm it when it is already armed, disarming any line tool.
+  // Whatever the previous entry was accumulating is dropped: a half-finished coloured-row
+  // selection must not be submittable from another entry.
   const handleSelectSpecialTool = useCallback((key) => {
     setSpecialTool((current) => (current === key ? null : key));
+    setTool(null);
     setPendingSelection(null);
     setSelectedColouredIndex(null);
     setColourPickMode(null);
@@ -1085,7 +1078,6 @@ export default function PageTableEditor({
       setEditorMode('border');
       setTool(null);
       setSpecialTool(null);
-      setSelectedLine(null);
       setSelectedSectionRow(null);
       setSelectedColouredIndex(null);
       setPendingSelection(null);
@@ -1180,7 +1172,7 @@ export default function PageTableEditor({
 
         <Box sx={{ flex: 1, minHeight: 0, display: 'flex' }}>
           {editorMode === 'grid' ? (
-            <GridToolRail
+            <GridToolbar
               tool={tool}
               specialTool={specialTool}
               onSelectTool={handleSelectTool}
@@ -1234,7 +1226,6 @@ export default function PageTableEditor({
                   onToggleLinking={onToggleLinking}
                   onRequestCreate={registerCreate}
                   onRequestDelete={registerDelete}
-                  onSelectedLineChange={setSelectedLine}
                   onSelectedSectionRowChange={setSelectedSectionRow}
                   cutLines={cutting ? cut.lines : null}
                   onCutLinesChange={handleCutLinesChange}
@@ -1273,7 +1264,6 @@ export default function PageTableEditor({
             editorMode={editorMode}
             layerVisibility={layerVisibility}
             onToggleLayer={handleToggleLayer}
-            tool={tool}
             specialTool={specialTool}
             selectedTable={selectedTable}
             samePageTables={samePageTables}

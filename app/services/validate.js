@@ -1,13 +1,24 @@
+import { validatePath } from 'config';
+import { backendUrl, readEnvelopeData } from './backend';
+
 export async function validate(accessCode, email) {
-  const response = await fetch('/api/validate-access-code', {
+  if (!accessCode) {
+    throw new Error('Access code is required');
+  }
+
+  const response = await fetch(backendUrl(validatePath()), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ access_code: accessCode, email: email || null }),
+    cache: 'no-store',
+    body: JSON.stringify({
+      access_code: accessCode.trim(),
+      email: email ? email.trim() : null,
+    }),
   });
 
   if (!response.ok) {
     throw new Error(`validate-access-code request failed (${response.status})`);
   }
 
-  return await response.json();
+  return await readEnvelopeData(response);
 }

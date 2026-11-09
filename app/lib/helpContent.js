@@ -47,10 +47,13 @@ import {
   editorPageTitleHelpId,
   editorScaleHelpId,
   exportDocumentLabel,
+  gridToolColumnJoinHelpId,
+  gridToolColumnSplitHelpId,
   gridToolColumnsHelpId,
   gridToolRailHelpId,
+  gridToolRowJoinHelpId,
+  gridToolRowSplitHelpId,
   gridToolRowsHelpId,
-  gridToolSpecialHelpId,
   includeDeletedHelpId,
   layersNextHelpId,
   layersColoursHelpId,
@@ -642,7 +645,7 @@ export function helpScreens() {
       ],
     },
     [contentsPassScreenId()]: {
-      version: 17,
+      version: 18,
       name: 'Validate Tables',
       summary: [
         'This pass is about the inside of one table — its rows, ',
@@ -670,8 +673,12 @@ export function helpScreens() {
           helpId: gridToolRailHelpId(),
           title: 'Edit mode buttons',
           body: [
-            'This allows the edit mode to be set by clicking on the buttons. ',
-            'Only one is available at a time, and clicking the selected one de-selects it.',
+            'This column of buttons sets the edit mode, and scrolls when the window is too short to show it all. ',
+            'The buttons below the ',
+            { bold: 'Special' },
+            ' title set the special edit modes. ',
+            'Only one button in the whole column is selected at a time, ',
+            'and clicking the selected one de-selects it.',
           ],
         },
         {
@@ -685,7 +692,38 @@ export function helpScreens() {
                 ['Clicking within a table boundary where there is no horizontal ',
                  'grid line creates one.'],
                 'Clicking on a horizontal grid line deletes it.',
-                'Horizontal and vertical grid lines can be dragged.',
+                'Horizontal grid lines can be dragged.',
+              ],
+            },
+          ],
+          side: "right"
+        },
+        {
+          helpId: gridToolRowSplitHelpId(),
+          title: 'Row Split button',
+          body: [
+            'Clicking this sets row split mode, clicking again clears it.',
+            'When in row split mode:',
+            {
+              list: [
+                'Dragging part of a horizontal grid line moves just that part, making the line staggered.',
+                'Pressing inside a part splits it there, and only the part from that point on moves.',
+                'A part moves at most 90% of the way into the neighbouring row.',
+                'Grid lines cannot be added or deleted.',
+              ],
+            },
+          ],
+          side: "right"
+        },
+        {
+          helpId: gridToolRowJoinHelpId(),
+          title: 'Row Join button',
+          body: [
+            'Clicking this sets row join mode, clicking again clears it.',
+            'When in row join mode:',
+            {
+              list: [
+                'Clicking a staggered horizontal grid line straightens it to where its first cell has it.',
               ],
             },
           ],
@@ -701,22 +739,38 @@ export function helpScreens() {
               list: [
                 'Clicking within a table boundary where there is no vertical grid line creates one.',
                 'Clicking on a vertical grid line deletes it.',
-                'Horizontal and vertical grid lines can be dragged.',
+                'Vertical grid lines can be dragged.',
               ],
             },
           ],
           side: "right"
         },
         {
-          helpId: gridToolSpecialHelpId(),
-          title: 'Edit Special areas button',
+          helpId: gridToolColumnSplitHelpId(),
+          title: 'Column Split button',
           body: [
-            'Clicking this sets special edit mode, clicking again clears it.',
-            'When in special edit mode:',
+            'Clicking this sets column split mode, clicking again clears it.',
+            'When in column split mode:',
             {
               list: [
-                'Horizontal and vertical grid line dragging is disabled.',
-                'A separate list of special edit mode buttons is displayed.',
+                'Dragging part of a vertical grid line moves just that part, making the line staggered.',
+                'Pressing inside a part splits it there, and only the part from that point on moves.',
+                'A part moves at most 90% of the way into the neighbouring column.',
+                'Grid lines cannot be added or deleted.',
+              ],
+            },
+          ],
+          side: "right"
+        },
+        {
+          helpId: gridToolColumnJoinHelpId(),
+          title: 'Column Join button',
+          body: [
+            'Clicking this sets column join mode, clicking again clears it.',
+            'When in column join mode:',
+            {
+              list: [
+                'Clicking a staggered vertical grid line straightens it to where its first cell has it.',
               ],
             },
           ],
@@ -1121,7 +1175,7 @@ export function helpScreens() {
       ],
     },
     [reviewTableScreenId()]: {
-      version: 8,
+      version: 9,
       name: 'Extraction review',
       summary: emphasiseLowQualityCells()?[
         'This is the data that will be written out to the workbook. Every cell is editable — ',
@@ -1205,7 +1259,8 @@ export function helpScreens() {
           title: 'Raw Image',
           body: [
             'This is the image of this cell in the original document so you can see ',
-            'what it originally said.',
+            'what it originally said. A margin of the page around the cell is shown ',
+            "dimmed, and the table's grid lines are drawn over it.",
           ],
         },
         {

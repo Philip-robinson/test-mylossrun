@@ -34,11 +34,14 @@ import { uncoveredCells } from 'components/pdfTableViewer/tableSupportUtils';
 // None of those can be corrected on the review screen, so none of them may be counted —
 // the same reason the title is conditional.
 //
-// Section-title rows are dropped on the same principle and for the same reason: the merge
-// skips such a row entirely, carrying only its section-title value into the placeholder
-// column, so every other cell along that row is invisible to the reviewer. This is not a
-// judgement about whether those cells matter — see the note in IMPLEMENTATION.md — only
-// about whether the review screen can do anything about them.
+// Section-title rows are dropped on the same principle and for the same reason: a
+// section-title row emits no row of its own, carrying only its section-title value into
+// the placeholder column, so a cell confined to such rows is invisible to the reviewer.
+// This is not a judgement about whether those cells matter — see the note in
+// IMPLEMENTATION.md — only about whether the review screen can do anything about them. A
+// cell rooted on a section-title row still reaches the merged grid when its span reaches a
+// row that is not a section-title row, and is then drawn at that first row;
+// `_anchored_cells` in the back end's `table_extraction.py` is the same rule.
 //
 // The title is conditional because the review screen shows the ROOT's title and no other:
 // the merged table carries one `AmalgamatedTitle`, built from the root. A member's own
@@ -53,9 +56,10 @@ import { uncoveredCells } from 'components/pdfTableViewer/tableSupportUtils';
 // review screen. Counting one would hold its table out of "Ready for Export" for ever with
 // nothing on screen to fix. Only the cells no OTHER cell's span covers are gathered.
 
-// The rows the merged grid takes no cells from: every row named by a section title, whose
-// row the merge skips whole — only the carried value travels — so nothing else along it is
-// ever drawn. `_data_row_indexes` in the back end is the same rule.
+// The rows the merged grid emits no row for: every row named by a section title — only
+// the carried value travels. A cell rooted on one still reaches the merged grid when its
+// span reaches a row that is not one, and is drawn at that first row; `_anchored_cells` in
+// the back end's `table_extraction.py` is the same rule.
 const sectionTitleRows = (table) =>
   new Set(
     (table?.sectionTitles ?? [])
@@ -63,14 +67,28 @@ const sectionTitleRows = (table) =>
       .filter((row) => typeof row === 'number')
   );
 
+const rowCount = (table) =>
+  (table?.rowHeights ?? []).length ||
+  (table?.cells ?? []).reduce(
+    (most, cell) => Math.max(most, (cell?.row ?? 0) + (cell?.rowSpan ?? 1)),
+    0
+  );
+
+// The rows a cell's span covers, clamped to its table.
+const extentRows = (cell, table) => {
+  const row = cell?.row ?? 0;
+  const end = Math.min(row + (cell?.rowSpan ?? 1), rowCount(table));
+  return Array.from({ length: Math.max(end - row, 0) }, (_, offset) => row + offset);
+};
+
 // Whether one cell of `table` reaches the merged grid, and so is a value the reviewer can
 // see and correct. A cell in the table's own header block travels only while the merged
-// grid's header block is still that deep; below it, a cell travels unless its row is a
-// section title's.
+// grid's header block is still that deep; below it, a cell travels when any row of its
+// span is not a section title's.
 const reachesTheGrid = (cell, table, headerRowsShown, skippedRows) => {
   const row = cell?.row ?? 0;
   if (row < (table?.headerCount ?? 0)) return row < headerRowsShown;
-  return !skippedRows.has(row);
+  return extentRows(cell, table).some((extentRow) => !skippedRows.has(extentRow));
 };
 
 const correctableValues = (
@@ -108,13 +126,6 @@ const spineTables = (root) => {
     .map((gridRow, index) => (index === 0 ? root : root?.next?.[gridRow?.[0]]))
     .filter(Boolean);
 };
-
-const rowCount = (table) =>
-  (table?.rowHeights ?? []).length ||
-  (table?.cells ?? []).reduce(
-    (most, cell) => Math.max(most, (cell?.row ?? 0) + (cell?.rowSpan ?? 1)),
-    0
-  );
 
 // The section titles of one table that carry a value into a column of the merged grid, by
 // the row they sit on. A section title with no column name carries nothing — that is the

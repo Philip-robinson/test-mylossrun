@@ -10,9 +10,17 @@ import { tableNameLabelHelpId } from 'config';
 // `left` and `top` are CSS lengths naming that corner. The colour is a var(--…) value, which
 // jsdom drops from an inline style, so which colour was taken is also carried as a data
 // attribute.
-export default function TableNameSizeLabel({ table, left, top, colour, colourName }) {
+export default function TableNameSizeLabel({
+  table,
+  left,
+  top,
+  colour,
+  colourName,
+  labelRef,
+}) {
   return (
     <Box
+      ref={labelRef}
       data-testid={'selected-label'}
       data-help-id={tableNameLabelHelpId()}
       data-tableid={table.tableId}

@@ -1,17 +1,25 @@
 import { excelFilename, exportableTableIds, saveBlob } from 'components/pdfTableViewer/exportUtils';
+import { originalPdfPath } from 'config';
 import { authHeaders } from './authHeaders';
+import { backendUrl, readEnvelopeData } from './backend';
 import { getMetadata, tableToExcel } from './images';
 
-// Fetch the document's uploaded PDF and save it under the document's name.
+// Fetch the document's uploaded PDF from its presigned URL and save it under the document's name.
 export async function downloadOriginalPdf(pdf) {
-  const response = await fetch(`/api/original-pdf/${encodeURIComponent(pdf.pdfId)}`, {
+  const response = await fetch(backendUrl(`${originalPdfPath()}/${encodeURIComponent(pdf.pdfId)}`), {
     method: 'GET',
     headers: authHeaders(),
+    cache: 'no-store',
   });
   if (!response.ok) {
     throw new Error(`downloadOriginalPdf failed: ${response.status}`);
   }
-  saveBlob(await response.blob(), pdf.name);
+  const { downloadUrl } = await readEnvelopeData(response);
+  const file = await fetch(downloadUrl, { cache: 'no-store' });
+  if (!file.ok) {
+    throw new Error(`Original PDF download failed: ${file.status}`);
+  }
+  saveBlob(await file.blob(), pdf.name);
 }
 
 // The editor's export without its save: builds one workbook of the document's live tables

@@ -17,10 +17,10 @@
 // `onRequestImage` and renders whatever `image` it is handed, which keeps one cache in
 // the panel rather than one per short-lived dialog.
 //
-// `image` is a PAIR — `{ raw, processed }` — mirroring the one response the panel caches,
-// but only `raw`, the untouched crop, is displayed. Either member can be absent, so the
-// crop is rendered defensively: the image is a convenience, and nothing about it is worth
-// taking the dialog down for.
+// `image` is `{ raw, bounds }`: the crop of the cell enlarged by a margin, and the
+// page-fraction rectangle it covers. It is shown with the surroundings dimmed and the
+// source table's grid lines drawn over it. A missing `raw` leaves the image area empty:
+// the image is a convenience, and nothing about it is worth taking the dialog down for.
 //
 // The dialog registers no help screen of its own: it is part of the review screen, so
 // the crop, the three buttons and the confidence carry `data-help-id`s that the review
@@ -41,12 +41,17 @@ import CloseIcon from '@mui/icons-material/Close';
 import CheckIcon from '@mui/icons-material/Check';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import RoundIconButton from 'components/pdfTableViewer/RoundIconButton';
+import CellImageWithOverlay from 'components/pdfTableViewer/CellImageWithOverlay';
+import { enlargedCellImageBounds } from 'components/pdfTableViewer/cellImageUtils';
+import { cellSquares } from 'components/pdfTableViewer/tableSupportUtils';
 import {
   cellSourceKey,
   dialogPlacement,
   draggedPosition,
   findSourceTable,
   findSourceValue,
+  isSectionTitleCell,
+  isTitleCell,
 } from 'components/pdfTableViewer/reviewEditUtils';
 import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 import {
@@ -70,6 +75,7 @@ export default function CellEditDialog({
   tables,
   reviewedTableId,
   anchorRect,
+  pages = [],
   image,
   onRequestImage,
   onCancel,
@@ -127,24 +133,32 @@ export default function CellEditDialog({
   useEffect(() => {
     if (key === null || image !== undefined) return;
     if (!sourceValue) return;
-    const { left, top, width, height: boundsHeight } = sourceValue.bounds;
+    const page = pages.find((p) => p.page === sourceTable.pdfPage);
+    const enlarged = enlargedCellImageBounds(
+      sourceValue.bounds,
+      Math.round(anchorRect.width),
+      page ? page.height / page.width : undefined
+    );
     onRequestImage({
       key,
       page: sourceTable.pdfPage,
-      bounds: { left, top, width, height: boundsHeight },
-      // The crop is asked for at the width the CELL occupies on screen, so it comes
-      // back at the scale the user is already reading the table at. A fixed width
-      // magnified a narrow column and shrank a wide one, neither matching what is
-      // being compared against it.
-      width: Math.round(anchorRect.width),
+      bounds: enlarged.bounds,
+      // The width that shows the cell itself at the width it occupies on screen.
+      width: enlarged.width,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, image]);
 
-  // The untouched crop, which is the only one shown. Read through the optional chain
-  // because the pair is undefined until the panel answers; a response that carried no raw
-  // member leaves the image area empty rather than falling back to the processed one.
+  // Read through the optional chain because the image is undefined until the panel answers.
   const shownImage = image?.raw;
+  // The rectangles left undimmed: a title or section title's own bounds, else the cell's
+  // grid squares.
+  const squares =
+    shownImage && sourceValue
+      ? isTitleCell(cell) || isSectionTitleCell(cell)
+        ? [sourceValue.bounds]
+        : cellSquares(sourceTable, sourceValue)
+      : null;
 
   // Waiting means a request went out and has not been answered. The panel records `null`
   // at the key when the fetch failed, which IS an answer — so a failure shows an empty
@@ -257,9 +271,8 @@ export default function CellEditDialog({
                 minHeight: cellEditImageLoadingHeightPx(),
               }
             : { display: 'block' }),
-          // The crop was requested at the cell's own width, so it arrives about the
-          // size it should be shown at — but a cell wider than the dialog, or a tall
-          // one, still has to be contained. Width is handled by scaling the image
+          // The crop was requested so the cell itself shows at its own on-screen width
+          // — but a crop wider than the dialog, or a tall one, still has to be contained. Width is handled by scaling the image
           // down; height by scrolling, because scaling a tall crop to fit would shrink
           // it past reading.
           maxHeight: maxCellEditorImageHeight(),
@@ -272,22 +285,12 @@ export default function CellEditDialog({
             size={cellEditImageSpinnerSizePx()}
           />
         )}
-        {shownImage && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            data-testid={'cell-edit-image'}
-            src={`data:image/png;base64,${shownImage}`}
-            alt={''}
-            // The only constraint is on width: `max-width: 100%` scales a crop too wide
-            // for the dialog down to fit, and `height: auto` makes the height follow so
-            // the proportions hold. A crop that is then still too tall overflows and the
-            // area above scrolls. `margin: 0 auto` centres it.
-            style={{
-              display: 'block',
-              margin: '0 auto',
-              maxWidth: '100%',
-              height: 'auto',
-            }}
+        {shownImage && image.bounds && (
+          <CellImageWithOverlay
+            image={shownImage}
+            bounds={image.bounds}
+            table={sourceTable}
+            squares={squares}
           />
         )}
       </Box>

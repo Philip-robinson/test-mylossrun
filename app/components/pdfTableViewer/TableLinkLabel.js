@@ -27,10 +27,12 @@ export default function TableLinkLabel({
   text,
   onClick,
   interactive = true,
+  labelRef,
 }) {
   const inert = !interactive;
   return (
     <Box
+      ref={labelRef}
       data-testid={'link-label'}
       data-help-id={tableLinkLabelHelpId()}
       data-tableid={table.tableId}

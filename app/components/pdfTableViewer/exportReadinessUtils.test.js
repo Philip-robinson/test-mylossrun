@@ -535,6 +535,46 @@ describe('isExportReady', () => {
     expect(isExportReady(root, HIGH, READY)).toBe(true);
   });
 
+  // A merged cell rooted on a section-title row is still drawn, at the first row of its span
+  // that is not one, so its own reading counts.
+  it('counts a merged root on a hidden row whose span reaches a data row', () => {
+    const root = readyTable({
+      headerCount: 1,
+      sectionTitles: [
+        { tableRow: 2, delete: true, columnName: null, data: null },
+      ],
+      cells: [cell(1, 0, 99), { ...cell(2, 0, 11), rowSpan: 2 }, cell(3, 0, 99)],
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(false);
+    const low = lowConfidenceValues(root, HIGH);
+    expect(low).toHaveLength(1);
+    expect(low[0].row).toBe(2);
+  });
+
+  it('counts a merged root on a titled section row whose span reaches a data row', () => {
+    const root = readyTable({
+      headerCount: 1,
+      sectionTitles: [{ tableRow: 2, columnName: 'X', data: { text: 'A', confidence: 99 } }],
+      cells: [cell(1, 0, 99), { ...cell(2, 0, 11), rowSpan: 2 }, cell(3, 0, 99)],
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(false);
+  });
+
+  it('ignores a merged root whose every row is a section title row', () => {
+    const root = readyTable({
+      headerCount: 1,
+      sectionTitles: [
+        { tableRow: 2, delete: true, columnName: null, data: null },
+        { tableRow: 3, delete: true, columnName: null, data: null },
+      ],
+      cells: [cell(1, 0, 99), { ...cell(2, 0, 11), rowSpan: 2 }, cell(4, 0, 99)],
+    });
+
+    expect(isExportReady(root, HIGH, READY)).toBe(true);
+  });
+
   // The back end keys its source cells by first position, so the positions a merged cell's
   // span covers stay blank in the merged grid and never reach the review screen. A poor
   // reading at one of them is drawn nowhere the reviewer could correct it.

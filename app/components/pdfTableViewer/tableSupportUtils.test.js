@@ -5,7 +5,9 @@ import {
   buildCalcCellsRequestTable,
   buildCalcReplacement,
   cellBlockFromRect,
+  cellSquares,
   clampToUnitPage,
+  partialCellSquares,
   buildCalcHint,
   buildRecalcHint,
   changedColouredAreaRects,
@@ -58,7 +60,12 @@ import {
   nearestTableToPoint,
   overviewEntryTableId,
   pointFractionInRect,
+  identityMap,
+  mergeCells,
+  resizeBoundary,
+  splitEntry,
 } from 'components/pdfTableViewer/tableSupportUtils';
+import { dividerPositionAt } from 'components/pdfTableViewer/gridLineSegmentUtils';
 
 // A metadata table whose bounds already equal its column/row sums, so the idempotent
 // normaliseTableBounds pass leaves the geometry untouched and overlap/order assertions hold.
@@ -563,7 +570,12 @@ describe('buildRecalcHint — optional coloured areas and expected counts', () =
           column: 0,
           rowSpan: 1,
           columnSpan: 1,
-          bounds: { left: 0.1, top: 0.4, width: 0.15, height: 0.2 },
+          bounds: {
+            left: expect.closeTo(0.1, 6),
+            top: expect.closeTo(0.4, 6),
+            width: expect.closeTo(0.15, 6),
+            height: expect.closeTo(0.2, 6),
+          },
         },
       ],
     });
@@ -860,6 +872,25 @@ describe('calculate-cells request/merge helpers', () => {
         })
       );
       expect(request).not.toHaveProperty('specials');
+    });
+
+    it('sends a merge rooted on a hidden row whole, at its root, and not the square it covers', () => {
+      const merged = {
+        ...cell(0, 0, 'a', 20),
+        rowSpan: 2,
+        bounds: { left: 0.1, top: 0.2, width: 0.15, height: 0.4 },
+      };
+      const request = buildCalcCellsRequestTable(
+        calcTable({
+          cells: [merged, cell(0, 1, 'b', 30), cell(1, 0, 'c', 40)],
+          sectionTitles: [{ tableRow: 0, delete: true, columnName: null, data: null }],
+          footer: null,
+        })
+      );
+      expect(request.cells).toEqual([
+        { left: 0.1, top: 0.2, width: 0.15, height: 0.4, row: 0, column: 0 },
+        { ...CELL_BOUNDS['0,1'], row: 0, column: 1 },
+      ]);
     });
   });
 
@@ -3151,5 +3182,450 @@ describe('mergeFindGridLines — keepIds', () => {
   it('still hard-deletes the overlapper without keepIds', () => {
     const result = mergeFindGridLines(tables(), 0, [ret(0, 0, 0.3, 0.3)]);
     expect(result.map((x) => x.tableId)).toEqual(['A']);
+  });
+});
+
+// ---- staggered grid lines ------------------------------------------------------------
+// Quarter and half fractions keep every expected edge exact in binary floating point.
+
+describe('staggered table geometry', () => {
+  // Vertical divider 1 sits at 0.5 on row 0 and at 0.75 on row 1.
+  const staggered = (extra = {}) => ({
+    tableId: 'sg',
+    bounds: { left: 0, top: 0, width: 1, height: 1 },
+    columnWidths: [{ value: 0.5, segments: [{ offset: 0.25, start: 1 }] }, { value: 0.5 }],
+    rowHeights: [{ value: 0.5 }, { value: 0.5 }],
+    cells: [],
+    ...extra,
+  });
+
+  describe('gridSquareBounds', () => {
+    it('takes each edge from the divider position at that square', () => {
+      const t = staggered();
+      expect(gridSquareBounds(t, 0, 0)).toEqual({ left: 0, top: 0, width: 0.5, height: 0.5 });
+      expect(gridSquareBounds(t, 0, 1)).toEqual({ left: 0.5, top: 0, width: 0.5, height: 0.5 });
+      expect(gridSquareBounds(t, 1, 0)).toEqual({ left: 0, top: 0.5, width: 0.75, height: 0.5 });
+      expect(gridSquareBounds(t, 1, 1)).toEqual({ left: 0.75, top: 0.5, width: 0.25, height: 0.5 });
+    });
+
+    it('gives a zero size for an index outside an axis', () => {
+      const t = staggered();
+      expect(gridSquareBounds(t, 0, 2).width).toBe(0);
+      expect(gridSquareBounds(t, 2, 0).height).toBe(0);
+    });
+  });
+
+  describe('recalcCellBounds', () => {
+    it('is the bounding box of every spanned square', () => {
+      const cell = { row: 0, column: 0, rowSpan: 2, columnSpan: 1 };
+      expect(recalcCellBounds(staggered(), cell)).toEqual({
+        left: 0,
+        top: 0,
+        width: 0.75,
+        height: 1,
+      });
+    });
+  });
+
+  describe('cellSquares', () => {
+    it('gives the anchor square for a single cell', () => {
+      expect(cellSquares(staggered(), { row: 1, column: 0 })).toEqual([
+        { left: 0, top: 0.5, width: 0.75, height: 0.5 },
+      ]);
+    });
+
+    it('gives every spanned square row-major, clipped to the axes', () => {
+      const cell = { row: 0, column: 0, rowSpan: 3, columnSpan: 3 };
+      expect(cellSquares(staggered(), cell)).toEqual([
+        { left: 0, top: 0, width: 0.5, height: 0.5 },
+        { left: 0.5, top: 0, width: 0.5, height: 0.5 },
+        { left: 0, top: 0.5, width: 0.75, height: 0.5 },
+        { left: 0.75, top: 0.5, width: 0.25, height: 0.5 },
+      ]);
+    });
+  });
+
+  describe('partialCellSquares', () => {
+    it('is null for a single cell', () => {
+      expect(partialCellSquares(staggered(), { row: 0, column: 0 })).toBeNull();
+    });
+
+    it('is null for an unstaggered merged cell', () => {
+      const t = staggered({ columnWidths: [{ value: 0.5 }, { value: 0.5 }] });
+      expect(
+        partialCellSquares(t, { row: 0, column: 0, rowSpan: 2, columnSpan: 1 })
+      ).toBeNull();
+    });
+
+    it('is null for a merged cell staggered only on its interior line', () => {
+      expect(
+        partialCellSquares(staggered(), { row: 0, column: 0, rowSpan: 2, columnSpan: 2 })
+      ).toBeNull();
+    });
+
+    it('gives the squares of a merged cell whose perimeter line is staggered within it', () => {
+      const cell = { row: 0, column: 0, rowSpan: 2, columnSpan: 1 };
+      expect(partialCellSquares(staggered(), cell)).toEqual(cellSquares(staggered(), cell));
+    });
+  });
+
+  describe('recalcCellBounds is the bounding box of cellSquares', () => {
+    it('for a block crossed by a stagger', () => {
+      const t = staggered({
+        rowHeights: [{ value: 0.5, segments: [{ offset: -0.25, start: 1 }] }, { value: 0.5 }],
+      });
+      const cell = { row: 0, column: 0, rowSpan: 2, columnSpan: 2 };
+      const squares = cellSquares(t, cell);
+      const left = Math.min(...squares.map((s) => s.left));
+      const top = Math.min(...squares.map((s) => s.top));
+      const right = Math.max(...squares.map((s) => s.left + s.width));
+      const bottom = Math.max(...squares.map((s) => s.top + s.height));
+      expect(recalcCellBounds(t, cell)).toEqual({
+        left,
+        top,
+        width: right - left,
+        height: bottom - top,
+      });
+    });
+  });
+
+  describe('buildCalcCellsRequestTable squares', () => {
+    const cellAt = (row, column, rowSpan = 1, columnSpan = 1) => ({
+      row,
+      column,
+      rowSpan,
+      columnSpan,
+      bounds: { left: 0, top: 0, width: 0.1, height: 0.1 },
+      text: '',
+      confidence: null,
+      header: false,
+    });
+
+    it('gives squares only to a merged cell crossed by a perimeter stagger', () => {
+      const request = buildCalcCellsRequestTable(
+        staggered({ tableInPage: 0, cells: [cellAt(0, 0, 2, 1), cellAt(0, 1), cellAt(1, 1)] })
+      );
+      expect(request.cells[0].squares).toEqual([
+        { left: 0, top: 0, width: 0.5, height: 0.5 },
+        { left: 0, top: 0.5, width: 0.75, height: 0.5 },
+      ]);
+      expect(request.cells[1]).not.toHaveProperty('squares');
+      expect(request.cells[2]).not.toHaveProperty('squares');
+    });
+
+    it('leaves squares out for a merged cell staggered only inside', () => {
+      const request = buildCalcCellsRequestTable(
+        staggered({ tableInPage: 0, cells: [cellAt(0, 0, 2, 2)] })
+      );
+      expect(request.cells[0]).not.toHaveProperty('squares');
+    });
+
+    it('clamps each square to the unit page', () => {
+      const request = buildCalcCellsRequestTable(
+        staggered({
+          tableInPage: 0,
+          bounds: { left: -0.1, top: 0, width: 1.1, height: 1 },
+          columnWidths: [
+            { value: 0.6, segments: [{ offset: 0.25, start: 1 }] },
+            { value: 0.5 },
+          ],
+          cells: [cellAt(0, 0, 2, 1)],
+        })
+      );
+      const [first, second] = request.cells[0].squares;
+      expect(first.left).toBe(0);
+      expect(first.width).toBeCloseTo(0.5, 10);
+      expect(second.left).toBe(0);
+      expect(second.width).toBeCloseTo(0.75, 10);
+    });
+  });
+
+  describe('gridSquareAtFraction', () => {
+    it('finds the square whose effective rectangle holds the point', () => {
+      const t = staggered();
+      expect(gridSquareAtFraction(t, { fx: 0.625, fy: 0.75 })).toEqual({ row: 1, column: 0 });
+      expect(gridSquareAtFraction(t, { fx: 0.625, fy: 0.25 })).toEqual({ row: 0, column: 1 });
+    });
+
+    it('falls back to the nominal bands for a point in no square', () => {
+      // Vertical divider 1 moves right on row 1; horizontal divider 1 moves up on column 1,
+      // leaving (0.625, 0.375) outside every square.
+      const t = staggered({
+        rowHeights: [{ value: 0.5, segments: [{ offset: -0.25, start: 1 }] }, { value: 0.5 }],
+      });
+      expect(gridSquareAtFraction(t, { fx: 0.625, fy: 0.375 })).toEqual({ row: 0, column: 1 });
+    });
+
+    it('is null outside the bounds', () => {
+      expect(gridSquareAtFraction(staggered(), { fx: 1.25, fy: 0.5 })).toBeNull();
+    });
+  });
+
+  describe('cellBlockFromRect', () => {
+    it('includes a square by its effective width and height share', () => {
+      // Square (1, 1) is 0.75..1 wide: wholly covered. Nominally column 1 is only half covered.
+      expect(
+        cellBlockFromRect(staggered(), { left: 0.75, top: 0.5, width: 0.25, height: 0.5 })
+      ).toEqual({ row: 1, column: 1, rowSpan: 1, columnSpan: 1 });
+    });
+
+    it('returns the smallest rectangular block holding the included squares', () => {
+      // (0, 0) is half covered and left out; (1, 0), (0, 1) and (1, 1) are in.
+      expect(
+        cellBlockFromRect(staggered(), { left: 0.25, top: 0, width: 0.75, height: 1 })
+      ).toEqual({ row: 0, column: 0, rowSpan: 2, columnSpan: 2 });
+    });
+
+    it('is null when no square is covered enough', () => {
+      expect(
+        cellBlockFromRect(staggered(), { left: 0.5, top: 0.5, width: 0.25, height: 0.5 })
+      ).toBeNull();
+    });
+  });
+});
+
+describe('segment ownership on axis edits', () => {
+  const segs = (offset) => [{ offset, start: 1 }];
+
+  it('splitEntry gives the far part the original segments and the near part none', () => {
+    const out = splitEntry([{ value: 0.5, segments: segs(0.1) }, { value: 0.5 }], 0);
+    expect(out[0]).toEqual({ value: 0.25 });
+    expect(out[1]).toEqual({ value: 0.25, segments: segs(0.1) });
+    expect(out[2]).toEqual({ value: 0.5 });
+  });
+
+  it('splitEntryAt gives the far part the original segments and the near part none', () => {
+    const out = splitEntryAt([{ value: 0.5, segments: segs(0.1) }, { value: 0.5 }], 0, 0.125);
+    expect(out[0]).toEqual({ value: 0.125 });
+    expect(out[1]).toEqual({ value: 0.375, segments: segs(0.1) });
+  });
+
+  it('mergeCells gives the survivor entry k segments', () => {
+    const arr = [
+      { value: 0.25, segments: segs(0.1) },
+      { value: 0.25, segments: segs(0.05) },
+      { value: 0.5 },
+    ];
+    expect(mergeCells(arr, 1)).toEqual([{ value: 0.5, segments: segs(0.05) }, { value: 0.5 }]);
+    expect(mergeCells(arr, 2)).toEqual([{ value: 0.25, segments: segs(0.1) }, { value: 0.75 }]);
+  });
+});
+
+describe('resizeBoundary with staggered dividers', () => {
+  // Divider 1 is at 0.75 on row 1, divider 2 at 0.875 on row 1.
+  const table = () => ({
+    bounds: { left: 0, top: 0, width: 1, height: 1 },
+    columnWidths: [
+      { value: 0.5, segments: [{ offset: 0.25, start: 1 }] },
+      { value: 0.25, segments: [{ offset: 0.125, start: 1 }] },
+      { value: 0.25 },
+    ],
+    rowHeights: [{ value: 0.5 }, { value: 0.5 }],
+  });
+
+  it('joins a divider whose offset comes within one pixel of the new border, stopping short of its neighbour', () => {
+    const out = resizeBoundary('boundary-right', 0.9, table(), 0.03, 0.03);
+    expect(out.columnWidths[0].segments).toEqual([{ offset: 0.25, start: 1 }]);
+    expect(dividerPositionAt(out, 'columnWidths', 2, 1)).toBeCloseTo(0.7625, 9);
+  });
+
+  it('joins a divider whose offset lies beyond the new border, stopping short of its neighbour', () => {
+    const out = resizeBoundary('boundary-right', 0.8, table(), 0.01, 0.01);
+    expect(out.columnWidths[0].segments).toEqual([{ offset: 0.25, start: 1 }]);
+    expect(dividerPositionAt(out, 'columnWidths', 2, 1)).toBeCloseTo(0.7625, 9);
+  });
+
+  it('joins a divider straight when no neighbour is in the way', () => {
+    const clear = {
+      ...table(),
+      columnWidths: [
+        { value: 0.5 },
+        { value: 0.25, segments: [{ offset: 0.125, start: 1 }] },
+        { value: 0.25 },
+      ],
+    };
+    const out = resizeBoundary('boundary-right', 0.9, clear, 0.03, 0.03);
+    expect(out.columnWidths[1].segments).toBeUndefined();
+  });
+
+  it('never lets an automatic join cross a neighbouring staggered divider', () => {
+    // Dividers nominally at 0.3 and 0.5; on row 1 divider 1 is at 0.55 and divider 2 at 0.65.
+    const crossed = {
+      bounds: { left: 0.1, top: 0, width: 0.6, height: 1 },
+      columnWidths: [
+        { value: 0.2, segments: [{ offset: 0.25, start: 1 }] },
+        { value: 0.2, segments: [{ offset: 0.15, start: 1 }] },
+        { value: 0.2 },
+      ],
+      rowHeights: [{ value: 0.5 }, { value: 0.5 }],
+    };
+    const out = resizeBoundary('boundary-right', 0.66, crossed, 0.03, 0.03);
+    expect(dividerPositionAt(out, 'columnWidths', 1, 1)).toBeCloseTo(0.55, 9);
+    expect(dividerPositionAt(out, 'columnWidths', 2, 1)).toBeCloseTo(0.56, 9);
+    expect(dividerPositionAt(out, 'columnWidths', 2, 0)).toBeCloseTo(0.5, 9);
+  });
+
+  it('returns canonical axes', () => {
+    const out = resizeBoundary('boundary-right', 0.7, table(), 0.01, 0.01);
+    expect(out.columnWidths).toHaveLength(2);
+    expect('segments' in out.columnWidths[1]).toBe(false);
+  });
+
+  it('leaves dividers alone when another border moves', () => {
+    const out = resizeBoundary('boundary-bottom', 0.9, table(), 0.03, 0.03);
+    expect(out.columnWidths[0].segments).toEqual([{ offset: 0.25, start: 1 }]);
+    expect(out.columnWidths[1].segments).toEqual([{ offset: 0.125, start: 1 }]);
+  });
+});
+
+describe('reconcileAxisEdit with staggered vertical dividers', () => {
+  const quarter = (n) => Array.from({ length: n }, () => ({ value: 0.25 }));
+  // Vertical divider 1 is offset by 0.125 on row 2 only.
+  const table = (columnWidths) => ({
+    tableId: 'ra',
+    bounds: { left: 0, top: 0, width: 1, height: 1 },
+    columnWidths: columnWidths ?? [
+      {
+        value: 0.5,
+        segments: [
+          { offset: 0.125, start: 2 },
+          { offset: 0, start: 3 },
+        ],
+      },
+      { value: 0.5 },
+    ],
+    rowHeights: quarter(4),
+    cells: [0, 1, 2, 3].flatMap((row) =>
+      [0, 1].map((column) => ({
+        row,
+        column,
+        rowSpan: 1,
+        columnSpan: 1,
+        bounds: { left: 0, top: 0, width: 0.1, height: 0.1 },
+        text: `${row},${column}`,
+        confidence: 90,
+        header: false,
+      }))
+    ),
+  });
+
+  it('gives a row inserted by splitMap its source row offset', () => {
+    const t = table();
+    const next = reconcileAxisEdit(t, t, 'rowHeights', splitEntry(t.rowHeights, 2), splitMap(4, 2), t.bounds);
+    expect(next.columnWidths[0].segments).toEqual([
+      { offset: 0.125, start: 2 },
+      { offset: 0, start: 4 },
+    ]);
+  });
+
+  it('gives a row inserted by splitMapBelow its predecessor offset', () => {
+    const t = table();
+    const next = reconcileAxisEdit(t, t, 'rowHeights', splitEntry(t.rowHeights, 2), splitMapBelow(4, 2), t.bounds);
+    expect(next.columnWidths[0].segments).toEqual([
+      { offset: 0.125, start: 3 },
+      { offset: 0, start: 4 },
+    ]);
+  });
+
+  it('drops the offset of a row removed by mergeMap', () => {
+    const t = table();
+    const next = reconcileAxisEdit(t, t, 'rowHeights', mergeCells(t.rowHeights, 2), mergeMap(4, 2), t.bounds);
+    expect('segments' in next.columnWidths[0]).toBe(false);
+  });
+
+  it('canonicalises both axes on an identity map', () => {
+    const t = table([{ value: 0.5, segments: [{ offset: 0.125, start: 0 }] }, { value: 0.5 }]);
+    const rows = [...quarter(3), { value: 0.25, segments: [{ offset: 0.1, start: 1 }] }];
+    const next = reconcileAxisEdit(t, t, 'rowHeights', rows, identityMap(4), t.bounds);
+    expect(next.columnWidths).toEqual([{ value: 0.625 }, { value: 0.375 }]);
+    expect(next.rowHeights).toEqual(quarter(4));
+  });
+
+  it('zeroes the confidence of a cell whose square moved and keeps the rest', () => {
+    const t = table();
+    const moved = [
+      {
+        value: 0.5,
+        segments: [
+          { offset: 0.25, start: 2 },
+          { offset: 0, start: 3 },
+        ],
+      },
+      { value: 0.5 },
+    ];
+    const next = reconcileAxisEdit(t, t, 'columnWidths', moved, identityMap(2), t.bounds);
+    const at = (row, column) => next.cells.find((c) => c.row === row && c.column === column);
+    expect(at(2, 0).confidence).toBe(0);
+    expect(at(2, 1).confidence).toBe(0);
+    expect(at(2, 1).bounds).toEqual({ left: 0.75, top: 0.5, width: 0.25, height: 0.25 });
+    expect(at(0, 1).confidence).toBe(90);
+    expect(at(3, 0).confidence).toBe(90);
+  });
+});
+
+describe('reconcileAxisEdit with merged cells', () => {
+  const quarter = (n) => Array.from({ length: n }, () => ({ value: 0.25 }));
+  const ocrBox = { left: 0.05, top: 0.05, width: 0.3, height: 0.3 };
+  // Column 0 holds two merged cells, rows 0-1 and rows 2-3; column 1 is single cells.
+  const table = (columnWidths) => ({
+    tableId: 'rm',
+    bounds: { left: 0, top: 0, width: 1, height: 1 },
+    columnWidths: columnWidths ?? [{ value: 0.5 }, { value: 0.5 }],
+    rowHeights: quarter(4),
+    cells: [
+      { row: 0, column: 0, rowSpan: 2, columnSpan: 1, bounds: ocrBox, text: 'top', confidence: 90, header: false },
+      { row: 2, column: 0, rowSpan: 2, columnSpan: 1, bounds: ocrBox, text: 'bottom', confidence: 90, header: false },
+      ...[0, 1, 2, 3].map((row) => ({
+        row,
+        column: 1,
+        rowSpan: 1,
+        columnSpan: 1,
+        bounds: ocrBox,
+        text: `${row},1`,
+        confidence: 90,
+        header: false,
+      })),
+    ],
+  });
+  const splitOnRowOne = () => [
+    {
+      value: 0.5,
+      segments: [
+        { offset: 0.125, start: 1 },
+        { offset: 0, start: 2 },
+      ],
+    },
+    { value: 0.5 },
+  ];
+  const mergedAt = (t, row) => t.cells.find((c) => c.row === row && c.column === 0);
+
+  it('refreshes a merged cell whose squares a Split moved and zeroes its confidence', () => {
+    const t = table();
+    const next = reconcileAxisEdit(t, t, 'columnWidths', splitOnRowOne(), identityMap(2), t.bounds);
+    expect(mergedAt(next, 0).bounds).toEqual({ left: 0, top: 0, width: 0.625, height: 0.5 });
+    expect(mergedAt(next, 0).confidence).toBe(0);
+    expect(mergedAt(next, 0).rowSpan).toBe(2);
+  });
+
+  it('leaves a merged cell whose squares did not move exactly as it was', () => {
+    const t = table();
+    const next = reconcileAxisEdit(t, t, 'columnWidths', splitOnRowOne(), identityMap(2), t.bounds);
+    expect(mergedAt(next, 2).bounds).toEqual(ocrBox);
+    expect(mergedAt(next, 2).confidence).toBe(90);
+  });
+
+  it('refreshes a merged cell whose squares a Join moved back', () => {
+    const t = table(splitOnRowOne());
+    const next = reconcileAxisEdit(t, t, 'columnWidths', [{ value: 0.5 }, { value: 0.5 }], identityMap(2), t.bounds);
+    expect(mergedAt(next, 0).bounds).toEqual({ left: 0, top: 0, width: 0.5, height: 0.5 });
+    expect(mergedAt(next, 0).confidence).toBe(0);
+  });
+
+  it('refreshes merged cells on a straight divider drag', () => {
+    const t = table();
+    const next = reconcileAxisEdit(t, t, 'columnWidths', [{ value: 0.6 }, { value: 0.4 }], identityMap(2), t.bounds);
+    expect(mergedAt(next, 0).bounds).toEqual({ left: 0, top: 0, width: 0.6, height: 0.5 });
+    expect(mergedAt(next, 2).bounds).toEqual({ left: 0, top: 0.5, width: 0.6, height: 0.5 });
+    expect(mergedAt(next, 2).confidence).toBe(0);
   });
 });

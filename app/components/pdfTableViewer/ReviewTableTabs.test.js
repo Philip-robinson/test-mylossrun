@@ -15,6 +15,21 @@ describe('ReviewTableTabs', () => {
     ]);
   });
 
+  it('labels a split table by its section title as it now stands', () => {
+    render(
+      <ReviewTableTabs
+        tables={[{ name: 'North', sectionTitle: { text: 'Northern' } }, { name: 'South' }]}
+        activeIndex={0}
+        onChange={() => {}}
+      />
+    );
+
+    expect(screen.getAllByTestId('review-tab').map((tab) => tab.textContent)).toEqual([
+      'Northern',
+      'South',
+    ]);
+  });
+
   it('reports the index of the tab that was chosen', () => {
     const onChange = jest.fn();
     render(<ReviewTableTabs tables={tables} activeIndex={0} onChange={onChange} />);

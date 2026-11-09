@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CellEditDialog from 'components/pdfTableViewer/CellEditDialog';
+import CellImageWithOverlay from 'components/pdfTableViewer/CellImageWithOverlay';
+import { enlargedCellImageBounds } from 'components/pdfTableViewer/cellImageUtils';
+import { cellSquares } from 'components/pdfTableViewer/tableSupportUtils';
 // reviewEditUtils and RoundIconButton are REAL collaborators here: the point of
 // several of these tests is that the dialog agrees with the helpers about which
 // source a cell names and where the dialog belongs, which a mock would hide.
@@ -17,6 +20,7 @@ import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 import {
   cellEditCancelHelpId,
   cellEditConfidenceHelpId,
+  cellImageDefaultPageAspect,
   cellEditConfirmHelpId,
   cellEditImageHelpId,
   cellEditImageLoadingHeightPx,
@@ -67,6 +71,15 @@ const bounds = (left, top, width, height) => ({ left, top, width, height });
 const rootTable = {
   tableId: 'root',
   pdfPage: 3,
+  bounds: bounds(0.1, 0.2, 0.6, 0.3),
+  columnWidths: [{ value: 0.2 }, { value: 0.2 }, { value: 0.2 }],
+  rowHeights: [
+    { value: 0.06 },
+    { value: 0.06 },
+    { value: 0.06 },
+    { value: 0.06 },
+    { value: 0.06 },
+  ],
   cells: [
     {
       row: 0,
@@ -108,6 +121,14 @@ const rootTable = {
 
 const tables = [rootTable];
 
+// The page records, inches; the table's page is not the first, so a lookup that takes the
+// first record gets the wrong aspect.
+const pages = [
+  { page: 0, width: 11, height: 8.5 },
+  { page: 3, width: 8.5, height: 11 },
+];
+const pageAspect = 11 / 8.5;
+
 const ordinaryCell = {
   tableId: 'root',
   row: 1,
@@ -137,10 +158,12 @@ const sourcelessCell = {
   confidence: 0,
 };
 
-// The two crops of one cell, as the panel caches them. The processed payload is kept
-// distinct from the raw one so that the assertions can prove it is NOT what reaches the
-// screen — the dialog shows the raw crop and nothing else.
-const bothImages = { raw: 'UkFX', processed: 'UFJPQw==' };
+// One cell's image as the panel caches it: the crop and the rectangle it was asked for.
+const bothImages = { raw: 'UkFX', bounds: bounds(0.05, 0.15, 0.5, 0.2) };
+
+// The request the dialog should send for `sourceBounds` at the anchor's width.
+const expectedRequest = (sourceBounds, aspect = pageAspect) =>
+  enlargedCellImageBounds(sourceBounds, anchorRect.width, aspect);
 
 const anchorRect = {
   left: 400,
@@ -169,6 +192,7 @@ const renderDialog = (props = {}) =>
       tables={tables}
       reviewedTableId={'root'}
       anchorRect={anchorRect}
+      pages={pages}
       onRequestImage={onRequestImage}
       onCancel={onCancel}
       onConfirm={onConfirm}
@@ -251,15 +275,31 @@ describe('CellEditDialog', () => {
     });
   });
 
-  it('requests the image once, for the source cell of the source table', () => {
+  it('requests the enlarged image once, for the source cell of the source table', () => {
     renderDialog();
 
+    const expected = expectedRequest(findSourceValue(rootTable, ordinaryCell).bounds);
     expect(onRequestImage).toHaveBeenCalledTimes(1);
     expect(onRequestImage).toHaveBeenCalledWith({
       key: cellSourceKey(ordinaryCell),
       page: rootTable.pdfPage,
-      bounds: findSourceValue(rootTable, ordinaryCell).bounds,
-      width: anchorRect.width,
+      bounds: expected.bounds,
+      width: expected.width,
+    });
+  });
+
+  it("enlarges at the default aspect when the table's page has no record", () => {
+    renderDialog({ pages: [] });
+
+    const expected = expectedRequest(
+      findSourceValue(rootTable, ordinaryCell).bounds,
+      cellImageDefaultPageAspect()
+    );
+    expect(onRequestImage).toHaveBeenCalledWith({
+      key: cellSourceKey(ordinaryCell),
+      page: rootTable.pdfPage,
+      bounds: expected.bounds,
+      width: expected.width,
     });
   });
 
@@ -271,22 +311,24 @@ describe('CellEditDialog', () => {
     expect(onRequestImage).toHaveBeenCalledTimes(2);
     const [first, second] = onRequestImage.mock.calls.map(([request]) => request);
     expect(second.key).not.toBe(first.key);
-    expect(second.bounds).toEqual(findSourceValue(rootTable, otherCell).bounds);
+    expect(second.bounds).toEqual(
+      expectedRequest(findSourceValue(rootTable, otherCell).bounds).bounds
+    );
   });
 
   it("requests the bounds of a section title's own data", () => {
     renderDialog({ cell: sectionTitleCell });
 
     expect(onRequestImage).toHaveBeenCalledTimes(1);
+    const expected = expectedRequest(rootTable.sectionTitles[1].data.bounds);
     expect(onRequestImage).toHaveBeenCalledWith({
       key: cellSourceKey(sectionTitleCell),
       page: rootTable.pdfPage,
-      bounds: rootTable.sectionTitles[1].data.bounds,
-      width: anchorRect.width,
+      bounds: expected.bounds,
+      width: expected.width,
     });
   });
 
-  // The untouched crop is the one the dialog shows, and it shows only that one.
   it('renders the raw image as a base64 png and asks for no other', () => {
     renderDialog({ image: bothImages });
 
@@ -295,6 +337,40 @@ describe('CellEditDialog', () => {
       `data:image/png;base64,${bothImages.raw}`
     );
     expect(onRequestImage).not.toHaveBeenCalled();
+  });
+
+  // The overlay is compared against the overlay component rendered directly with the
+  // props the dialog should hand it.
+  const overlayFor = (squares) => {
+    const { container } = render(
+      <CellImageWithOverlay
+        image={bothImages.raw}
+        bounds={bothImages.bounds}
+        table={rootTable}
+        squares={squares}
+      />
+    );
+    const html = container.querySelector(
+      '[data-testid="cell-edit-image-overlay"]'
+    ).outerHTML;
+    container.remove();
+    return html;
+  };
+
+  it("overlays the image's bounds with the cell's squares and the table's lines", () => {
+    const expected = overlayFor(
+      cellSquares(rootTable, findSourceValue(rootTable, ordinaryCell))
+    );
+    renderDialog({ image: bothImages });
+
+    expect(screen.getByTestId('cell-edit-image-overlay').outerHTML).toBe(expected);
+  });
+
+  it("overlays a section title's own bounds as its one square", () => {
+    const expected = overlayFor([rootTable.sectionTitles[1].data.bounds]);
+    renderDialog({ cell: sectionTitleCell, image: bothImages });
+
+    expect(screen.getByTestId('cell-edit-image-overlay').outerHTML).toBe(expected);
   });
 
   // There is no longer a choice of crop to offer, so there must be no control offering
@@ -312,7 +388,7 @@ describe('CellEditDialog', () => {
   it('caps the image area at the configured height and scrolls it', () => {
     renderDialog({ image: bothImages });
 
-    const area = screen.getByTestId('cell-edit-image').parentElement;
+    const area = screen.getByTestId('cell-edit-image-pane');
     expect(area).toHaveStyle({
       maxHeight: `${maxCellEditorImageHeight()}px`,
       overflowY: 'auto',
@@ -330,19 +406,9 @@ describe('CellEditDialog', () => {
     const image = screen.getByTestId('cell-edit-image');
     expect(image).toHaveStyle({ maxWidth: '100%', height: 'auto' });
     // Not a flex container: nothing may set the crop's height or width independently.
-    expect(screen.getByTestId('cell-edit-image').parentElement).toHaveStyle({
+    expect(screen.getByTestId('cell-edit-image-pane')).toHaveStyle({
       display: 'block',
     });
-  });
-
-  // Only the raw crop is displayed, so a response that carried just the processed one has
-  // nothing to show — and there is deliberately no falling back to it. The dialog stays up
-  // regardless: the image is a convenience and the edit is the point.
-  it('renders no image when the response carried no raw crop', () => {
-    renderDialog({ image: { processed: bothImages.processed } });
-
-    expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
-    expect(screen.queryByTestId('cell-edit-image')).not.toBeInTheDocument();
   });
 
   it('renders no image element while the image is unresolved', () => {

@@ -1,10 +1,11 @@
 import { authHeaders } from './authHeaders';
 import { sleep } from './pdfDisplayList';
-import { entryPollIntervalMs, awaitEntryTimeoutMs } from 'config';
+import { backendUrl, readEnvelopeData } from './backend';
+import { entryPollIntervalMs, awaitEntryTimeoutMs, pdfDisplayEntryPath } from 'config';
 
 /**
  * Poll a single display-list entry until it changes, then resolve with the fresh
- * entry. Fetches /api/pdf-display-entry/{pdfId} sending If-Modified-Since from
+ * entry. Fetches the back end's /mylossrun/pdf-display-entry/{pdfId} sending If-Modified-Since from
  * getTimestampFunc(); a 304 means unchanged, so it waits entryPollIntervalMs()
  * and retries, up to awaitEntryTimeoutMs() total. The first call (no stored
  * timestamp) sends no If-Modified-Since and so returns the current entry at once.
@@ -23,7 +24,7 @@ export async function awaitEntryChange(getTimestampFunc, pdfId, signal) {
   while (elapsed < awaitEntryTimeoutMs()) {
     const lastModified = getTimestampFunc();
     const headers = authHeaders(lastModified ? { 'If-Modified-Since': lastModified } : {});
-    const response = await fetch(`/api/pdf-display-entry/${encodeURIComponent(pdfId)}`, {
+    const response = await fetch(backendUrl(`${pdfDisplayEntryPath()}/${encodeURIComponent(pdfId)}`), {
       headers,
       cache: 'no-store',
       signal,
@@ -36,7 +37,7 @@ export async function awaitEntryChange(getTimestampFunc, pdfId, signal) {
     if (response.status !== 200) {
       throw new Error(`Failed to load PDF entry (status ${response.status})`);
     }
-    const entry = await response.json();
+    const entry = await readEnvelopeData(response);
     return { entry, lastModified: response.headers.get('Last-Modified') };
   }
   return null;

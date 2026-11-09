@@ -4,8 +4,13 @@
  * Application configuration and endpoints
  */
 
+// Back-end API host, inlined from MYLOSSRUN_BASE_URL at build time; throws when it is unset.
 export function baseUrl() {
-  return process.env.MYLOSSRUN_BASE_URL || 'http://localhost:8085';
+  const url = process.env.MYLOSSRUN_BASE_URL;
+  if (!url) {
+    throw new Error('MYLOSSRUN_BASE_URL is not set');
+  }
+  return url;
 }
 
 // Debounce window (ms) for re-measuring pane widths on window resize, so a
@@ -129,31 +134,117 @@ export function extractPollTimeoutMs() {
   return 300000;
 }
 
-// Back-end path the /api/find-grid-lines proxy forwards to. The endpoint is
-// synchronous (single page, no OCR) and returns the FindGridLinesResponse directly,
-// so the proxy forwards the POST and returns the JSON with no long-poll.
+// Back-end path of the validate endpoint.
+export function validatePath() {
+  return '/mylossrun/validate';
+}
+
+// Back-end path of the allocate-pdf-id endpoint.
+export function allocatePdfIdPath() {
+  return '/mylossrun/allocate-pdf-id';
+}
+
+// Back-end path of the initiate-pdf-upload endpoint.
+export function initiatePdfUploadPath() {
+  return '/mylossrun/initiate-pdf-upload';
+}
+
+// Back-end path of the start-pdf-processing endpoint.
+export function startPdfProcessingPath() {
+  return '/mylossrun/start-pdf-processing';
+}
+
+// Back-end path of the pdf-display-list endpoint.
+export function pdfDisplayListPath() {
+  return '/mylossrun/pdf-display-list';
+}
+
+// Back-end path of the pdf-display-entry endpoint; the caller appends /{pdfId}.
+export function pdfDisplayEntryPath() {
+  return '/mylossrun/pdf-display-entry';
+}
+
+// Back-end path of the metadata endpoint; the caller appends /{pdfId} or /{pdfId}/tables.
+export function metadataPath() {
+  return '/mylossrun/metadata';
+}
+
+// Back-end path of the get-image endpoint.
+export function getImagePath() {
+  return '/mylossrun/get-image';
+}
+
+// Back-end path of the get-table-images endpoint.
+export function getTableImagesPath() {
+  return '/mylossrun/get-table-images';
+}
+
+// Back-end path of the get-cell-images endpoint.
+export function getCellImagesPath() {
+  return '/mylossrun/get-cell-images';
+}
+
+// Back-end path of the get-thumbnails endpoint.
+export function getThumbnailsPath() {
+  return '/mylossrun/get-thumbnails';
+}
+
+// Back-end path of the find-tables endpoint.
+export function findTablesPath() {
+  return '/mylossrun/find-tables';
+}
+
+// Back-end path of the extract endpoint; the caller appends /{pdfId}/{tableId}.
+export function extractPath() {
+  return '/mylossrun/extract';
+}
+
+// Back-end path of the status endpoint; the caller appends /{statusId}.
+export function statusPath() {
+  return '/mylossrun/status';
+}
+
+// Envelope tag of a back-end response whose payload is fetched from a presigned URL.
+export function envelopeByUrl() {
+  return 'BY_URL';
+}
+
+// Envelope tag of a back-end response whose payload is carried in the body.
+export function envelopeInline() {
+  return 'INLINE';
+}
+
+// Status value of a worker run that has finished successfully.
+export function statusReady() {
+  return 'READY';
+}
+
+// Status value of a worker run that has failed.
+export function statusError() {
+  return 'ERROR';
+}
+
+// Consecutive status-poll failures tolerated before the next one is rethrown.
+export function statusPollToleratedFailures() {
+  return 1;
+}
+
+// Back-end path of the synchronous find-grid-lines endpoint. It handles a single page
+// with no OCR and returns the FindGridLinesResponse directly, so it needs no long-poll.
 export function findGridLinesPath() {
   return '/mylossrun/find-grid-lines';
 }
 
-// Back-end path the /api/calculate-cells proxy forwards to. Like find-grid-lines the
-// endpoint is synchronous — it only reads the text inside rectangles the caller already
-// knows — so the proxy forwards the POST and returns the JSON with no long-poll.
+// Back-end path of the synchronous calculate-cells endpoint. Like find-grid-lines it only
+// reads the text inside rectangles the caller already knows, so it needs no long-poll.
 export function calculateCellsPath() {
   return '/mylossrun/calculate-cells';
 }
 
-// Back-end path the /api/to-excel proxy forwards to. The endpoint is synchronous — it
-// builds the workbook, stores it and returns a presigned URL — so the proxy forwards the
-// POST and returns the JSON with no long-poll.
+// Back-end path of the synchronous to-excel endpoint. It builds the workbook, stores it
+// and returns a presigned URL, so it needs no long-poll.
 export function toExcelPath() {
   return '/mylossrun/to-excel';
-}
-
-// MIME type of the exported workbook, carried by the /api/to-excel response and by the
-// Blob the browser saves from it.
-export function excelContentType() {
-  return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 }
 
 // Extension the exported workbook is offered to the user under.
@@ -161,12 +252,13 @@ export function excelFileSuffix() {
   return '.xlsx';
 }
 
-// Back-end path the /api/original-pdf proxy forwards to.
+// Back-end path that returns a presigned GET for the uploaded PDF; the caller appends /{pdfId}.
 export function originalPdfPath() {
   return '/mylossrun/original-pdf';
 }
 
-// MIME type of the original PDF the /api/original-pdf proxy returns.
+// MIME type of the original PDF, which is also the content type the upload's presigned
+// PUT is signed with.
 export function pdfContentType() {
   return 'application/pdf';
 }
@@ -251,7 +343,7 @@ export function documentDimOpacity() {
   return 0.35;
 }
 
-// The two renderings /api/get-image can return, sent as its `imageStyle`. RAW is the page
+// The two renderings the back end's get-image endpoint can return, sent as its `imageStyle`. RAW is the page
 // as the PDF draws it; PROCESSED has the page's coloured areas flattened to black on
 // white, which is the page the extraction reads.
 export function rawImageStyle() {
@@ -341,18 +433,14 @@ export function linkedGroupOutlineGapPx() {
   return 2;
 }
 
-// The grid tool-bar's icon geometry: each button's square size, the thickness of the
-// Rows/Columns bar drawn inside it, and the stroke width of the Special hollow square.
+// The grid tool-bar's icon geometry: each button's square size and the thickness of the
+// Rows/Columns bar drawn inside it.
 export function gridToolIconSizePx() {
   return 20;
 }
 
 export function gridToolLineThicknessPx() {
   return 3;
-}
-
-export function gridToolSquareStrokePx() {
-  return 2;
 }
 
 // The grid tool-bar's group box: the border that encloses the buttons, its corner
@@ -372,6 +460,88 @@ export function gridToolbarCornerRadiusPx() {
 
 export function gridToolbarShadow() {
   return '0 0 6px 1px rgba(0,0,0,0.18)';
+}
+
+// The grid tool-bar's spacing, in MUI spacing units: the gap between its entries, its
+// inner padding, and the gap between an icon button's caption and the button.
+export function gridToolbarGapSpacing() {
+  return 0.5;
+}
+
+export function gridToolbarPaddingSpacing() {
+  return 0.5;
+}
+
+export function gridToolCaptionSpacing() {
+  return 0.25;
+}
+
+// The grid tool-bar's line heights: an icon button's caption and the Special section title.
+export function gridToolCaptionLineHeight() {
+  return 1;
+}
+
+export function gridToolSpecialSectionLineHeight() {
+  return 1.2;
+}
+
+// The grid tool-bar's text labels: the Split and Join buttons under Rows and Columns, and
+// the title of its Special section.
+export function gridToolSplitLabel() {
+  return 'Split';
+}
+
+export function gridToolJoinLabel() {
+  return 'Join';
+}
+
+export function gridToolSpecialSectionLabel() {
+  return 'Special';
+}
+
+// Below this a grid line segment offset is zero, and two offsets within it are equal.
+export function gridLineOffsetEpsilon() {
+  return 1e-6;
+}
+
+// The share of a neighbouring band a moving grid line or run may travel into.
+export function gridLineMoveLimitFraction() {
+  return 0.9;
+}
+
+// The share of the cell's displayed size added as margin on each side of the Review image.
+export function cellImageMarginFraction() {
+  return 0.1;
+}
+
+// The smallest Review image margin, in displayed pixels.
+export function cellImageMarginMinPx() {
+  return 30;
+}
+
+// The largest Review image margin, in displayed pixels.
+export function cellImageMarginMaxPx() {
+  return 100;
+}
+
+// The page height-to-width ratio assumed when the page's own is unknown.
+export function cellImageDefaultPageAspect() {
+  return 1;
+}
+
+// The translucent fill dimming the Review image outside the cell.
+export function cellImageDimColour() {
+  return 'rgba(128, 128, 128, 0.5)';
+}
+
+// The stroke width, in screen pixels, of the grid lines drawn over the Review image.
+export function cellImageGridLineStrokeWidth() {
+  return 1;
+}
+
+// The toast shown when a new grid line would cross a staggered line in its band.
+export function noRoomForGridLineLabel() {
+  return 'No room for a grid line there';
 }
 
 // The share of a grid square's width and of its height that the Merge Cells tool's drawn
@@ -412,16 +582,6 @@ export function colourSpecialToolKeys() {
 // placeholder: nothing reads it, and naming the column is later work.
 export function sectionTitlePlaceholderColumnName() {
   return '~~SECTION-TITLE~~';
-}
-
-// 50%-transparent highlight lines drawn either side of a selected row line.
-export function selectedRowHighlight() {
-  return 'rgba(255,165,0,0.5)';
-}
-
-// 50%-transparent highlight lines drawn either side of a selected column line.
-export function selectedColumnHighlight() {
-  return 'rgba(128,0,128,0.5)';
 }
 
 // Fixed width (screen px) of the right-hand "Layers" panel.
@@ -1113,8 +1273,8 @@ export function documentOverviewExportTableHelpId() {
   return 'document-overview-export-table';
 }
 
-// The contents pass's ids: the Layers column, the tool rail and its three buttons, and the
-// nine entries of the Special tool's sub-menu — and the page in the centre, which is not
+// The contents pass's ids: the Layers column, the tool-bar and its six line-tool buttons,
+// and the entries of its Special section — and the page in the centre, which is not
 // the contents pass's alone. Both passes describe editorPageTableHelpId, in different
 // words: the boundary pass as the selected table's boundary, the contents pass as the grid
 // that boundary holds.
@@ -1159,8 +1319,20 @@ export function gridToolColumnsHelpId() {
   return 'grid-tool-columns';
 }
 
-export function gridToolSpecialHelpId() {
-  return 'grid-tool-special';
+export function gridToolRowSplitHelpId() {
+  return 'grid-tool-row-split';
+}
+
+export function gridToolRowJoinHelpId() {
+  return 'grid-tool-row-join';
+}
+
+export function gridToolColumnSplitHelpId() {
+  return 'grid-tool-column-split';
+}
+
+export function gridToolColumnJoinHelpId() {
+  return 'grid-tool-column-join';
 }
 
 export function specialToolHeaderHelpId() {
@@ -1433,282 +1605,3 @@ export function userEmailStorageKey() {
 export function signedOutPath() {
   return '/';
 }
-
-const default_export = {
-  baseUrl,
-  resizeDebounceMs,
-  nameTruncateLength,
-  pollIntervalMs,
-  gridLineColour,
-  deletedGridLineColour,
-  hitLineWidthPx,
-  linkTableCellWidth,
-  linkCellWaveHeightPx,
-  linkCellWavePitchPx,
-  linkCellBorderColour,
-  linkCellBorderWidthPx,
-  highConfidence,
-  lowConfidence,
-  mediumConfidence,
-  findTablesPollIntervalMs,
-  findTablesPollTimeoutMs,
-  extractPollIntervalMs,
-  extractPollTimeoutMs,
-  findGridLinesPath,
-  calculateCellsPath,
-  toExcelPath,
-  excelContentType,
-  excelFileSuffix,
-  originalPdfPath,
-  pdfContentType,
-  originalDownloadableStatuses,
-  exportableStatuses,
-  tableExportFilenameSeparator,
-  tableExportFilenamePathSeparatorPattern,
-  tableExportFilenamePathSeparatorReplacement,
-  stagedGridEditorEnabled,
-  tableSeparationEnabled,
-  tableSeparationGapPx,
-  tableSeparationTouchTolerancePx,
-  layerTickSlotWidthPx,
-  defaultScalePercent,
-  scalePercentOptions,
-  baseImageWidthPx,
-  scaleDebounceMs,
-  documentDimOpacity,
-  rawImageStyle,
-  processedImageStyle,
-  layerBorderColour,
-  layerRowsColour,
-  layerColumnsColour,
-  layerSpecialCellsColour,
-  layerColoursColour,
-  layerBorderBackgroundColour,
-  layerRowsBackgroundColour,
-  layerColumnsBackgroundColour,
-  layerSpecialCellsBackgroundColour,
-  layerColoursBackgroundColour,
-  documentOverviewButtonFontSize,
-  selectionScrollIntoViewOptions,
-  selectedTableLabelClearancePx,
-  layerGrey,
-  linkedEmphasisColour,
-  linkedGroupOutlineWidthPx,
-  linkedGroupOutlineGapPx,
-  gridToolIconSizePx,
-  gridToolLineThicknessPx,
-  gridToolSquareStrokePx,
-  gridToolbarBorderWidthPx,
-  gridToolbarBorderColour,
-  gridToolbarCornerRadiusPx,
-  gridToolbarShadow,
-  mergeCoverageFraction,
-  mergedCellOutlineWidthPx,
-  splitRowWaveHeightPx,
-  splitRowWavePitchPx,
-  colourSpecialToolKeys,
-  sectionTitlePlaceholderColumnName,
-  selectedRowHighlight,
-  selectedColumnHighlight,
-  layersPanelWidthPx,
-  selectedColouredAreaHighlight,
-  sectionTitleMarkerColour,
-  sectionTitleMarkerDash,
-  cutColour,
-  cutColourKey,
-  cutLineDash,
-  cutLineWidthPx,
-  selectedSectionTitleHighlight,
-  confirmedTableStage,
-  confirmedTickBadgeColour,
-  confirmedTickColour,
-  confirmedTickBadgeSizePx,
-  mergeLinkRootBadgeColour,
-  optionsSeparatorColour,
-  optionsSeparatorWidthPercent,
-  optionsSeparatorHeightPx,
-  optionsSeparatorMarginTopPx,
-  optionsSeparatorMarginBottomPx,
-  optionsSeparatorRadiusPx,
-  optionsGroupTitleVariant,
-  optionsGroupSpacing,
-  optionsRowSpacing,
-  reviewColumnMaxWidthPx,
-  singleCellSpan,
-  reviewWideCellMinCharacters,
-  reviewCellBorderColour,
-  reviewSplitRowWaveColour,
-  reviewSplitRowWaveStrokeWidthPx,
-  reviewLowConfidenceBackgroundColour,
-  reviewLowConfidenceBorderColour,
-  reviewLowConfidenceMarkerWidthPx,
-  reviewSelectedCellBackgroundColour,
-  reviewSelectedCellBorderWidthPx,
-  reviewSelectedCellRadiusPx,
-  reviewSelectedCellPaddingPx,
-  reviewSelectedCellShadow,
-  cancelColour,
-  confirmColour,
-  reviewCellEditDialogWidthPx,
-  reviewCellEditRowCount,
-  reviewCellEditorMinWidthPx,
-  maxCellEditorImageHeight,
-  cellEditImageSpinnerSizePx,
-  cellEditImageLoadingHeightPx,
-  reviewEditedCellConfidence,
-  reviewPoorCellSelectWidthPx,
-  reviewGutterWidthPx,
-  reviewGutterHeightPx,
-  reviewGutterBackgroundColour,
-  reviewGutterBorderColour,
-  reviewFontScalePercentOptions,
-  reviewDefaultFontScalePercent,
-  reviewFontScaleStorageKey,
-  reviewHeaderRowGapPx,
-  cellLineBreakPattern,
-  reviewClosingOperation,
-  reviewExportingOperation,
-  reviewTitleLabel,
-  reviewSectionTitleLabel,
-  reviewCloseLabel,
-  reviewExportLabel,
-  reviewExportingLabel,
-  reviewPreviousLabel,
-  reviewNextLabel,
-  linkExportLabel,
-  linkExportingLabel,
-  helpScrimColour,
-  helpHolePaddingPx,
-  helpHoleRadiusPx,
-  helpHoleShadowSpreadPx,
-  helpCardWidthPx,
-  helpCardAssumedHeightPx,
-  helpCardCaretSizePx,
-  helpCardGapPx,
-  helpViewportMarginPx,
-  helpLayerZIndex,
-  helpSeenKeyPrefix,
-  helpCardBackgroundColour,
-  helpCardTextColour,
-  helpCardBodyFontSize,
-  helpCardBodyLineHeight,
-  helpCardParagraphGapHeight,
-  helpChipBackgroundColour,
-  helpBadgeBackgroundColour,
-  helpBadgeTextColour,
-  helpButtonHelpId,
-  accountButtonHelpId,
-  documentListScreenId,
-  boundaryPassScreenId,
-  contentsPassScreenId,
-  linkTablesScreenId,
-  reviewTableScreenId,
-  boundaryPassEditorMode,
-  contentsPassEditorMode,
-  dropBoxHelpId,
-  documentListCountsHelpId,
-  documentListTableHelpId,
-  documentListStatusHelpId,
-  documentListActionsHelpId,
-  boundaryDeleteTableHelpId,
-  boundaryCutStartHelpId,
-  boundaryCutEndHelpId,
-  boundaryCutCancelHelpId,
-  boundaryDeleteAllTablesHelpId,
-  boundaryCreateTableHelpId,
-  editorPageTitleHelpId,
-  editorDimDocumentHelpId,
-  editorScaleHelpId,
-  pagesColumnHelpId,
-  tableLinkLabelHelpId,
-  tableNameLabelHelpId,
-  toolbarAllFilesHelpId,
-  toolbarValidateBordersHelpId,
-  toolbarValidateTablesHelpId,
-  toolbarReviewHelpId,
-  toolbarGridEditorHelpId,
-  toolbarAllFilesLabel,
-  toolbarValidateBordersLabel,
-  toolbarValidateTablesLabel,
-  toolbarReviewLabel,
-  toolbarGridEditorLabel,
-  validateTablesHelpId,
-  validateBordersHelpId,
-  layersPreviousHelpId,
-  layersNextHelpId,
-  documentOverviewSaveHelpId,
-  includeDeletedHelpId,
-  documentOverviewHelpId,
-  documentOverviewEntryHelpId,
-  documentOverviewLinkHelpId,
-  documentOverviewReviewHelpId,
-  documentOverviewExportHelpId,
-  documentOverviewExportTableHelpId,
-  editorPageTableHelpId,
-  layersPanelHelpId,
-  layersBordersHelpId,
-  layersRowsHelpId,
-  layersColumnsHelpId,
-  layersSpecialHelpId,
-  layersColoursHelpId,
-  gridToolRailHelpId,
-  gridToolRowsHelpId,
-  gridToolColumnsHelpId,
-  gridToolSpecialHelpId,
-  specialToolHeaderHelpId,
-  specialToolTitleHelpId,
-  specialToolSectionHelpId,
-  specialToolHideRowHelpId,
-  specialToolMergedHelpId,
-  specialToolJoinedEndRowHelpId,
-  linkAvailableTablesHelpId,
-  linkLinkedTablesHelpId,
-  linkUnlinkHelpId,
-  linkCancelHelpId,
-  linkExportHelpId,
-  linkSaveHelpId,
-  reviewTitleHelpId,
-  reviewSectionTitleHelpId,
-  reviewFlaggedCountHelpId,
-  reviewPoorCellsHelpId,
-  reviewGridHelpId,
-  reviewTabsHelpId,
-  reviewCloseHelpId,
-  reviewExportHelpId,
-  reviewTableNameHelpId,
-  reviewFontScaleHelpId,
-  reviewPreviousHelpId,
-  reviewNextHelpId,
-  cellEditImageHelpId,
-  cellEditCancelHelpId,
-  cellEditConfirmHelpId,
-  cellEditNextHelpId,
-  cellEditConfidenceHelpId,
-  specialToolColouredRowsHelpId,
-  specialToolColouredColumnsHelpId,
-  specialToolColouredTableHelpId,
-  specialToolColouredCellHelpId,
-  specialToolColouredAreaHelpId,
-  unknownExtractionMechanism,
-  emphasiseLowQualityCells,
-  toolbarIconButtonSizePx,
-  documentRowMenuSpinnerSizePx,
-  signOutLabel,
-  downloadOriginalLabel,
-  exportDocumentLabel,
-  cutStartLabel,
-  cutEndLabel,
-  cutCancelLabel,
-  deleteAllTablesLabel,
-  deleteAllTablesTitle,
-  deleteAllTablesBody,
-  deleteAllCancelLabel,
-  deleteAllYesAllLabel,
-  deleteAllYesPageLabel,
-  appVersion,
-  accessCodeStorageKey,
-  userEmailStorageKey,
-  signedOutPath
-};
-
-export default default_export;

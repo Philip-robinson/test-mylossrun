@@ -1,7 +1,29 @@
 import { pdfDisplayList, getPdfDisplayList, sleep } from './pdfDisplayList';
 import { pollIntervalMs } from 'config';
 
+const dummyBaseUrl = 'https://api.example.com';
+const listUrl = `${dummyBaseUrl}/mylossrun/pdf-display-list`;
+
+let previousBaseUrl;
+
+function useDummyBaseUrl() {
+  beforeEach(() => {
+    previousBaseUrl = process.env.MYLOSSRUN_BASE_URL;
+    process.env.MYLOSSRUN_BASE_URL = dummyBaseUrl;
+  });
+
+  afterEach(() => {
+    if (previousBaseUrl === undefined) {
+      delete process.env.MYLOSSRUN_BASE_URL;
+    } else {
+      process.env.MYLOSSRUN_BASE_URL = previousBaseUrl;
+    }
+  });
+}
+
 describe('pdfDisplayList service', () => {
+  useDummyBaseUrl();
+
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
@@ -9,25 +31,35 @@ describe('pdfDisplayList service', () => {
     global.fetch = jest.fn();
   });
 
-  function mockOk(json) {
+  function mockOk(body) {
     global.fetch.mockResolvedValue({
       ok: true,
-      json: jest.fn().mockResolvedValue(json),
+      status: 200,
+      text: async () => JSON.stringify(body),
     });
   }
 
-  it('GETs /api/pdf-display-list with the access code header and no body', async () => {
+  it('GETs the back end pdf-display-list with the access code header and no body', async () => {
     mockOk({ pdfs: [{ id: 'pdf-123' }, { id: 'pdf-456' }] });
 
     const result = await pdfDisplayList();
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
     const [url, options] = global.fetch.mock.calls[0];
-    expect(url).toBe('/api/pdf-display-list');
+    expect(url).toBe(listUrl);
     expect(options.method).toBe('GET');
     expect(options.headers['X-Access-Code']).toBe('test-code');
+    expect(options.cache).toBe('no-store');
     expect(options.body).toBeUndefined();
     expect(result).toEqual({ pdfs: [{ id: 'pdf-123' }, { id: 'pdf-456' }] });
+  });
+
+  it('unwraps an INLINE envelope', async () => {
+    mockOk({ presentationType: 'INLINE', data: { pdfs: [{ id: 'pdf-789' }] } });
+
+    const result = await pdfDisplayList();
+
+    expect(result).toEqual({ pdfs: [{ id: 'pdf-789' }] });
   });
 
   it('omits X-Access-Code when localStorage is empty', async () => {
@@ -44,7 +76,6 @@ describe('pdfDisplayList service', () => {
     global.fetch.mockResolvedValue({
       ok: false,
       status: 500,
-      json: jest.fn(),
     });
 
     await expect(pdfDisplayList()).rejects.toThrow();
@@ -55,11 +86,13 @@ function makeResponse({ status = 200, lastModified = null, body = { pdfs: [] } }
   return {
     status,
     headers: { get: (name) => (name === 'Last-Modified' ? lastModified : null) },
-    json: async () => body,
+    text: async () => JSON.stringify(body),
   };
 }
 
 describe('getPdfDisplayList', () => {
+  useDummyBaseUrl();
+
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
@@ -83,7 +116,7 @@ describe('getPdfDisplayList', () => {
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
     const [url, options] = global.fetch.mock.calls[0];
-    expect(url).toBe('/api/pdf-display-list');
+    expect(url).toBe(listUrl);
     expect(options.headers).toEqual({ 'X-Access-Code': 'test-code' });
     expect(options.headers['X-Access-Code']).toBe('test-code');
     expect(options.headers['If-Modified-Since']).toBeUndefined();
@@ -153,6 +186,21 @@ describe('getPdfDisplayList', () => {
 
     await jest.advanceTimersByTimeAsync(pollIntervalMs() * 2);
     expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('a 200 INLINE envelope is unwrapped', async () => {
+    global.fetch.mockResolvedValue(
+      makeResponse({
+        status: 200,
+        lastModified: 'lm',
+        body: { presentationType: 'INLINE', data: { pdfs: [{ pdfId: 'c' }] } },
+      })
+    );
+    const controller = new AbortController();
+
+    const result = await getPdfDisplayList(() => null, controller.signal);
+
+    expect(result).toEqual({ pdfs: [{ pdfId: 'c' }], lastModified: 'lm' });
   });
 
   test('a 200 body with success: false rejects with the body error', async () => {

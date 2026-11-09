@@ -1,16 +1,22 @@
 import { awaitEntryChange } from './awaitEntryChange';
 import { entryPollIntervalMs, awaitEntryTimeoutMs } from 'config';
 
+const dummyBaseUrl = 'https://api.example.com';
+
 function makeResponse({ status = 200, lastModified = null, body = {} } = {}) {
   return {
     status,
     headers: { get: (name) => (name === 'Last-Modified' ? lastModified : null) },
-    json: async () => body,
+    text: async () => JSON.stringify(body),
   };
 }
 
 describe('awaitEntryChange', () => {
+  let previousBaseUrl;
+
   beforeEach(() => {
+    previousBaseUrl = process.env.MYLOSSRUN_BASE_URL;
+    process.env.MYLOSSRUN_BASE_URL = dummyBaseUrl;
     jest.clearAllMocks();
     jest.useFakeTimers();
     localStorage.clear();
@@ -20,6 +26,11 @@ describe('awaitEntryChange', () => {
 
   afterEach(() => {
     jest.useRealTimers();
+    if (previousBaseUrl === undefined) {
+      delete process.env.MYLOSSRUN_BASE_URL;
+    } else {
+      process.env.MYLOSSRUN_BASE_URL = previousBaseUrl;
+    }
   });
 
   test('first call sends no If-Modified-Since and returns the entry + Last-Modified', async () => {
@@ -32,11 +43,25 @@ describe('awaitEntryChange', () => {
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
     const [url, options] = global.fetch.mock.calls[0];
-    expect(url).toBe('/api/pdf-display-entry/p1');
+    expect(url).toBe(`${dummyBaseUrl}/mylossrun/pdf-display-entry/p1`);
     expect(options.headers['X-Access-Code']).toBe('test-code');
     expect(options.headers['If-Modified-Since']).toBeUndefined();
     expect(options.cache).toBe('no-store');
     expect(result).toEqual({ entry: { pdfId: 'p1', status: 'ALLOCATED' }, lastModified });
+  });
+
+  test('a 200 INLINE envelope is unwrapped to the entry', async () => {
+    global.fetch.mockResolvedValue(
+      makeResponse({
+        status: 200,
+        lastModified: 'lm',
+        body: { presentationType: 'INLINE', data: { pdfId: 'p1', status: 'LOADED' } },
+      })
+    );
+
+    const result = await awaitEntryChange(() => null, 'p1');
+
+    expect(result).toEqual({ entry: { pdfId: 'p1', status: 'LOADED' }, lastModified: 'lm' });
   });
 
   test('a 304 waits entryPollIntervalMs() then refetches; the 200 resolves with the change', async () => {

@@ -11,32 +11,61 @@ import {
   extractTable,
   tableToExcel,
 } from './images';
+import { pollStatus } from './statusPoll';
+import {
+  findTablesPollIntervalMs,
+  findTablesPollTimeoutMs,
+  extractPollIntervalMs,
+  extractPollTimeoutMs,
+  envelopeInline,
+} from 'config';
+
+jest.mock('./statusPoll', () => ({ pollStatus: jest.fn() }));
 
 describe('images service', () => {
+  const dummyBaseUrl = 'https://api.example.com';
+  let previousBaseUrl;
+
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.clear();
     localStorage.setItem('access_code', 'test-code');
     global.fetch = jest.fn();
+    previousBaseUrl = process.env.MYLOSSRUN_BASE_URL;
+    process.env.MYLOSSRUN_BASE_URL = dummyBaseUrl;
   });
 
-  function mockOk(json) {
-    global.fetch.mockResolvedValue({
+  afterEach(() => {
+    if (previousBaseUrl === undefined) {
+      delete process.env.MYLOSSRUN_BASE_URL;
+    } else {
+      process.env.MYLOSSRUN_BASE_URL = previousBaseUrl;
+    }
+  });
+
+  function okResponse(body) {
+    return {
       ok: true,
-      json: jest.fn().mockResolvedValue(json),
-    });
+      status: 200,
+      text: async () => JSON.stringify(body),
+    };
+  }
+
+  function mockOk(body) {
+    global.fetch.mockResolvedValue(okResponse(body));
   }
 
   describe('getImage', () => {
-    it('POSTs to /api/get-image with access code header and { pdfId, page, width }', async () => {
+    it('POSTs to the back end /mylossrun/get-image with access code header and { pdfId, page, width }', async () => {
       mockOk({ success: true, image: 'data:image/png;base64,abc' });
 
       const result = await getImage('pdf-123', 2, 850);
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/get-image');
+      expect(url).toBe('https://api.example.com/mylossrun/get-image');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({ pdfId: 'pdf-123', page: 2, width: 850 });
@@ -88,15 +117,16 @@ describe('images service', () => {
   });
 
   describe('getThumbnails', () => {
-    it('POSTs to /api/get-thumbnails with access code header and { pdfId, width }', async () => {
+    it('POSTs to the back end /mylossrun/get-thumbnails with access code header and { pdfId, width }', async () => {
       mockOk({ success: true, thumbnails: [] });
 
       const result = await getThumbnails('pdf-123', 800);
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/get-thumbnails');
+      expect(url).toBe('https://api.example.com/mylossrun/get-thumbnails');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({ pdfId: 'pdf-123', width: 800 });
@@ -125,7 +155,7 @@ describe('images service', () => {
   });
 
   describe('getMetadata', () => {
-    it('GETs /api/metadata/<id> with access code header and returns parsed JSON', async () => {
+    it('GETs the back end /mylossrun/metadata/<id> with access code header and returns parsed JSON', async () => {
       const metadata = {
         pdfId: 'pdf-123',
         tables: [{ tableId: 't1', name: 'Table 1', pdfPage: 1, bounds: {}, cells: [] }],
@@ -136,8 +166,9 @@ describe('images service', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/metadata/pdf-123');
+      expect(url).toBe('https://api.example.com/mylossrun/metadata/pdf-123');
       expect(options.method).toBe('GET');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(result).toEqual(metadata);
     });
@@ -148,7 +179,16 @@ describe('images service', () => {
       await getMetadata('pdf 1/2');
 
       const [url] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/metadata/pdf%201%2F2');
+      expect(url).toBe('https://api.example.com/mylossrun/metadata/pdf%201%2F2');
+    });
+
+    it('unwraps an INLINE envelope to its data', async () => {
+      const metadata = { pdfId: 'pdf-123', tables: [] };
+      mockOk({ presentationType: envelopeInline(), data: metadata });
+
+      const result = await getMetadata('pdf-123');
+
+      expect(result).toEqual(metadata);
     });
 
     it('throws on non-ok response', async () => {
@@ -163,7 +203,7 @@ describe('images service', () => {
   });
 
   describe('saveTables', () => {
-    it('PUTs /api/metadata/<id>/tables with full table objects and returns parsed JSON', async () => {
+    it('PUTs the back end /mylossrun/metadata/<id>/tables with full table objects and returns parsed JSON', async () => {
       const tables = [
         {
           tableId: 't1',
@@ -181,12 +221,21 @@ describe('images service', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/metadata/pdf-123/tables');
+      expect(url).toBe('https://api.example.com/mylossrun/metadata/pdf-123/tables');
       expect(options.method).toBe('PUT');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({ tables });
       expect(result).toEqual({ success: true, tables });
+    });
+
+    it('resolves to {} on an empty 200 body', async () => {
+      global.fetch.mockResolvedValue({ ok: true, status: 200, text: async () => '' });
+
+      const result = await saveTables('pdf-123', []);
+
+      expect(result).toEqual({});
     });
 
     it('encodes the pdfId in the URL', async () => {
@@ -195,7 +244,7 @@ describe('images service', () => {
       await saveTables('pdf 1/2', []);
 
       const [url] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/metadata/pdf%201%2F2/tables');
+      expect(url).toBe('https://api.example.com/mylossrun/metadata/pdf%201%2F2/tables');
     });
 
     it('includes colouredAreas in the body when provided', async () => {
@@ -244,7 +293,7 @@ describe('images service', () => {
   });
 
   describe('getTableImages', () => {
-    it('POSTs to /api/get-table-images with access code header and { pdfId, width, tableImages }', async () => {
+    it('POSTs to the back end /mylossrun/get-table-images with access code header and { pdfId, width, tableImages }', async () => {
       const tableImages = [
         { page: 0, tableId: 't-1', bounds: { left: 0.1, top: 0.1, width: 0.2, height: 0.2 } },
       ];
@@ -254,8 +303,9 @@ describe('images service', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/get-table-images');
+      expect(url).toBe('https://api.example.com/mylossrun/get-table-images');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({ pdfId: 'pdf-123', width: 150, tableImages });
@@ -286,15 +336,16 @@ describe('images service', () => {
   describe('getCellImages', () => {
     const bounds = { left: 0.1, top: 0.2, width: 0.15, height: 0.03 };
 
-    it('POSTs to /api/get-cell-images with access code header and { pdfId, page, width, bounds }', async () => {
-      mockOk({ rawImage: 'raw-b64', processedImage: 'processed-b64' });
+    it('POSTs to the back end /mylossrun/get-cell-images with access code header and { pdfId, page, width, bounds }', async () => {
+      mockOk({ rawImage: 'raw-b64' });
 
       const result = await getCellImages('pdf-123', 2, 600, bounds);
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/get-cell-images');
+      expect(url).toBe('https://api.example.com/mylossrun/get-cell-images');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({
@@ -303,13 +354,13 @@ describe('images service', () => {
         width: 600,
         bounds,
       });
-      expect(result).toEqual({ rawImage: 'raw-b64', processedImage: 'processed-b64' });
+      expect(result).toEqual({ rawImage: 'raw-b64' });
     });
 
     // The cell is located by its page and its box alone — no table is ever looked up, so
     // a tableId must not appear on the wire.
     it('sends no keys beyond pdfId, page, width and bounds', async () => {
-      mockOk({ rawImage: 'raw-b64', processedImage: 'processed-b64' });
+      mockOk({ rawImage: 'raw-b64' });
 
       await getCellImages('pdf-123', 0, 600, bounds);
 
@@ -321,7 +372,7 @@ describe('images service', () => {
 
     it('omits X-Access-Code when localStorage is empty', async () => {
       localStorage.clear();
-      mockOk({ rawImage: 'raw-b64', processedImage: 'processed-b64' });
+      mockOk({ rawImage: 'raw-b64' });
 
       await getCellImages('pdf-123', 0, 600, bounds);
 
@@ -343,20 +394,54 @@ describe('images service', () => {
   });
 
   describe('findTables', () => {
-    it('POSTs to /api/find-tables with access code header and { pdfId, pages, mechanism: null }', async () => {
+    it('POSTs to the back end /mylossrun/find-tables with access code header and { pdfId, pages, mechanism: null }', async () => {
       const pages = [{ pdfPage: 1, tables: [{ bounds: { x: 0, y: 0, width: 100, height: 50 } }] }];
-      mockOk({ tables: [{ tableId: 't1' }] });
+      mockOk({ statusIds: [] });
 
-      const result = await findTables('pdf-123', pages);
+      await findTables('pdf-123', pages);
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/find-tables');
+      expect(url).toBe('https://api.example.com/mylossrun/find-tables');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({ pdfId: 'pdf-123', pages, mechanism: null });
-      expect(result).toEqual({ tables: [{ tableId: 't1' }] });
+    });
+
+    it('polls each dispatched id with the find-tables interval and timeout and concatenates the results', async () => {
+      mockOk({ statusIds: ['s-1', 's-2'] });
+      pollStatus
+        .mockResolvedValueOnce([{ tableId: 't1' }])
+        .mockResolvedValueOnce([{ tableId: 't2' }, { tableId: 't3' }]);
+
+      const result = await findTables('pdf-123', []);
+
+      const pollOptions = {
+        intervalMs: findTablesPollIntervalMs(),
+        timeoutMs: findTablesPollTimeoutMs(),
+      };
+      expect(pollStatus).toHaveBeenCalledTimes(2);
+      expect(pollStatus).toHaveBeenNthCalledWith(1, 's-1', pollOptions);
+      expect(pollStatus).toHaveBeenNthCalledWith(2, 's-2', pollOptions);
+      expect(result).toEqual({ tables: [{ tableId: 't1' }, { tableId: 't2' }, { tableId: 't3' }] });
+    });
+
+    it('returns { tables: [] } without polling when no ids are dispatched', async () => {
+      mockOk({});
+
+      const result = await findTables('pdf-123', []);
+
+      expect(pollStatus).not.toHaveBeenCalled();
+      expect(result).toEqual({ tables: [] });
+    });
+
+    it('rejects when a poll rejects', async () => {
+      mockOk({ statusIds: ['s-1'] });
+      pollStatus.mockRejectedValueOnce(new Error('worker failed'));
+
+      await expect(findTables('pdf-123', [])).rejects.toThrow('worker failed');
     });
 
     it('throws Error with status on non-ok response', async () => {
@@ -371,7 +456,7 @@ describe('images service', () => {
   });
 
   describe('findGridLines', () => {
-    it('POSTs to /api/find-grid-lines with access code header and { pdfId, pdfPage, colouredAreas }', async () => {
+    it('POSTs to the back end /mylossrun/find-grid-lines with access code header and { pdfId, pdfPage, colouredAreas }', async () => {
       const colouredAreas = [
         {
           left: 0.1,
@@ -388,8 +473,9 @@ describe('images service', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/find-grid-lines');
+      expect(url).toBe('https://api.example.com/mylossrun/find-grid-lines');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({
@@ -495,7 +581,7 @@ describe('images service', () => {
       },
     ];
 
-    it('POSTs to /api/calculate-cells with access code header and { pdfId, pdfPage, colouredAreas, tables }', async () => {
+    it('POSTs to the back end /mylossrun/calculate-cells with access code header and { pdfId, pdfPage, colouredAreas, tables }', async () => {
       const tables = [
         {
           tableInPage: 0,
@@ -512,8 +598,9 @@ describe('images service', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
       const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/calculate-cells');
+      expect(url).toBe('https://api.example.com/mylossrun/calculate-cells');
       expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
       expect(options.headers['Content-Type']).toBe('application/json');
       expect(options.headers['X-Access-Code']).toBe('test-code');
       expect(JSON.parse(options.body)).toEqual({
@@ -590,37 +677,68 @@ describe('images service', () => {
   });
 
   describe('extractTable', () => {
-    it('GETs /api/extract/<pdfId>/<tableId> with access code header and returns parsed JSON', async () => {
-      const body = {
+    it('GETs the back end /mylossrun/extract/<pdfId>/<tableId> with access code header', async () => {
+      mockOk({ statusIds: ['s-1'] });
+
+      await extractTable('pdf-123', 't-1');
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      const [url, options] = global.fetch.mock.calls[0];
+      expect(url).toBe('https://api.example.com/mylossrun/extract/pdf-123/t-1');
+      expect(options.method).toBe('GET');
+      expect(options.cache).toBe('no-store');
+      expect(options.headers['X-Access-Code']).toBe('test-code');
+    });
+
+    it('polls only the first id with the extract interval and timeout and returns its result unchanged', async () => {
+      const merged = {
         tables: [
           { name: 'North', headerCount: 1, cells: [{ row: 0, column: 0, text: 'A', confidence: 99 }] },
           { name: 'South', headerCount: 1, cells: [{ row: 0, column: 0, text: 'B', confidence: 98 }] },
         ],
       };
-      mockOk(body);
+      mockOk({ statusIds: ['s-1', 's-2'] });
+      pollStatus.mockResolvedValueOnce(merged);
 
       const result = await extractTable('pdf-123', 't-1');
 
-      expect(global.fetch).toHaveBeenCalledTimes(1);
-      const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/extract/pdf-123/t-1');
-      expect(options.method).toBe('GET');
-      expect(options.headers['X-Access-Code']).toBe('test-code');
-      expect(result).toEqual(body);
+      expect(pollStatus).toHaveBeenCalledTimes(1);
+      expect(pollStatus).toHaveBeenCalledWith('s-1', {
+        intervalMs: extractPollIntervalMs(),
+        timeoutMs: extractPollTimeoutMs(),
+      });
+      expect(result).toBe(merged);
+    });
+
+    it('rejects when the dispatch returns no status id', async () => {
+      mockOk({ statusIds: [] });
+
+      await expect(extractTable('pdf-123', 't-1')).rejects.toThrow(
+        'Extract dispatch returned no status id'
+      );
+      expect(pollStatus).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the dispatch carries no statusIds key', async () => {
+      mockOk({});
+
+      await expect(extractTable('pdf-123', 't-1')).rejects.toThrow(
+        'Extract dispatch returned no status id'
+      );
     });
 
     it('encodes the pdfId and tableId in the URL', async () => {
-      mockOk({ tables: [] });
+      mockOk({ statusIds: ['s-1'] });
 
       await extractTable('pdf 1/2', 't 3/4');
 
       const [url] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/extract/pdf%201%2F2/t%203%2F4');
+      expect(url).toBe('https://api.example.com/mylossrun/extract/pdf%201%2F2/t%203%2F4');
     });
 
     it('omits X-Access-Code when localStorage is empty', async () => {
       localStorage.clear();
-      mockOk({ tables: [] });
+      mockOk({ statusIds: ['s-1'] });
 
       await extractTable('pdf-123', 't-1');
 
@@ -629,11 +747,7 @@ describe('images service', () => {
     });
 
     it('throws Error with status on non-ok response', async () => {
-      global.fetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: jest.fn(),
-      });
+      global.fetch.mockResolvedValue({ ok: false, status: 500 });
 
       await expect(extractTable('pdf-123', 't-1')).rejects.toThrow('extractTable failed: 500');
     });
@@ -646,30 +760,41 @@ describe('images service', () => {
       rootTableIds: ['t-1', 't-2'],
       filename: 'losses.xlsx',
     };
+    const downloadUrl = 'https://bucket.example.com/workbook.xlsx?sig=abc';
 
-    // The route collects the workbook from its presigned url server-side, so the response
-    // is the file itself and the caller gets a Blob to save rather than a link to visit.
+    // The POST answers with a presigned url; the workbook is then fetched from it, so the
+    // caller gets a Blob to save rather than a link to visit.
     function mockWorkbook() {
       const blob = new Blob(['PK the workbook']);
-      global.fetch.mockResolvedValue({
-        ok: true,
-        blob: jest.fn().mockResolvedValue(blob),
-      });
+      global.fetch
+        .mockResolvedValueOnce(okResponse({ downloadUrl }))
+        .mockResolvedValueOnce({ ok: true, status: 200, blob: jest.fn().mockResolvedValue(blob) });
       return blob;
     }
 
-    it('POSTs the body to /api/to-excel with access code header and JSON content type', async () => {
+    it('POSTs the body to the back end /mylossrun/to-excel with access code header and JSON content type', async () => {
+      mockWorkbook();
+
+      await tableToExcel(body);
+
+      const [url, options] = global.fetch.mock.calls[0];
+      expect(url).toBe('https://api.example.com/mylossrun/to-excel');
+      expect(options.method).toBe('POST');
+      expect(options.cache).toBe('no-store');
+      expect(options.headers['Content-Type']).toBe('application/json');
+      expect(options.headers['X-Access-Code']).toBe('test-code');
+      expect(JSON.parse(options.body)).toEqual(body);
+    });
+
+    it('fetches the downloadUrl with no access-code header and returns its blob', async () => {
       const blob = mockWorkbook();
 
       const result = await tableToExcel(body);
 
-      expect(global.fetch).toHaveBeenCalledTimes(1);
-      const [url, options] = global.fetch.mock.calls[0];
-      expect(url).toBe('/api/to-excel');
-      expect(options.method).toBe('POST');
-      expect(options.headers['Content-Type']).toBe('application/json');
-      expect(options.headers['X-Access-Code']).toBe('test-code');
-      expect(JSON.parse(options.body)).toEqual(body);
+      expect(global.fetch).toHaveBeenCalledTimes(2);
+      const [url, options] = global.fetch.mock.calls[1];
+      expect(url).toBe(downloadUrl);
+      expect(options).toEqual({ cache: 'no-store' });
       expect(result).toBe(blob);
     });
 
@@ -684,13 +809,18 @@ describe('images service', () => {
     });
 
     it('throws Error with status on non-ok response', async () => {
-      global.fetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        json: jest.fn(),
-      });
+      global.fetch.mockResolvedValue({ ok: false, status: 500 });
 
       await expect(tableToExcel(body)).rejects.toThrow('tableToExcel failed: 500');
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws when the workbook download is not ok', async () => {
+      global.fetch
+        .mockResolvedValueOnce(okResponse({ downloadUrl }))
+        .mockResolvedValueOnce({ ok: false, status: 403 });
+
+      await expect(tableToExcel(body)).rejects.toThrow('Workbook download failed: 403');
     });
   });
 });

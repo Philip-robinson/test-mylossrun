@@ -240,6 +240,7 @@ export default function ReviewTablePanel({
   onExport,
   onPrevious = null,
   onNext = null,
+  pages = [],
 }) {
   // Every table the extraction returned, and which of them is on screen. Deliberately not
   // called `tables`: that prop is the editor's list of PDFTables and is something else.
@@ -281,7 +282,8 @@ export default function ReviewTablePanel({
   // The `label` is what stepping matches on, so the title — which is at no coordinate —
   // takes its turn in the list alongside the cells.
   const [selected, setSelected] = useState(null);
-  // Cropped cell images, keyed by source key — one `{ raw, processed }` pair per cell, or
+  // Cropped cell images, keyed by source key — one `{ raw, bounds }` per cell, `bounds`
+  // being the rectangle requested, or
   // null where the fetch failed, which is what the dialog takes as its `image` — and the
   // set of keys already asked
   // for. Both live here rather than in the dialog, which is mounted only while a
@@ -502,7 +504,7 @@ export default function ReviewTablePanel({
   const previousPoor = adjacentPoorCell(poorEntries, selected, -1);
   const nextPoor = adjacentPoorCell(poorEntries, selected, 1);
 
-  // Fetch one cell's two crops, at most once per source. A failure is reported and then
+  // Fetch one cell's crop, at most once per source. A failure is reported and then
   // recorded as "no crop": the image is a convenience, and losing it must not cost the
   // user the edit, so the dialog is left with an empty image area and remains usable.
   //
@@ -511,19 +513,19 @@ export default function ReviewTablePanel({
   //
   //   undefined  — not asked, or asked and not yet answered
   //   null       — asked, and there is no crop to show
-  //   { raw, processed } — asked, and answered with a crop
+  //   { raw, bounds } — asked, and answered with a crop of `bounds`
   const handleRequestImage = ({ key, page, bounds, width }) => {
     if (requestedRef.current.has(key)) return;
     requestedRef.current.add(key);
-    // The width comes from the dialog, which knows the cell it is showing: the crop is
-    // rendered at that cell's own on-screen width, so it arrives at the scale the user is
-    // already reading the table at. `key` stays here as the cache key and travels no
-    // further — the endpoint answers about one cell, so it needs no name for it.
+    // The bounds and width come from the dialog, which knows the cell it is showing: the
+    // enlarged rectangle at the scale of that cell's on-screen width. `key` stays here as
+    // the cache key and travels no further — the endpoint answers about one rectangle, so
+    // it needs no name for it.
     getCellImages(pdfId, page, width, bounds)
       .then((response) => {
         setImages((prev) => ({
           ...prev,
-          [key]: { raw: response.rawImage, processed: response.processedImage },
+          [key]: { raw: response.rawImage, bounds },
         }));
       })
       .catch((err) => {
@@ -1211,6 +1213,7 @@ export default function ReviewTablePanel({
           tables={tables}
           reviewedTableId={tableId}
           anchorRect={editing.rect}
+          pages={pages}
           image={images[cellSourceKey(editing.cell)]}
           onRequestImage={handleRequestImage}
           onCancel={() => setEditing(null)}

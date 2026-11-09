@@ -942,18 +942,41 @@ describe('PageTableEditor — the two passes', () => {
       await waitFor(() => expect(lastStagedProps().tool).toBeNull());
     });
 
-    test('the Special tool opens its submenu, and disarming it clears the armed entry', async () => {
+    test('the Special entries are always present in gridMode', async () => {
       await enterGridMode();
-      fireEvent.click(screen.getByTestId('grid-tool-special'));
-      expect(await screen.findByTestId('special-tool-menu')).toBeInTheDocument();
+      expect(screen.getByTestId('special-tool-menu')).toBeInTheDocument();
+      expect(screen.getByTestId('special-tool-hideRow')).toBeInTheDocument();
+      expect(screen.queryByTestId('grid-tool-special')).toBeNull();
+    });
+
+    test('arming a Special entry disarms the line tool', async () => {
+      await enterGridMode();
+      fireEvent.click(screen.getByTestId('grid-tool-rows'));
+      await waitFor(() => expect(lastStagedProps().tool).toBe('rows'));
 
       fireEvent.click(screen.getByTestId('special-tool-hideRow'));
       await waitFor(() => expect(lastStagedProps().specialTool).toBe('hideRow'));
+      expect(lastStagedProps().tool).toBeNull();
+    });
 
-      fireEvent.click(screen.getByTestId('grid-tool-special'));
-      await waitFor(() => expect(lastStagedProps().tool).toBeNull());
+    test('arming a line tool disarms the Special entry', async () => {
+      await enterGridMode();
+      fireEvent.click(screen.getByTestId('special-tool-hideRow'));
+      await waitFor(() => expect(lastStagedProps().specialTool).toBe('hideRow'));
+
+      fireEvent.click(screen.getByTestId('grid-tool-column-split'));
+      await waitFor(() => expect(lastStagedProps().tool).toBe('columnSplit'));
       expect(lastStagedProps().specialTool).toBeNull();
-      expect(screen.queryByTestId('special-tool-menu')).toBeNull();
+    });
+
+    test('clicking the armed Special entry disarms it', async () => {
+      await enterGridMode();
+      fireEvent.click(screen.getByTestId('special-tool-hideRow'));
+      await waitFor(() => expect(lastStagedProps().specialTool).toBe('hideRow'));
+
+      fireEvent.click(screen.getByTestId('special-tool-hideRow'));
+      await waitFor(() => expect(lastStagedProps().specialTool).toBeNull());
+      expect(lastStagedProps().tool).toBeNull();
     });
 
     test('the Header tool offers Delete Header, which clears the header', async () => {
@@ -963,7 +986,6 @@ describe('PageTableEditor — the two passes', () => {
         metadata: metadataWith([withHeader, TABLE_B]),
         onChange,
       });
-      fireEvent.click(screen.getByTestId('grid-tool-special'));
       fireEvent.click(await screen.findByTestId('special-tool-header'));
       fireEvent.click(await screen.findByTestId('opt-delete-header'));
 
@@ -1156,7 +1178,6 @@ describe('PageTableEditor — the two passes', () => {
         fireEvent.click(screen.getByTestId('layers-validate-tables'));
       });
       await waitFor(() => expect(lastStagedProps().editorMode).toBe('grid'));
-      fireEvent.click(screen.getByTestId('grid-tool-special'));
       fireEvent.click(await screen.findByTestId('special-tool-colouredRows'));
       await waitFor(() =>
         expect(lastStagedProps().specialTool).toBe('colouredRows')
@@ -2021,7 +2042,6 @@ describe('the Joined end row toggle', () => {
       fireEvent.click(screen.getByTestId('layers-validate-tables'));
     });
     await waitFor(() => expect(stagedProps().editorMode).toBe('grid'));
-    fireEvent.click(screen.getByTestId('grid-tool-special'));
     await screen.findByTestId('special-tool-joinedEndRow');
   };
 

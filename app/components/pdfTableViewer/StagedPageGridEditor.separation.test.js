@@ -127,6 +127,12 @@ beforeEach(() => {
   });
 });
 
+// The hit-line piece of the armed divider that lies along cell `cell`.
+const hitPiece = (testId, cell) =>
+  screen
+    .getAllByTestId(testId)
+    .find((piece) => piece.getAttribute('data-cell') === String(cell));
+
 async function renderLoaded(props) {
   const utils = render(<StagedPageGridEditor {...props} />);
   const img = utils.container.querySelector('img');
@@ -241,8 +247,10 @@ describe('StagedPageGridEditor table separation', () => {
 
     it('reports a dragged grid line in page coordinates', async () => {
       const onEditTables = jest.fn();
-      await renderLoaded(baseProps({ selectedTableId: 't2', onEditTables }));
-      const hit = screen.getByTestId('row-hit-line');
+      await renderLoaded(
+        baseProps({ selectedTableId: 't2', tool: 'rows', onEditTables })
+      );
+      const hit = hitPiece('row-hit-line', 0);
       // The divider at page 350 is on screen at 350 + BETA_SHIFT; drag it 20px down.
       fireEvent.mouseDown(hit, { clientX: 350, clientY: 350 + BETA_SHIFT });
       fireEvent.mouseMove(window, { clientX: 350, clientY: 370 + BETA_SHIFT });
@@ -255,8 +263,8 @@ describe('StagedPageGridEditor table separation', () => {
 
     it('leaves the tables it hands back with their bounds untouched', async () => {
       const onEditTables = jest.fn();
-      await renderLoaded(baseProps({ onEditTables }));
-      const hit = screen.getByTestId('row-hit-line');
+      await renderLoaded(baseProps({ tool: 'rows', onEditTables }));
+      const hit = hitPiece('row-hit-line', 0);
       fireEvent.mouseDown(hit, { clientX: 50, clientY: 50 + ALPHA_SHIFT });
       fireEvent.mouseMove(window, { clientX: 50, clientY: 60 + ALPHA_SHIFT });
       fireEvent.mouseUp(window, { clientX: 50, clientY: 60 + ALPHA_SHIFT });

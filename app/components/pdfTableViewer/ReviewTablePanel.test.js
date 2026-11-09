@@ -9,6 +9,7 @@ import {
 import userEvent from '@testing-library/user-event';
 import ReviewTablePanel from 'components/pdfTableViewer/ReviewTablePanel';
 import { dialogPlacement } from 'components/pdfTableViewer/reviewEditUtils';
+import { enlargedCellImageBounds } from 'components/pdfTableViewer/cellImageUtils';
 import { confidenceLabel } from 'components/pdfTableViewer/reviewUtils';
 import { extractTable, getCellImages } from 'services/images';
 import toast from 'react-hot-toast';
@@ -21,6 +22,7 @@ import toast from 'react-hot-toast';
 // constant changes. The threshold values are only ever inputs used to build a
 // fixture confidence that sits in the intended band.
 import {
+  cellImageDefaultPageAspect,
   excelFileSuffix,
   highConfidence,
   reviewFlaggedCountHelpId,
@@ -106,6 +108,16 @@ jest.mock('config', () => ({
   cellEditConfirmHelpId: jest.requireActual('config').cellEditConfirmHelpId,
   cellEditNextHelpId: jest.requireActual('config').cellEditNextHelpId,
   cellEditConfidenceHelpId: jest.requireActual('config').cellEditConfidenceHelpId,
+  // Read by the dialog's image geometry and overlay, real collaborators here.
+  cellImageDefaultPageAspect: jest.requireActual('config').cellImageDefaultPageAspect,
+  cellImageMarginFraction: jest.requireActual('config').cellImageMarginFraction,
+  cellImageMarginMinPx: jest.requireActual('config').cellImageMarginMinPx,
+  cellImageMarginMaxPx: jest.requireActual('config').cellImageMarginMaxPx,
+  cellImageDimColour: jest.requireActual('config').cellImageDimColour,
+  cellImageGridLineStrokeWidth: jest.requireActual('config').cellImageGridLineStrokeWidth,
+  layerColumnsColour: jest.requireActual('config').layerColumnsColour,
+  layerRowsColour: jest.requireActual('config').layerRowsColour,
+  gridLineOffsetEpsilon: jest.requireActual('config').gridLineOffsetEpsilon,
   lowConfidence: jest.fn(() => 50),
   mediumConfidence: jest.fn(() => 80),
   highConfidence: jest.fn(() => 90),
@@ -278,6 +290,9 @@ const metadataTables = () => [
   {
     tableId: 'root',
     pdfPage: 2,
+    bounds: bounds(0.1, 0.2, 0.6, 0.25),
+    columnWidths: [{ value: 0.3 }, { value: 0.3 }],
+    rowHeights: [{ value: 0.1 }, { value: 0.1 }, { value: 0.05 }],
     title: {
       text: 'Loss run 2024',
       confidence: 40,
@@ -379,9 +394,14 @@ const typeCorrection = async (text) => {
   await userEvent.type(field, text);
 };
 
-// The endpoint's answer about one cell: the untouched crop and the cleaned-up one, with
-// distinct payloads so which of the two the dialog shows is never ambiguous.
-const cellImages = { rawImage: 'UkFX', processedImage: 'UFJPQw==' };
+// The endpoint's answer about one cell: the crop of exactly the requested rectangle.
+const cellImages = { rawImage: 'UkFX' };
+
+// The page records, inches; the reviewed table is on page 2, not the first record.
+const pageRecords = [
+  { page: 0, width: 11, height: 8.5 },
+  { page: 2, width: 8.5, height: 11 },
+];
 
 // The elements the panel scrolled to, in order. jsdom implements no scrollIntoView at
 // all, so it is stubbed on the prototype and records its receiver — a per-element mock
@@ -1405,6 +1425,17 @@ describe('ReviewTablePanel', () => {
 
     it('opens the edit dialog on the title, asking for its own crop', async () => {
       const tables = metadataTables();
+      const titleWidth = 300;
+      const rectSpy = jest
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockReturnValue({
+          left: 10,
+          top: 20,
+          right: 10 + titleWidth,
+          bottom: 40,
+          width: titleWidth,
+          height: 20,
+        });
 
       await shown(titled(40), { tables });
 
@@ -1415,14 +1446,21 @@ describe('ReviewTablePanel', () => {
         'Loss run 2024'
       );
       expect(readout()).toHaveTextContent('Selected title');
+      // No page records were given, so the enlargement takes the default aspect.
+      const expected = enlargedCellImageBounds(
+        tables[0].title.bounds,
+        titleWidth,
+        cellImageDefaultPageAspect()
+      );
       await waitFor(() =>
         expect(getCellImages).toHaveBeenCalledWith(
           'pdf-1',
           tables[0].pdfPage,
-          expect.any(Number),
-          tables[0].title.bounds
+          expected.width,
+          expected.bounds
         )
       );
+      rectSpy.mockRestore();
     });
 
     // The dialog goes BESIDE what it is editing, bottom edges level, because the thing
@@ -2243,10 +2281,9 @@ describe('ReviewTablePanel', () => {
       }
     });
 
-    // The crop is requested at the width of the cell being edited, so it arrives at the
-    // scale the user is already reading the table at rather than at a fixed size that
-    // magnifies a narrow column and shrinks a wide one.
-    it('opens the dialog on a cell click and asks for that cell’s crop at that cell’s width', async () => {
+    // The crop is the cell enlarged at the scale of the cell's on-screen width, using the
+    // aspect of the page record the panel was given.
+    it('opens the dialog on a cell click and asks for that cell’s enlarged crop', async () => {
       extractTable.mockResolvedValue({ tables: [simpleTable] });
       const tables = metadataTables();
       // jsdom lays nothing out, so every rect is zero; a stub gives the clicked cell a
@@ -2263,7 +2300,7 @@ describe('ReviewTablePanel', () => {
           height: 20,
         });
 
-      renderPanel({ tables });
+      renderPanel({ tables, pages: pageRecords });
 
       await waitFor(() =>
         expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
@@ -2274,20 +2311,27 @@ describe('ReviewTablePanel', () => {
 
       expect(screen.getByTestId('cell-edit-dialog')).toBeInTheDocument();
       const source = tables[0].cells.find((c) => c.row === 1 && c.column === 0);
+      const expected = enlargedCellImageBounds(source.bounds, cellWidth, 11 / 8.5);
       await waitFor(() =>
         expect(getCellImages).toHaveBeenCalledWith(
           'pdf-1',
           tables[0].pdfPage,
-          cellWidth,
-          source.bounds
+          expected.width,
+          expected.bounds
         )
       );
-      // Both crops of that one cell are cached, and the raw one is what is shown.
+      // The crop is cached with the rectangle it was asked for, and the overlay is drawn
+      // in that rectangle.
       await waitFor(() =>
         expect(screen.getByTestId('cell-edit-image')).toHaveAttribute(
           'src',
           `data:image/png;base64,${cellImages.rawImage}`
         )
+      );
+      const { left, top, width, height } = expected.bounds;
+      expect(screen.getByTestId('cell-edit-image-overlay')).toHaveAttribute(
+        'viewBox',
+        `${left} ${top} ${width} ${height}`
       );
       HTMLElement.prototype.getBoundingClientRect.mockRestore();
     });
@@ -2490,6 +2534,39 @@ describe('ReviewTablePanel', () => {
       // Corrected at the edited confidence, so it is no longer worth the user's
       // attention either.
       expect(goToOptions()).not.toContain(reviewSectionTitleLabel());
+    });
+
+    it('shows the correction in its tab once the field closes', async () => {
+      extractTable.mockResolvedValue({
+        tables: [
+          { ...splitTable(30), name: 'Section A' },
+          {
+            ...simpleTable,
+            name: 'Section B',
+            sectionTitle: {
+              tableId: 'root',
+              sectionTitleIndex: 1,
+              text: 'Section B',
+              confidence: 95,
+            },
+          },
+        ],
+      });
+
+      renderPanel({ tables: metadataTables() });
+
+      await waitFor(() =>
+        expect(screen.queryAllByTestId('review-cell')).toHaveLength(4)
+      );
+      await userEvent.click(screen.getByTestId('review-section-title'));
+      await typeCorrection('Section Z');
+      await userEvent.click(screen.getByTestId('cell-edit-confirm'));
+
+      await waitFor(() =>
+        expect(
+          screen.getAllByTestId('review-tab').map((tab) => tab.textContent)
+        ).toEqual(['Section Z', 'Section B'])
+      );
     });
   });
 

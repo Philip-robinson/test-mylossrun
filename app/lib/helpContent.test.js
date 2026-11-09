@@ -433,8 +433,11 @@ describe('the contents pass tip order', () => {
       accountButtonHelpId(),
       idOf('Edit mode buttons'),
       idOf('Edit Rows button'),
+      idOf('Row Split button'),
+      idOf('Row Join button'),
       idOf('Edit Columns button'),
-      idOf('Edit Special areas button'),
+      idOf('Column Split button'),
+      idOf('Column Join button'),
       idOf('Header button'),
       idOf('Title button'),
       idOf('Section button'),
@@ -542,8 +545,8 @@ describe('the account button', () => {
   });
 });
 
-// The Merge Cells button sits on the Special sub-menu, which the contents pass alone has, so
-// that is the one screen which describes it.
+// The Merge Cells button sits in the tool-bar's Special section, which the contents pass
+// alone has, so that is the one screen which describes it.
 describe('the Merge Cells button', () => {
   const mergedTip = (screenId) =>
     helpScreens()[screenId].tips.find(
@@ -556,7 +559,8 @@ describe('the Merge Cells button', () => {
   });
 });
 
-// The Joined end row button sits on the Special sub-menu, so the contents pass describes it.
+// The Joined end row button sits in the tool-bar's Special section, so the contents pass
+// describes it.
 describe('the Joined end row button', () => {
   const joinedTip = (screenId) =>
     helpScreens()[screenId].tips.find(

@@ -4731,7 +4731,7 @@ describe('PDFEditTableStructure', () => {
       expect(at(cells, 0, 1).confidence).toBe(80);
     });
 
-    test('a pre-existing spanning cell is re-indexed but keeps its span and bounds', () => {
+    test('a pre-existing spanning cell keeps its span and adopts the bounds of its moved squares', () => {
       const prev = {
         bounds: { left: 0, top: 0, width: 0.2, height: 0.1 },
         columnWidths: [
@@ -4767,11 +4767,13 @@ describe('PDFEditTableStructure', () => {
         prev.bounds
       );
       const span = cells.find((c) => c.text === 'span');
-      // Re-indexed to new column 0 but span + bounds untouched (no multi-square recompute).
+      // Re-indexed to new column 0, span kept, and its two squares now cover 0 .. 0.1.
       expect(span.column).toBe(0);
       expect(span.columnSpan).toBe(2);
-      expect(span.bounds).toEqual({ left: 0, top: 0, width: 0.2, height: 0.1 });
-      expect(span.confidence).toBe(80);
+      expect(span.bounds.left).toBeCloseTo(0, 9);
+      expect(span.bounds.width).toBeCloseTo(0.1, 9);
+      expect(span.bounds.height).toBeCloseTo(0.1, 9);
+      expect(span.confidence).toBe(0);
     });
 
     // A single-cell table whose stored cell.bounds is the tighter OCR box (NOT the grid
@@ -6087,10 +6089,10 @@ describe('Recalculate helpers', () => {
         columnSpan: 1,
       });
       expect(hint.cells[0].bounds).toMatchObject({
-        left: 0.1,
-        top: 0.2,
-        width: 0.1,
-        height: 0.1,
+        left: expect.closeTo(0.1, 6),
+        top: expect.closeTo(0.2, 6),
+        width: expect.closeTo(0.1, 6),
+        height: expect.closeTo(0.1, 6),
       });
       expect(hint.cells[1].bounds.left).toBeCloseTo(0.3, 10); // col 0+1
       expect(hint.cells[1].bounds.top).toBeCloseTo(0.3, 10); // row 0
@@ -9377,6 +9379,15 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
     expect(screen.queryByTestId('full-panel')).not.toBeInTheDocument();
   });
 
+  test("the review panel is handed the document's page records", async () => {
+    await renderModes();
+
+    await userEvent.click(reviewButton());
+    await screen.findByTestId('review-panel');
+
+    expect(global.__REVIEW_PANEL_PROPS__.pages).toEqual(MODE_METADATA.pages);
+  });
+
   test('the review panel is handed the host save path and a single-table export', async () => {
     const onAllFiles = jest.fn();
     render(<PDFEditTableStructure pdfId={PDF_ID} onAllFiles={onAllFiles} />);
@@ -9403,8 +9414,8 @@ describe('PDFEditTableStructure — Task 16 middle-panel modes and Review', () =
   });
 
   describe('exporting the document', () => {
-    // The workbook itself, not a link to it: /api/to-excel collects it from its presigned
-    // url server-side, so what arrives is bytes to save from memory. jsdom neither downloads
+    // The workbook itself, not a link to it: tableToExcel collects it from its presigned
+    // URL, so what arrives is bytes to save from memory. jsdom neither downloads
     // nor navigates, so the anchor click is stubbed on the prototype.
     const workbook = new Blob(['PK the workbook']);
     let handedOver = [];

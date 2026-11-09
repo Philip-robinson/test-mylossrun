@@ -58,15 +58,13 @@ describe('LayerOptions', () => {
   });
 
   describe('gridMode', () => {
-    it('renders nothing when no tool is armed', () => {
-      render(<LayerOptions editorMode={'grid'} tool={null} />);
+    it('renders nothing when no Special entry is armed', () => {
+      render(<LayerOptions editorMode={'grid'} specialTool={null} />);
       expect(shown()).toEqual([]);
     });
 
-    it('renders nothing for the Rows and Columns tools', () => {
-      render(<LayerOptions editorMode={'grid'} tool={'rows'} />);
-      expect(shown()).toEqual([]);
-      render(<LayerOptions editorMode={'grid'} tool={'columns'} />);
+    it('renders nothing for a Special entry with no options', () => {
+      render(<LayerOptions editorMode={'grid'} specialTool={'hideRow'} />);
       expect(shown()).toEqual([]);
     });
 
@@ -75,7 +73,6 @@ describe('LayerOptions', () => {
       render(
         <LayerOptions
           editorMode={'grid'}
-          tool={'special'}
           specialTool={'header'}
           onDeleteHeader={onDeleteHeader}
         />
@@ -89,7 +86,6 @@ describe('LayerOptions', () => {
       render(
         <LayerOptions
           editorMode={'grid'}
-          tool={'special'}
           specialTool={'colouredRows'}
         />
       );
@@ -100,7 +96,6 @@ describe('LayerOptions', () => {
       render(
         <LayerOptions
           editorMode={'grid'}
-          tool={'special'}
           specialTool={'colouredRows'}
           hasPendingSelection
         />
@@ -112,7 +107,6 @@ describe('LayerOptions', () => {
       render(
         <LayerOptions
           editorMode={'grid'}
-          tool={'special'}
           specialTool={'colouredArea'}
           hasSavedAreaSelected
         />
@@ -128,7 +122,6 @@ describe('LayerOptions', () => {
       render(
         <LayerOptions
           editorMode={'grid'}
-          tool={'special'}
           specialTool={'colouredTable'}
         />
       );
@@ -141,7 +134,6 @@ describe('LayerOptions', () => {
       render(
         <LayerOptions
           editorMode={'grid'}
-          tool={'special'}
           specialTool={'colouredArea'}
           hasSavedAreaSelected
           onColourSubmit={onColourSubmit}
@@ -232,14 +224,12 @@ describe('LayerOptions', () => {
 
     it('renders none of the new buttons in grid mode', () => {
       const states = [
-        { tool: null },
-        { tool: 'rows' },
-        { tool: 'columns' },
-        { tool: 'special', specialTool: 'header' },
-        { tool: 'special', specialTool: 'colouredRows' },
-        { tool: 'special', specialTool: 'colouredRows', hasPendingSelection: true },
-        { tool: 'special', specialTool: 'colouredArea', hasSavedAreaSelected: true },
-        { tool: 'special', specialTool: 'colouredTable' },
+        { specialTool: null },
+        { specialTool: 'header' },
+        { specialTool: 'colouredRows' },
+        { specialTool: 'colouredRows', hasPendingSelection: true },
+        { specialTool: 'colouredArea', hasSavedAreaSelected: true },
+        { specialTool: 'colouredTable' },
       ];
       states.forEach((props) => {
         [false, true].forEach((cutting) => {

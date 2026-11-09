@@ -14,6 +14,7 @@ import {
   lowConfidenceSectionTitle,
   mergedCellLayout,
   reviewRowNumbers,
+  reviewTabLabel,
 } from 'components/pdfTableViewer/reviewUtils';
 
 describe('reviewUtils', () => {
@@ -469,6 +470,20 @@ describe('reviewUtils', () => {
       expect(confidenceLabel('90')).toBe('Confidence unknown');
       expect(confidenceLabel(NaN)).toBe('Confidence unknown');
     });
+  });
+});
+
+describe('reviewTabLabel', () => {
+  it('is the section title text when the table has one', () => {
+    expect(reviewTabLabel({ name: 'Motor', sectionTitle: { text: 'Fleet' } })).toBe('Fleet');
+  });
+
+  it('is the name when the table has no section title', () => {
+    expect(reviewTabLabel({ name: 'Motor', sectionTitle: null })).toBe('Motor');
+  });
+
+  it('is the name when the section title is blank', () => {
+    expect(reviewTabLabel({ name: 'Motor', sectionTitle: { text: '' } })).toBe('Motor');
   });
 });
 

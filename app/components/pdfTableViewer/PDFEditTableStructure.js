@@ -1985,6 +1985,7 @@ export default function PDFEditTableStructure({ pdfId, onAllFiles }) {
               onExport={handleExportTable}
               onPrevious={reviewNeighbour(-1)}
               onNext={reviewNeighbour(1)}
+              pages={pages}
             />
           )}
         </Box>

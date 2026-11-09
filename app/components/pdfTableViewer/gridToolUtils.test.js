@@ -2,6 +2,7 @@ import {
   cellBounds,
   columnBounds,
   columnIndexAtFraction,
+  lineInteraction,
   rowBounds,
   rowIndexAtFraction,
   rowNearestCentre,
@@ -51,10 +52,10 @@ describe('columnIndexAtFraction', () => {
 describe('rowBounds', () => {
   it('spans the table width at the row band', () => {
     expect(rowBounds(TABLE, 1)).toEqual({
-      left: 0.1,
-      top: 0.30000000000000004,
-      width: 0.4,
-      height: 0.1,
+      left: expect.closeTo(0.1, 6),
+      top: expect.closeTo(0.3, 6),
+      width: expect.closeTo(0.4, 6),
+      height: expect.closeTo(0.1, 6),
     });
   });
 
@@ -67,10 +68,10 @@ describe('rowBounds', () => {
 describe('columnBounds', () => {
   it('spans the table height at the column band', () => {
     expect(columnBounds(TABLE, 1)).toEqual({
-      left: 0.30000000000000004,
-      top: 0.2,
-      width: 0.2,
-      height: 0.3,
+      left: expect.closeTo(0.3, 6),
+      top: expect.closeTo(0.2, 6),
+      width: expect.closeTo(0.2, 6),
+      height: expect.closeTo(0.3, 6),
     });
   });
 
@@ -83,19 +84,19 @@ describe('columnBounds', () => {
 describe('cellBounds', () => {
   it('is the intersection of the row band and the column band', () => {
     expect(cellBounds(TABLE, 1, 1)).toEqual({
-      left: 0.30000000000000004,
-      top: 0.30000000000000004,
-      width: 0.2,
-      height: 0.1,
+      left: expect.closeTo(0.3, 6),
+      top: expect.closeTo(0.3, 6),
+      width: expect.closeTo(0.2, 6),
+      height: expect.closeTo(0.1, 6),
     });
   });
 
   it('starts the first cell at the table origin', () => {
     expect(cellBounds(TABLE, 0, 0)).toEqual({
-      left: 0.1,
-      top: 0.2,
-      width: 0.2,
-      height: 0.1,
+      left: expect.closeTo(0.1, 6),
+      top: expect.closeTo(0.2, 6),
+      width: expect.closeTo(0.2, 6),
+      height: expect.closeTo(0.1, 6),
     });
   });
 
@@ -130,5 +131,60 @@ describe('rowNearestCentre', () => {
     expect(
       rowNearestCentre({ ...TABLE, rowHeights: [] }, { left: 0, top: 0, width: 1, height: 1 })
     ).toBeNull();
+  });
+});
+
+// Vertical divider 1 sits at 0.5 on row 0 and 0.75 on row 1; horizontal divider 1 sits at
+// 0.5 on column 0 and 0.75 on column 1.
+const STAGGERED = {
+  bounds: { left: 0, top: 0, width: 1, height: 1 },
+  columnWidths: [{ value: 0.5, segments: [{ offset: 0.25, start: 1 }] }, { value: 0.5 }],
+  rowHeights: [{ value: 0.5, segments: [{ offset: 0.25, start: 1 }] }, { value: 0.5 }],
+};
+
+describe('staggered tables', () => {
+  it('finds the row and column of the effective square holding the point', () => {
+    expect(rowIndexAtFraction(STAGGERED, { fx: 0.875, fy: 0.625 })).toBe(0);
+    expect(columnIndexAtFraction(STAGGERED, { fx: 0.625, fy: 0.875 })).toBe(0);
+  });
+
+  it('bounds a row by its effective squares', () => {
+    expect(rowBounds(STAGGERED, 0)).toEqual({ left: 0, top: 0, width: 1, height: 0.75 });
+    expect(rowBounds(STAGGERED, 1)).toEqual({ left: 0, top: 0.5, width: 1, height: 0.5 });
+    expect(rowBounds(STAGGERED, 2)).toBeNull();
+  });
+
+  it('bounds a column by its effective squares', () => {
+    expect(columnBounds(STAGGERED, 0)).toEqual({ left: 0, top: 0, width: 0.75, height: 1 });
+    expect(columnBounds(STAGGERED, 1)).toEqual({ left: 0.5, top: 0, width: 0.5, height: 1 });
+    expect(columnBounds(STAGGERED, 2)).toBeNull();
+  });
+
+  it('bounds a cell by its effective square', () => {
+    expect(cellBounds(STAGGERED, 1, 1)).toEqual({ left: 0.75, top: 0.75, width: 0.25, height: 0.25 });
+    expect(cellBounds(STAGGERED, 2, 0)).toBeNull();
+  });
+});
+
+describe('lineInteraction', () => {
+  it.each([
+    ['rows', 'row', 'line'],
+    ['rows', 'column', null],
+    ['rowSplit', 'row', 'split'],
+    ['rowSplit', 'column', null],
+    ['rowJoin', 'row', 'join'],
+    ['rowJoin', 'column', null],
+    ['columns', 'column', 'line'],
+    ['columns', 'row', null],
+    ['columnSplit', 'column', 'split'],
+    ['columnSplit', 'row', null],
+    ['columnJoin', 'column', 'join'],
+    ['columnJoin', 'row', null],
+    ['header', 'row', null],
+    ['header', 'column', null],
+    [null, 'row', null],
+    [null, 'column', null],
+  ])('tool %s on a %s line gives %s', (tool, orientation, expected) => {
+    expect(lineInteraction(tool, orientation)).toBe(expected);
   });
 });

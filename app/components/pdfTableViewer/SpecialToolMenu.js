@@ -1,15 +1,15 @@
 'use client';
 
-// The Special tool's submenu, shown below the grid tool-bar in the rail while the Special
-// button is armed. Its entries are radio buttons among themselves: one armed at a time,
-// and clicking the armed one disarms it. The one exception is the action entry, which
-// toggles the selected table's flag instead of arming anything.
+// The Special section of the grid tool-bar, always shown. Its entries belong to the
+// tool-bar's one radio group: one tool armed at a time across the line tools and these
+// entries, and clicking the armed one disarms it. The one exception is the action entry,
+// which toggles the selected table's flag instead of arming anything.
 //
-// Controlled and stateless. The armed background is a var(--…) colour, which jsdom drops
-// from an inline style, so the armed state is also carried as a data attribute.
+// Controlled and stateless.
 
 import { Fragment } from 'react';
-import { Box, Button, Stack, Typography } from '@mui/material';
+import { Box, Stack, Typography } from '@mui/material';
+import TextToolButton from 'components/pdfTableViewer/TextToolButton';
 import {
   layerSpecialCellsBackgroundColour,
   optionsGroupTitleVariant,
@@ -86,26 +86,17 @@ export default function SpecialToolMenu({
                   {headingBefore}
                 </Typography>
               ) : null}
-              <Button
-                data-testid={`special-tool-${key}`}
-                data-help-id={helpId()}
-                data-active={active ? 'true' : 'false'}
-                size={'small'}
-                variant={'outlined'}
+              <TextToolButton
+                testId={`special-tool-${key}`}
+                helpId={helpId()}
+                label={label}
+                active={active}
+                activeBackgroundColour={layerSpecialCellsBackgroundColour()}
                 disabled={action ? splitBottomRow == null : false}
                 onClick={() =>
                   action ? onToggleSplitBottomRow() : onSelectSpecialTool(key)
                 }
-                sx={{
-                  justifyContent: 'flex-start',
-                  whiteSpace: 'nowrap',
-                  backgroundColor: active
-                    ? layerSpecialCellsBackgroundColour()
-                    : 'transparent',
-                }}
-              >
-                {label}
-              </Button>
+              />
             </Fragment>
           );
         })}

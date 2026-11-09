@@ -5,6 +5,7 @@
 // PageImageWithOverlay (and the page editor) can share them without a cycle.
 
 import {
+  gridLineOffsetEpsilon,
   highConfidence,
   lowConfidence,
   mergeCoverageFraction,
@@ -19,6 +20,14 @@ import {
   singleColumnGrid,
   sortByOrder,
 } from 'components/pdfTableViewer/gridUtilities';
+import {
+  canonicaliseAxis,
+  canonicaliseTable,
+  dividerPositionAt,
+  joinLineBetweenNeighbours,
+  remapAxisSegments,
+  withSegments,
+} from 'components/pdfTableViewer/gridLineSegmentUtils';
 import { collectColumnNames } from 'components/pdfTableViewer/layerUtils';
 import { newUUID } from 'common/utils';
 
@@ -35,21 +44,22 @@ export const cumulative = (arr) =>
   }, []);
 
 // Absolute page-fraction bounds of drawn grid square (r, c) for a table, derived ONLY
-// from the table's bounds and its columnWidths/rowHeights (never from cell.bounds). The
-// square's left/top are the table origin plus the cumulative sizes of the preceding
-// columns/rows; its width/height are that column's/row's size (0 when out of range).
+// from the table's bounds and its columnWidths/rowHeights (never from cell.bounds). Its
+// left/right are vertical dividers c and c+1 at row r, its top/bottom horizontal dividers
+// r and r+1 at column c, each including that divider's segment offset there; width/height
+// are 0 for an index outside its axis.
 export function gridSquareBounds(table, r, c) {
-  const colWidths = (table.columnWidths ?? []).map((v) => v.value);
-  const rowHeights = (table.rowHeights ?? []).map((v) => v.value);
-  const colOffsets = cumulative(colWidths);
-  const rowOffsets = cumulative(rowHeights);
-  const left = table.bounds.left + (c > 0 ? colOffsets[c - 1] : 0);
-  const top = table.bounds.top + (r > 0 ? rowOffsets[r - 1] : 0);
+  const C = (table.columnWidths ?? []).length;
+  const R = (table.rowHeights ?? []).length;
+  const left = dividerPositionAt(table, 'columnWidths', c, r);
+  const top = dividerPositionAt(table, 'rowHeights', r, c);
+  const inColumns = c >= 0 && c < C;
+  const inRows = r >= 0 && r < R;
   return {
     left,
     top,
-    width: colWidths[c] ?? 0,
-    height: rowHeights[r] ?? 0,
+    width: inColumns ? dividerPositionAt(table, 'columnWidths', c + 1, r) - left : 0,
+    height: inRows ? dividerPositionAt(table, 'rowHeights', r + 1, c) - top : 0,
   };
 }
 
@@ -138,11 +148,12 @@ export function fillGridCells(table) {
 // component only has to wire them to clicks and buttons.
 
 // The grid square a page-fraction point { fx, fy } lands in, as { row, column }, or null when
-// the point lies outside table.bounds or the table has no axes to divide. The square is found
-// by walking the cumulative axis offsets relative to bounds.left/bounds.top and taking the
-// first offset the relative coordinate does not exceed; a point exactly on the far edge (where
-// float drift can put the relative coordinate a hair past the last offset) clamps to the last
-// column/row. Same arithmetic as the row-only sectionRowBandAt in StagedPageGridEditor.
+// the point lies outside table.bounds or the table has no axes to divide. It is the first
+// square, row-major, whose effective rectangle holds the point, edges inclusive. As the
+// fallback for a point in no effective square, it walks the nominal cumulative axis offsets
+// relative to bounds.left/bounds.top and takes the first offset the relative coordinate does
+// not exceed; a point exactly on the far edge (where float drift can
+// put the relative coordinate a hair past the last offset) clamps to the last column/row.
 export function gridSquareAtFraction(table, frac) {
   const cols = (table.columnWidths ?? []).map((v) => v.value);
   const rows = (table.rowHeights ?? []).map((v) => v.value);
@@ -157,6 +168,19 @@ export function gridSquareAtFraction(table, frac) {
   ) {
     return null;
   }
+  for (let row = 0; row < rows.length; row += 1) {
+    for (let column = 0; column < cols.length; column += 1) {
+      const sq = gridSquareBounds(table, row, column);
+      if (
+        frac.fx >= sq.left &&
+        frac.fx <= sq.left + sq.width &&
+        frac.fy >= sq.top &&
+        frac.fy <= sq.top + sq.height
+      ) {
+        return { row, column };
+      }
+    }
+  }
   const index = (values, relative) => {
     const offsets = cumulative(values);
     for (let i = 0; i < offsets.length; i += 1) {
@@ -170,55 +194,48 @@ export function gridSquareAtFraction(table, frac) {
   };
 }
 
+// The length of [start, start+extent) covered by [from, from+length).
+const overlapLength = (start, extent, from, length) =>
+  Math.max(0, Math.min(start + extent, from + length) - Math.max(start, from));
+
 // The block of grid squares a drawn page-fraction rectangle { left, top, width, height }
 // selects, as { row, column, rowSpan, columnSpan }, or null when it selects nothing. Null
 // also for a table with no bounds or with an empty axis, there being no grid to hit.
 //
-// The two axes are resolved SEPARATELY and the block is their product. Deciding it per axis
-// is what makes the block rectangular by construction rather than by luck, which matters
-// because rowSpan/columnSpan can express nothing else: there is no way to record an L-shaped
-// or ragged selection, so it must not be possible to draw one.
-//
-// A band joins the block when its own width (or height) is above zero and the share of it the
-// rectangle overlaps is STRICTLY greater than mergeCoverageFraction() — a square merely
-// clipped by the edge of the drag is not what the user drew over. Bands come from the same
-// cumulative axis offsets gridSquareBounds draws from, so a merge lands on exactly the squares
-// the grid shows.
-//
-// The included bands on an axis are necessarily contiguous: only the two end bands of an
-// overlap can be partly covered, and every band between them is covered whole. So the count of
-// included bands and `last - first + 1` are the same number, and the span can be taken from
-// the count without a contiguity check.
+// A square is included when its effective width and height are above zero and the rectangle
+// covers STRICTLY more than mergeCoverageFraction() of both — a square merely clipped by the
+// edge of the drag is not what the user drew over. The block is the smallest rectangle of
+// squares holding every included one, since rowSpan/columnSpan can express nothing else.
+// Squares come from gridSquareBounds, so a merge lands on exactly the squares the grid shows.
 export function cellBlockFromRect(table, rect) {
-  const bounds = table?.bounds;
-  if (!bounds) return null;
-  const cols = (table.columnWidths ?? []).map((v) => v.value);
-  const rows = (table.rowHeights ?? []).map((v) => v.value);
-  if (!cols.length || !rows.length) return null;
-  const includedBands = (values, origin, start, extent) => {
-    const offsets = cumulative(values);
-    const end = start + extent;
-    const included = [];
-    for (let i = 0; i < values.length; i += 1) {
-      const size = values[i];
-      if (size <= 0) continue;
-      const bandStart = origin + (i ? offsets[i - 1] : 0);
-      const overlap = Math.max(
-        0,
-        Math.min(end, bandStart + size) - Math.max(start, bandStart)
-      );
-      if (overlap / size > mergeCoverageFraction()) included.push(i);
+  if (!table?.bounds) return null;
+  const R = (table.rowHeights ?? []).length;
+  const C = (table.columnWidths ?? []).length;
+  if (!R || !C) return null;
+  let first = null;
+  let last = null;
+  for (let r = 0; r < R; r += 1) {
+    for (let c = 0; c < C; c += 1) {
+      const sq = gridSquareBounds(table, r, c);
+      if (sq.width <= 0 || sq.height <= 0) continue;
+      const across = overlapLength(rect.left, rect.width, sq.left, sq.width) / sq.width;
+      const down = overlapLength(rect.top, rect.height, sq.top, sq.height) / sq.height;
+      if (across > mergeCoverageFraction() && down > mergeCoverageFraction()) {
+        first = first
+          ? { row: Math.min(first.row, r), column: Math.min(first.column, c) }
+          : { row: r, column: c };
+        last = last
+          ? { row: Math.max(last.row, r), column: Math.max(last.column, c) }
+          : { row: r, column: c };
+      }
     }
-    return included;
-  };
-  const columns = includedBands(cols, bounds.left, rect.left, rect.width);
-  const rowBands = includedBands(rows, bounds.top, rect.top, rect.height);
-  if (!columns.length || !rowBands.length) return null;
+  }
+  if (!first) return null;
   return {
-    row: rowBands[0],
-    column: columns[0],
-    rowSpan: rowBands.length,
-    columnSpan: columns.length,
+    row: first.row,
+    column: first.column,
+    rowSpan: last.row - first.row + 1,
+    columnSpan: last.column - first.column + 1,
   };
 }
 
@@ -300,15 +317,15 @@ export function mergedCellLimits(table, cellRef) {
 //
 // The cell's confidence is reset to 0, which is essential rather than cosmetic: the page-exit
 // recalculation re-reads ONLY the cells selectLowConfidenceCells returns (confidence null or
-// below lowConfidence()), and recalcCellBounds sums the SPANNED columnWidths/rowHeights, so a
+// below lowConfidence()), and recalcCellBounds bounds every SPANNED grid square, so a
 // zeroed merged cell is re-read across its whole block. Without the reset a newly-merged cell
 // would keep the text read from its original single square and the merge would never reach the
 // extracted text. A reduction zeroes it too, because the region changed.
 //
 // The cell's BOUNDS become its spanned block, which recalcCellBounds computes exactly: the
-// grid square at the anchor, widened and deepened by the sum of the spanned columnWidths and
-// rowHeights. Both re-read paths in the product take a cell's stored bounds verbatim and read
-// neither span field, so leaving the pre-merge single-square bounds in place would have the
+// bounding box of the grid squares it spans, following any staggered line. Both re-read
+// paths in the product take a cell's stored bounds verbatim and read neither span field, so
+// leaving the pre-merge single-square bounds in place would have the
 // merged root re-read over its original square and the merge would never reach the extracted
 // text. The note above that cell.bounds is the tighter OCR text box is knowingly departed from
 // here: no extraction ever read the block as one region, so there is no measured text box for
@@ -978,7 +995,7 @@ export function retainMergedCells(prevTable, geometry) {
   return (prevTable.cells ?? [])
     .filter((cell) => cell.row < R && cell.column < C)
     .map((cell) => {
-      // recalcCellBounds rather than gridSquareBounds: it sums the spanned axis entries,
+      // recalcCellBounds rather than gridSquareBounds: it bounds every spanned square,
       // so a rowSpan/columnSpan > 1 cell is compared and re-seated across its whole block
       // rather than against its top-left square alone.
       const before = recalcCellBounds(prevTable, cell);
@@ -1147,23 +1164,72 @@ export function selectLowConfidenceCells(cells) {
   );
 }
 
-// The find-tables request bounds for a Recalculate cell, derived from the GRID LINES (via
-// gridSquareBounds) and never from cell.bounds (the tighter OCR text box). The top-left is
-// the drawn grid square at the cell's (row, column); the width/height SUM the spanned
-// columnWidths/rowHeights so a rowSpan/columnSpan > 1 cell covers its whole spanned block.
+// The span of `cell` clipped to the axes and never less than the anchor square.
+function clippedSpan(table, cell) {
+  const lastRow = Math.max(
+    cell.row,
+    Math.min(cell.row + (cell.rowSpan ?? 1), (table.rowHeights ?? []).length) - 1
+  );
+  const lastColumn = Math.max(
+    cell.column,
+    Math.min(cell.column + (cell.columnSpan ?? 1), (table.columnWidths ?? []).length) - 1
+  );
+  return { lastRow, lastColumn };
+}
+
+// The grid-square rectangles (gridSquareBounds) of every square the cell spans, row-major,
+// the span clipped to the axes and never less than the anchor square.
+export function cellSquares(table, cell) {
+  const { lastRow, lastColumn } = clippedSpan(table, cell);
+  const squares = [];
+  for (let r = cell.row; r <= lastRow; r += 1) {
+    for (let c = cell.column; c <= lastColumn; c += 1) {
+      squares.push(gridSquareBounds(table, r, c));
+    }
+  }
+  return squares;
+}
+
+// The bounding box of a list of rectangles.
+function boundingBox(rects) {
+  const left = Math.min(...rects.map((s) => s.left));
+  const top = Math.min(...rects.map((s) => s.top));
+  const right = Math.max(...rects.map((s) => s.left + s.width));
+  const bottom = Math.max(...rects.map((s) => s.top + s.height));
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+// The cell's squares when it spans more than one and they do not fill their bounding box
+// (a perimeter grid line is staggered within the span), else null. They fill it when every
+// row's outer squares reach the box's left and right and every column's outer squares reach
+// its top and bottom, within gridLineOffsetEpsilon.
+export function partialCellSquares(table, cell) {
+  const squares = cellSquares(table, cell);
+  if (squares.length < 2) return null;
+  const box = boundingBox(squares);
+  const near = (a, b) => Math.abs(a - b) <= gridLineOffsetEpsilon();
+  const { lastRow, lastColumn } = clippedSpan(table, cell);
+  const columns = lastColumn - cell.column + 1;
+  const rows = lastRow - cell.row + 1;
+  const at = (r, c) => squares[r * columns + c];
+  const rowsFill = Array.from({ length: rows }, (_, r) => r).every(
+    (r) =>
+      near(at(r, 0).left, box.left) &&
+      near(at(r, columns - 1).left + at(r, columns - 1).width, box.left + box.width)
+  );
+  const columnsFill = Array.from({ length: columns }, (_, c) => c).every(
+    (c) =>
+      near(at(0, c).top, box.top) &&
+      near(at(rows - 1, c).top + at(rows - 1, c).height, box.top + box.height)
+  );
+  return rowsFill && columnsFill ? null : squares;
+}
+
+// The find-tables request bounds for a Recalculate cell, derived from the GRID LINES and never
+// from cell.bounds (the tighter OCR text box): the bounding box of cellSquares, so a
+// rowSpan/columnSpan > 1 cell covers its whole spanned block.
 export function recalcCellBounds(table, cell) {
-  const { left, top } = gridSquareBounds(table, cell.row, cell.column);
-  const colWidths = (table.columnWidths ?? []).map((v) => v.value);
-  const rowHeights = (table.rowHeights ?? []).map((v) => v.value);
-  const columnSpan = cell.columnSpan ?? 1;
-  const rowSpan = cell.rowSpan ?? 1;
-  const width = colWidths
-    .slice(cell.column, cell.column + columnSpan)
-    .reduce((acc, v) => acc + v, 0);
-  const height = rowHeights
-    .slice(cell.row, cell.row + rowSpan)
-    .reduce((acc, v) => acc + v, 0);
-  return { left, top, width, height };
+  return boundingBox(cellSquares(table, cell));
 }
 
 // Build the single find-tables hint for a Recalculate run on a multi-cell table. Like
@@ -1331,6 +1397,9 @@ export function specialAreaEntries(table) {
 // opposite of what a merge asks for. A table with no merged cell has every entry uncovered,
 // so its request is byte-identical to the one this built before.
 //
+// A merged cell whose squares do not fill its bounding box (partialCellSquares) also carries
+// `squares`, each trimmed to the unit page; every other cell leaves the key out.
+//
 // The optional `title` and `specials` keys are omitted entirely when the table has nothing
 // for them, so a plain table's request stays minimal.
 export function buildCalcCellsRequestTable(table) {
@@ -1338,11 +1407,15 @@ export function buildCalcCellsRequestTable(table) {
   return {
     ...plainRect(table.bounds),
     tableInPage: table.tableInPage,
-    cells: uncoveredCells(table).map((cell) => ({
-      ...plainRect(cell.bounds),
-      row: cell.row,
-      column: cell.column,
-    })),
+    cells: uncoveredCells(table).map((cell) => {
+      const squares = partialCellSquares(table, cell);
+      return {
+        ...plainRect(cell.bounds),
+        row: cell.row,
+        column: cell.column,
+        ...(squares ? { squares: squares.map(plainRect) } : {}),
+      };
+    }),
     ...(table.title?.bounds ? { title: plainRect(table.title.bounds) } : {}),
     ...(specials.length ? { specials: specials.map((s) => s.bounds) } : {}),
   };
@@ -1484,13 +1557,17 @@ export const boundsDiffer = (a, b, eps) =>
   Math.abs(a.width - b.width) > eps ||
   Math.abs(a.height - b.height) > eps;
 
+// True when two lists of grid squares differ in length or in any square beyond eps.
+const squaresDiffer = (a, b, eps) =>
+  a.length !== b.length || a.some((square, i) => boundsDiffer(square, b[i], eps));
+
 // Rebuild a table's flat `cells` list so it stays consistent with a structurally-changed
 // grid. rowMap/colMap are index transforms for the changed axis (identityMap for the
 // unchanged one): each maps a NEW index to an OLD index or the NEW sentinel, and any old
 // index absent from the values is treated as REMOVED. newColumnWidths/newRowHeights/
 // newBounds describe the new grid (bounds.left/top may have shifted on a boundary resize).
 // Steps: (1) drop cells anchored on a removed line; (2) re-index survivors; (3) create a
-// default cell for every square on each NEW line; (4)/(5) for each span-1 survivor compare
+// default cell for every square on each NEW line; (4)/(5) for each survivor compare
 // the DRAWN GRID SQUARE it occupies before and after the edit — if that square moved or
 // resized (beyond a float epsilon) adopt the new square as the cell's bounds and zero its
 // confidence, otherwise leave the cell (its OCR bounds and confidence) untouched. New cells
@@ -1535,12 +1612,16 @@ export function reconcileCells(
     if (!oldRowToNew.has(cell.row) || !oldColToNew.has(cell.column)) continue;
     const row = oldRowToNew.get(cell.row);
     const column = oldColToNew.get(cell.column);
-    // Spanning-cell limitation (this iteration): a pre-existing cell with rowSpan or
-    // columnSpan > 1 is re-indexed but its span and bounds are left UNCHANGED — no
-    // multi-square geometry recompute. Only span-1 cells get their bounds refreshed.
+    // A merged cell's span is kept; when any grid square it covers moved or resized it
+    // adopts the bounding box of its new squares and its reading is invalidated.
     const spanning = (cell.rowSpan ?? 1) > 1 || (cell.columnSpan ?? 1) > 1;
     if (spanning) {
-      result.push({ ...cell, row, column });
+      const moved = { ...cell, row, column };
+      if (squaresDiffer(cellSquares(prevTable, cell), cellSquares(geom, moved), EPS)) {
+        result.push({ ...moved, bounds: recalcCellBounds(geom, moved), confidence: 0 });
+      } else {
+        result.push(moved);
+      }
       continue;
     }
     // (4)+(5): a cell's confidence is invalidated only when the DRAWN GRID SQUARE it
@@ -1593,11 +1674,21 @@ export function reconcileCells(
 // against (so only squares that actually moved reset confidence) and the cells to carry
 // over; `base` supplies the non-axis fields the commit keeps (the same table for a menu
 // edit, the final interim dragged table for a drag release). `newBounds` is the committed
-// bounds (unchanged except a boundary resize that shifts left/top).
+// bounds (unchanged except a boundary resize that shifts left/top). The perpendicular axis's
+// segments are remapped through `axisMap` and both axes are canonicalised before the cells
+// are reconciled against them.
 export function reconcileAxisEdit(prevTable, base, axisKey, newAxis, axisMap, newBounds) {
   const vertical = axisKey === 'columnWidths';
-  const newColumnWidths = vertical ? newAxis : prevTable.columnWidths ?? [];
-  const newRowHeights = vertical ? prevTable.rowHeights ?? [] : newAxis;
+  const otherKey = vertical ? 'rowHeights' : 'columnWidths';
+  const remapped = remapAxisSegments(
+    prevTable[otherKey] ?? [],
+    (prevTable[axisKey] ?? []).length,
+    axisMap
+  );
+  const edited = canonicaliseAxis(newAxis, remapped.length);
+  const perpendicular = canonicaliseAxis(remapped, edited.length);
+  const newColumnWidths = vertical ? edited : perpendicular;
+  const newRowHeights = vertical ? perpendicular : edited;
   const colMap = vertical
     ? axisMap
     : identityMap((prevTable.columnWidths ?? []).length);
@@ -1612,7 +1703,13 @@ export function reconcileAxisEdit(prevTable, base, axisKey, newAxis, axisMap, ne
     colMap,
     newBounds
   );
-  const merged = { ...base, [axisKey]: newAxis, bounds: newBounds, cells };
+  const merged = {
+    ...base,
+    [axisKey]: edited,
+    [otherKey]: perpendicular,
+    bounds: newBounds,
+    cells,
+  };
 
   // Cells are re-indexed by reconcileCells, but two other fields address rows by INDEX and
   // must move with their band or they end up marking the wrong row: a sub-title row
@@ -2066,7 +2163,9 @@ export function cascadeShrink(cells, shrink, fromBack, min) {
 // edge cell when the edge moves outward; shrinks with cascade-delete (protecting the
 // final cell at the 1px minimum) when it moves inward. bounds.width/height are recomputed
 // from the cell sums so I1/I2 stay exact; the opposite edge stays fixed. Every array and
-// the bounds object are freshly built (immutable).
+// the bounds object are freshly built (immutable). On the moved axis, any divider whose
+// effective position comes within minX/minY of, or beyond, either border is made straight,
+// and the result is canonical.
 export function resizeBoundary(kind, p, t, minX, minY) {
   const { left, top, width, height } = t.bounds;
   const L = left;
@@ -2128,7 +2227,7 @@ export function resizeBoundary(kind, p, t, minX, minY) {
   }
 
   // Recompute width/height from the cell sums so I1/I2 are exact.
-  return {
+  const resized = {
     ...t,
     bounds: {
       left: newLeft,
@@ -2139,6 +2238,32 @@ export function resizeBoundary(kind, p, t, minX, minY) {
     columnWidths,
     rowHeights,
   };
+  const vertical = kind === 'boundary-left' || kind === 'boundary-right';
+  const axisKey = vertical ? 'columnWidths' : 'rowHeights';
+  return canonicaliseTable({
+    ...resized,
+    [axisKey]: joinDividersAtBorders(resized, axisKey, vertical ? minX : minY),
+  });
+}
+
+// The axis with every internal divider whose effective position at some cell is within
+// `min` of, or beyond, either border joined without crossing its neighbours.
+function joinDividersAtBorders(table, axisKey, min) {
+  const vertical = axisKey === 'columnWidths';
+  const near = vertical ? table.bounds.left : table.bounds.top;
+  const far = near + (vertical ? table.bounds.width : table.bounds.height);
+  const cells = (vertical ? table.rowHeights : table.columnWidths).length;
+  let axis = table[axisKey];
+  for (let k = 1; k < axis.length; k += 1) {
+    for (let n = 0; n < cells; n += 1) {
+      const position = dividerPositionAt({ ...table, [axisKey]: axis }, axisKey, k, n);
+      if (position <= near + min || position >= far - min) {
+        axis = joinLineBetweenNeighbours({ ...table, [axisKey]: axis }, axisKey, k);
+        break;
+      }
+    }
+  }
+  return axis;
 }
 
 // Move an internal grid divider on one axis, in FRACTION space, keeping bounds fixed.
@@ -2183,15 +2308,17 @@ export function cleanupAxis(cells, epsilon) {
 }
 
 // Split one PDFValue array's entry at index i into two halves of the entry's value,
-// each copying the original entry's non-value fields (notably confidence). The two
+// each copying the original entry's non-value fields (notably confidence) except that only
+// the far half keeps its `segments`, the far edge being the divider they describe. The two
 // halves occupy the old cell's span, so the axis SUM (hence bounds) is unchanged.
 export function splitEntry(arr, i) {
   const half = { ...arr[i], value: arr[i].value / 2 };
-  return [...arr.slice(0, i), half, { ...half }, ...arr.slice(i + 1)];
+  return [...arr.slice(0, i), withSegments(half, null), half, ...arr.slice(i + 1)];
 }
 
 // Split one PDFValue array's entry at index i into two entries whose values are `firstValue`
-// and the remainder, each copying the original entry's non-value fields. Used where the
+// and the remainder, each copying the original entry's non-value fields except that only the
+// far part keeps its `segments`. Used where the
 // split point is chosen by the user rather than taken as the middle — a grid line added
 // under the pointer. The two parts occupy the old cell's span, so the axis SUM (hence
 // bounds) is unchanged. `firstValue` is clamped into the entry, so a split at or beyond
@@ -2201,7 +2328,7 @@ export function splitEntryAt(arr, i, firstValue) {
   const first = Math.min(Math.max(firstValue, 0), total);
   return [
     ...arr.slice(0, i),
-    { ...arr[i], value: first },
+    withSegments({ ...arr[i], value: first }, null),
     { ...arr[i], value: total - first },
     ...arr.slice(i + 1),
   ];
@@ -2209,9 +2336,13 @@ export function splitEntryAt(arr, i, firstValue) {
 
 // Merge divider k (1-based): fold cell k's value into the near cell k-1 and drop cell k.
 // The axis SUM is unchanged (bounds preserved). The surviving entry keeps cell k-1's
-// non-value fields. Returns a NEW array (immutable).
+// non-value fields but cell k's `segments`, its far edge now being cell k's far edge.
+// Returns a NEW array (immutable).
 export function mergeCells(arr, k) {
-  const merged = { ...arr[k - 1], value: arr[k - 1].value + arr[k].value };
+  const merged = withSegments(
+    { ...arr[k - 1], value: arr[k - 1].value + arr[k].value },
+    arr[k].segments
+  );
   return [...arr.slice(0, k - 1), merged, ...arr.slice(k + 1)];
 }
 

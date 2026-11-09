@@ -141,6 +141,10 @@ export const lowConfidenceSectionTitle = (sectionTitle, highThreshold, label) =>
     ? { sectionTitle: true, label }
     : null;
 
+// A split table's tab label: its section title as it now stands, or its name when it has
+// no section title or the title is blank.
+export const reviewTabLabel = (table) => table.sectionTitle?.text || table.name;
+
 // The entry `step` places along `poorCells` from `selected` (+1 forward, -1 back), or
 // null when there is nowhere to go. Stepping STOPS at each end rather than wrapping:
 // running off the end and silently reappearing at the other would leave the user unsure

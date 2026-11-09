@@ -93,7 +93,6 @@ export default function LayersPanel({
   selectedTable,
   samePageTables,
   pageColouredAreas,
-  tool = null,
   specialTool = null,
   onPrev,
   onNext,
@@ -162,7 +161,6 @@ export default function LayersPanel({
           explicitly. */}
       <LayerOptions
         editorMode={editorMode}
-        tool={tool}
         specialTool={specialTool}
         {...optionsCallbacks}
       />

@@ -8,6 +8,7 @@
 
 import { Box, Tab, Tabs } from '@mui/material';
 import { reviewTabsHelpId } from 'config';
+import { reviewTabLabel } from 'components/pdfTableViewer/reviewUtils';
 
 export default function ReviewTableTabs({ tables, activeIndex, onChange }) {
   if ((tables?.length ?? 0) < 2) return null;
@@ -30,7 +31,7 @@ export default function ReviewTableTabs({ tables, activeIndex, onChange }) {
           <Tab
             key={index}
             data-testid={'review-tab'}
-            label={table.name}
+            label={reviewTabLabel(table)}
             id={`review-tab-${index}`}
           />
         ))}

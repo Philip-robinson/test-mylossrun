@@ -2,9 +2,9 @@
 
 // LayerOptions: a presentational dispatcher for the context-dependent Options block of
 // the staged grid editor's Layers panel. What it renders follows the editor's mode and,
-// in gridMode, the armed tool: borderMode carries the table-boundary actions, and the
-// Special tool's Header and coloured-area entries carry the only controls the second
-// pass needs. It holds no state and performs no editing itself.
+// in gridMode, the armed Special entry: borderMode carries the table-boundary actions, and
+// the Header and coloured-area entries carry the only controls the second pass needs. It
+// holds no state and performs no editing itself.
 //
 // The block stays even when it is empty: the specification has further functions for it.
 
@@ -48,7 +48,6 @@ function OptionButton({ testId, helpId, label, onClick, disabled, sx, dataColour
 
 export default function LayerOptions({
   editorMode = 'border',
-  tool = null,
   specialTool = null,
   cutting = false,
   canCut = false,
@@ -126,7 +125,7 @@ export default function LayerOptions({
         disabled={cutting}
       />,
     ];
-  } else if (tool === 'special' && specialTool === 'header') {
+  } else if (specialTool === 'header') {
     content = [
       <OptionButton
         key={'delete-header'}
@@ -135,7 +134,7 @@ export default function LayerOptions({
         onClick={onDeleteHeader}
       />,
     ];
-  } else if (tool === 'special' && colourSpecialToolKeys().includes(specialTool)) {
+  } else if (colourSpecialToolKeys().includes(specialTool)) {
     // Coloured Table colours the whole table, so it has no selection step and its
     // selectors are offered straight away; the other three wait for something selected.
     const ready =
